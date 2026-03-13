@@ -1,0 +1,96 @@
+---
+- name: Deploy and Update NVR Wrapper
+  hosts: nvr_nodes
+  become: yes
+  vars:
+    project_dir: "/home/truong/my-nvr"
+    nvr_wrapper_image: "toan131/my-nvr:stable"
+    frigate_version: "0.16.3"
+    # Bạn sẽ nhập cái này khi chạy lệnh
+    docker_hub_user: "{{ lookup('env', 'DOCKER_USER') }}"
+    docker_hub_password: "{{ lookup('env', 'DOCKER_PASS') }}"
+
+  tasks:
+    - name: Login to Docker Hub (Private repository access)
+      shell: "echo '{{ docker_hub_password }}' | docker login --username '{{ docker_hub_user }}' --password-stdin"
+      when: docker_hub_user != ""
+      no_log: true # Bảo mật: không in mật khẩu ra màn hình log
+    - name: Ensure required subdirectories exist
+      file:
+        path: "{{ project_dir }}/{{ item }}"
+        state: directory
+      loop:
+        - config
+        - data
+        - logs
+        - media
+        - nginx
+        - nginx/html
+        - mosquitto
+        - mosquitto/config
+        - mosquitto/data
+        - mosquitto/log
+
+    - name: Set permissions for mosquitto directories
+      file:
+        path: "{{ project_dir }}/mosquitto/{{ item }}"
+        state: directory
+        mode: '0777' # Ensure mosquitto container can write to data/log
+      loop:
+        - data
+        - log
+
+    - name: Copy docker-compose.yml to remote
+      copy:
+        src: ./docker-compose.yml
+        dest: "{{ project_dir }}/docker-compose.yml"
+
+    - name: Copy nginx configuration to remote
+      copy:
+        src: ./nginx/
+        dest: "{{ project_dir }}/nginx/"
+
+    - name: Copy mosquitto configuration to remote
+      copy:
+        src: ./mosquitto/config/mosquitto.conf
+        dest: "{{ project_dir }}/mosquitto/config/mosquitto.conf"
+
+    - name: Copy .env configuration to remote
+      copy:
+        src: ./.env
+        dest: "{{ project_dir }}/.env"
+
+    - name: Update .env file with new version
+      lineinfile:
+        path: "{{ project_dir }}/.env"
+        regexp: "^NVR_WRAPPER_VERSION="
+        line: "NVR_WRAPPER_VERSION=latest"
+
+    - name: Ensure minimal config.yml exists for Frigate
+      copy:
+        content: |
+          version: 0.16-0
+          mqtt:
+            enabled: true
+            host: mosquitto
+          detect:
+            enabled: true
+          record:
+            enabled: true
+          cameras: {}
+        dest: "{{ project_dir }}/config/config.yml"
+        force: yes # Đè lên config cũ nếu nó đang bị lỗi để hệ thống chạy được
+
+    - name: Pull latest Docker images
+      command: docker compose pull
+      args:
+        chdir: "{{ project_dir }}"
+
+    - name: Restart NVR services
+      command: docker compose up -d
+      args:
+        chdir: "{{ project_dir }}"
+
+    - name: Prune old Docker images (optional)
+      command: docker image prune -f
+      ignore_errors: yes

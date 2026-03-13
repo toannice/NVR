@@ -1,0 +1,144 @@
+services:
+
+  # ─── Message Broker ────────────────────────────────────────
+  mosquitto:
+    container_name: mosquitto
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    networks:
+      - nvr-backend
+    ports:
+      - "1883:1883" # MQTT (local LAN access for IoT sensors)
+      - "9001:9001" # MQTT over WebSocket
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    healthcheck:
+      test: [ "CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "healthcheck", "-W", "3" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ─── Frigate NVR Engine ────────────────────────────────────
+  frigate:
+    container_name: frigate
+    privileged: true
+    restart: unless-stopped
+    image: ghcr.io/blakeblackshear/frigate:${FRIGATE_VERSION:-0.16.3}
+    shm_size: "1024mb"
+    networks:
+      - nvr-backend
+    ports:
+      - "5000:5000" # Frigate Web UI & API (dev/admin access)
+      - "8554:8554" # RTSP re-stream feeds
+      - "1984:1984" # go2rtc API & video streams
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ./config:/config
+      - ./media:/media/frigate
+      - type: tmpfs
+        target: /tmp/cache
+        tmpfs:
+          size: 1000000000 # 1GB RAM buffer (reduces SSD wear, prevents I/O bottleneck)
+    devices:
+      - /dev/dri/renderD128 # Intel VAAPI hardware acceleration
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    environment:
+      - FRIGATE_HOST_IP=${FRIGATE_HOST_IP}
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:5000/api/version || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # ─── NVR Wrapper (Our App) ─────────────────────────────────
+  nvr-wrapper:
+    container_name: nvr-wrapper
+    # build: . # For local development
+    image: toan131/my-nvr:stable # Sử dụng tag stable vừa được push lên Docker Hub
+    restart: unless-stopped
+    network_mode: "host" # Required for ONVIF multicast (WS-Discovery) to work
+    # ports:
+    #   - "3000:3000" # Expose via Nginx (443) instead for security
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+      - ./media:/app/media
+      - ./logs:/app/logs
+      - /var/run/docker.sock:/var/run/docker.sock # Allows `docker restart frigate`
+      - /run/systemd/resolve/resolv.conf:/app/dns_config:ro
+      - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      frigate:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+    environment:
+      - FRIGATE_URL=http://localhost:5000
+      - MQTT_URL=tcp://localhost:1883
+      - PORT=3000
+      - CONFIG_PATH=config/config.yml
+      - APP_VERSION=1.2.0-kotlin
+      - TZ=${TZ:-Asia/Ho_Chi_Minh}
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://127.0.0.1:3000/api/health || exit 1" ]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # ─── Nginx Security Gateway (HTTPS) ────────────────────────
+  nginx:
+    container_name: nvr-nginx
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    network_mode: "host" # Needs to talk to nvr-wrapper on localhost:3000
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/server.crt:/etc/nginx/ssl/server.crt:ro
+      - ./nginx/server.key:/etc/nginx/ssl/server.key:ro
+    depends_on:
+      - nvr-wrapper
+
+
+  # ─── Watchtower (OTA Auto-Update) ─────────────────────────
+  # Monitors Docker Hub / Registry for new image versions and auto-updates.
+  # Respects the NVR_WRAPPER_VERSION and FRIGATE_VERSION pins in .env.
+  watchtower:
+    container_name: watchtower
+    image: containrrr/watchtower:latest
+    restart: unless-stopped
+    networks:
+      - nvr-backend
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-0 3 * * *}
+      - WATCHTOWER_CLEANUP=${WATCHTOWER_CLEANUP:-true}
+      - WATCHTOWER_INCLUDE_STOPPED=false
+      - WATCHTOWER_MONITOR_ONLY=false
+      # Only watch specific containers (nvr-wrapper). Frigate is pinned by version tag - safer.
+      - WATCHTOWER_SCOPE=nvr-auto-update
+    labels:
+      - "com.centurylinklabs.watchtower.scope=nvr-control"
+    command: --label-enable # Only update containers with watchtower label
+  cloudflare-tunnel:
+    container_name: cloudflared
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    network_mode: "host" 
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    command: tunnel --no-autoupdate run
+
+  # ─── Networks ──────────────────────────────────────────────
+networks:
+  nvr-backend:
+    name: nvr-backend
+    driver: bridge

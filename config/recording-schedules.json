@@ -1,0 +1,16 @@
+{
+  "cav": [
+    {
+      "id": "bfdsam3",
+      "days": [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday"
+      ],
+      "startTime": "08:00",
+      "endTime": "18:00"
+    }
+  ]
+}
