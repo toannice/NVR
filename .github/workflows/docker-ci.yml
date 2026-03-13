@@ -23,8 +23,10 @@ jobs:
         uses: gradle/gradle-build-action@v2
 
       # Chạy Unit Test Logic
-      - name: Chạy Unit Test Backend
-        run: ./gradlew backend:test
+      - name: Cấp quyền thực thi và Chạy Unit Test Backend
+        run: |
+          chmod +x backend/gradlew
+          backend/gradlew -p backend test
         
   build-push:
     name: Đóng gói Docker và Đẩy lên GHCR
