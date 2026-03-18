@@ -2,8 +2,10 @@ name: CI/CD Pipeline cho NVR
 
 on:
   push:
+    branches:
+      - main
     tags:
-      - 'v*.*.*' # Chạy pipeline khi push một tag version (ví dụ: v1.0.0)
+      - 'v*.*.*' # Chạy pipeline khi push một tag version hoặc push lên main
 
 jobs:
   test:
@@ -43,6 +45,10 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=tag
+            type=ref,event=branch
 
       - name: Login vào GitHub Container Registry
         uses: docker/login-action@v3

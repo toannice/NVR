@@ -58,10 +58,12 @@ services:
   # ─── NVR Wrapper (Our App) ─────────────────────────────────
   nvr-wrapper:
     container_name: nvr-wrapper
-    build: . # For local development
-    # image: toan131/my-nvr:stable # Sử dụng tag stable vừa được push lên Docker Hub
+    image: ghcr.io/toannice/nvr:latest # Sử dụng bản build từ GitHub CI/CD
     restart: unless-stopped
     network_mode: "host" # Required for ONVIF multicast (WS-Discovery) to work
+    labels:
+      - "com.centurylinklabs.watchtower.scope=nvr-auto-update" # Cho phép Watchtower cập nhật container này
+      - "com.centurylinklabs.watchtower.enable=true"
     # ports:
     #   - "3000:3000" # Expose via Nginx (443) instead for security
     volumes:
