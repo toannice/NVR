@@ -131,14 +131,15 @@ if ! grep -q "GITHUB_TOKEN=" .env; then
     read -p "[?] Nhập Telegram Chat ID [Mặc định: $DEFAULT_TG_CHAT]: " TELEGRAM_CHAT_ID
     TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-$DEFAULT_TG_CHAT}
 
-    echo "GITHUB_USERNAME=$GH_USER" >> .env
-    echo "GITHUB_TOKEN=$GH_PAT" >> .env
-    echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_TOKEN" >> .env
-    echo "TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID" >> .env
+    echo "GITHUB_USERNAME=\"$GH_USER\"" >> .env
+    echo "GITHUB_TOKEN=\"$GH_PAT\"" >> .env
+    echo "TELEGRAM_BOT_TOKEN=\"$TELEGRAM_TOKEN\"" >> .env
+    echo "TELEGRAM_CHAT_ID=\"$TELEGRAM_CHAT_ID\"" >> .env
     # Tạo Token ngẫu nhiên bảo mật cho API cập nhật thủ công
-    echo "WATCHTOWER_TOKEN=$(date +%s | sha256sum | base64 | tr -dc 'a-zA-Z0-9' | head -c 24)" >> .env
-    echo "WATCHTOWER_SCHEDULE=0 0 3 * * *" >> .env  # Tự động cập nhật 3h sáng
+    echo "WATCHTOWER_TOKEN=\"$(date +%s | sha256sum | base64 | tr -dc 'a-zA-Z0-9' | head -c 24)\"" >> .env
+    echo "WATCHTOWER_SCHEDULE=\"0 0 3 * * *\"" >> .env  # Tự động cập nhật 3h sáng
 fi
+echo "DOCKER_API_VERSION=\"1.44\"" >> .env
 
 # 4. Tailscale & SSH
 echo ""
@@ -186,11 +187,11 @@ docker compose up -d
 # Tạo script trigger update thủ công
 cat << 'EOF' > update-now.sh
 #!/bin/bash
-source .env
-echo "[*] Yêu cầu máy trạm kéo bản cập nhật mới nhất ngay lập tức..."
+if [ -f .env ]; then source .env; fi
+echo "[*] Đang gửi lệnh cập nhật tức thì tới Watchtower..."
 curl -H "Authorization: Bearer $WATCHTOWER_TOKEN" http://localhost:8080/v1/update
 echo ""
-echo "[*] Thành công! Xem log với: docker logs -f watchtower"
+echo "[*] Đã gửi lệnh! Kiểm tra quá trình tải tại: docker logs -f watchtower"
 EOF
 chmod +x update-now.sh
 

@@ -127,6 +127,7 @@ services:
       - WATCHTOWER_HTTP_API_TOKEN=${WATCHTOWER_TOKEN:-default_token_update_in_env}
       - WATCHTOWER_INCLUDE_STOPPED=false
       - WATCHTOWER_MONITOR_ONLY=false
+      - DOCKER_API_VERSION=1.44 # Force modern API version to solve mismatch
       # Only watch specific containers (nvr-wrapper). Frigate is pinned by version tag - safer.
       - WATCHTOWER_SCOPE=nvr-auto-update
     labels:
