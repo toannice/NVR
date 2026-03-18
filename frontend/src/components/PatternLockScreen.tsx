@@ -129,8 +129,40 @@ export default function PatternLockScreen({
             showError('Hình không khớp! Vẽ lại từ đầu');
             return;
         }
-        setSetupStep('email-entry');
-        setMessage('Nhập Gmail để bảo mật');
+        
+        // CHẾ ĐỘ THỬ NGHIỆM: Không hiện bước Email, tự gọi API setup luôn
+        setSetupStep('otp-verify'); // Switch to a loading-like state mentally, or just stay here
+        setMessage('Đang hoàn tất thiết lập...');
+        submitSetupDirectly(pattern);
+    };
+
+    const submitSetupDirectly = async (pattern: string) => {
+        setIsDisabled(true);
+        try {
+            const res = await fetch('/api/lock/setup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    pattern: pattern,
+                    email: 'test@test.com',
+                    otp: '000000'
+                }),
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                setMessage('✓ Thiết lập thành công!');
+                setTimeout(() => onSetupComplete(), 800);
+            } else {
+                showError(data.error || 'Lỗi thiết lập');
+                // Nếu lỗi, cho quay lại vẽ để thử lại
+                setSetupStep('draw-first');
+            }
+        } catch (e: any) {
+            showError('Lỗi kết nối server');
+            setSetupStep('draw-first');
+        } finally {
+            setIsDisabled(false);
+        }
     };
 
     const handleSetupEmailSubmit = async (e: React.FormEvent) => {
