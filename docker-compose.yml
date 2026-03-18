@@ -58,8 +58,8 @@ services:
   # ─── NVR Wrapper (Our App) ─────────────────────────────────
   nvr-wrapper:
     container_name: nvr-wrapper
-    # build: . # For local development
-    image: toan131/my-nvr:stable # Sử dụng tag stable vừa được push lên Docker Hub
+    build: . # For local development
+    # image: toan131/my-nvr:stable # Sử dụng tag stable vừa được push lên Docker Hub
     restart: unless-stopped
     network_mode: "host" # Required for ONVIF multicast (WS-Discovery) to work
     # ports:
@@ -116,18 +116,22 @@ services:
     restart: unless-stopped
     networks:
       - nvr-backend
+    ports:
+      - "127.0.0.1:8080:8080" # Exposed locally for manual HTTP API trigger
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-0 3 * * *}
+      - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-0 0 3 * * *}
       - WATCHTOWER_CLEANUP=${WATCHTOWER_CLEANUP:-true}
+      - WATCHTOWER_HTTP_API_UPDATE=true
+      - WATCHTOWER_HTTP_API_TOKEN=${WATCHTOWER_TOKEN:-default_token_update_in_env}
       - WATCHTOWER_INCLUDE_STOPPED=false
       - WATCHTOWER_MONITOR_ONLY=false
       # Only watch specific containers (nvr-wrapper). Frigate is pinned by version tag - safer.
       - WATCHTOWER_SCOPE=nvr-auto-update
     labels:
       - "com.centurylinklabs.watchtower.scope=nvr-control"
-    command: --label-enable # Only update containers with watchtower label
+    command: --label-enable --http-api-update # Allow manual trigger via API
   cloudflare-tunnel:
     container_name: cloudflared
     image: cloudflare/cloudflared:latest

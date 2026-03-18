@@ -7,18 +7,28 @@ interface PatternLockScreenProps {
     onSetupComplete: () => void;
 }
 
-type SetupStep = 'draw-first' | 'draw-confirm';
+type SetupStep = 'draw-first' | 'draw-confirm' | 'email-entry' | 'otp-verify';
+type ResetStep = 'email-entry' | 'otp-verify' | 'new-draw' | 'new-confirm';
+type ScreenMode = 'setup' | 'verify' | 'reset';
 
 export default function PatternLockScreen({
     isSetupMode,
     onUnlock,
     onSetupComplete,
 }: PatternLockScreenProps) {
-    // Setup mode state
+    // Mode
+    const [mode, setMode] = useState<ScreenMode>(isSetupMode ? 'setup' : 'verify');
+    
+    // Steps
     const [setupStep, setSetupStep] = useState<SetupStep>('draw-first');
+    const [resetStep, setResetStep] = useState<ResetStep>('email-entry');
+    
+    // Data
     const firstPatternRef = useRef<string>('');
+    const [email, setEmail] = useState('');
+    const [otp, setOtp] = useState('');
 
-    // Shared state
+    // UI States
     const [message, setMessage] = useState('');
     const [isError, setIsError] = useState(false);
     const [isDisabled, setIsDisabled] = useState(false);
@@ -35,16 +45,16 @@ export default function PatternLockScreen({
                 setLockedUntil(null);
                 setIsDisabled(false);
                 setLockCountdown(0);
-                setMessage('Hãy thử lại');
+                setMessage(mode === 'verify' ? 'Hãy thử lại' : '');
                 setAttempts(0);
             } else {
                 setLockCountdown(remaining);
             }
         }, 500);
         return () => clearInterval(interval);
-    }, [lockedUntil]);
+    }, [lockedUntil, mode]);
 
-    const showError = (msg: string, durationMs = 1200) => {
+    const showError = (msg: string, durationMs = 1500) => {
         setMessage(msg);
         setIsError(true);
         setIsDisabled(true);
@@ -54,53 +64,113 @@ export default function PatternLockScreen({
         }, durationMs);
     };
 
-    // ─── SETUP MODE ───────────────────────────────────────────────
-    const handleSetupFirstDraw = (pattern: string) => {
+    // ─── API HANDLERS ─────────────────────────────────────────────
+    
+    const requestOtp = async (targetEmail: string) => {
+        setIsDisabled(true);
+        try {
+            const res = await fetch('/api/lock/request-otp', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: targetEmail }),
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                setMessage('Mã xác thực đã được gửi!');
+                return true;
+            } else {
+                showError(data.error || 'Lỗi gửi mã');
+                return false;
+            }
+        } catch {
+            showError('Lỗi kết nối server');
+            return false;
+        } finally {
+            setIsDisabled(false);
+        }
+    };
+
+    const requestResetOtp = async (targetEmail: string) => {
+        setIsDisabled(true);
+        try {
+            const res = await fetch('/api/lock/reset-request', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: targetEmail }),
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                setMessage('Mã khôi phục đã được gửi!');
+                return true;
+            } else {
+                showError(data.error || 'Gmail không đúng');
+                return false;
+            }
+        } catch {
+            showError('Lỗi kết nối server');
+            return false;
+        } finally {
+            setIsDisabled(false);
+        }
+    };
+
+    // ─── SETUP FLOW ───────────────────────────────────────────────
+    
+    const handleSetupPattern1 = (pattern: string) => {
         firstPatternRef.current = pattern;
         setSetupStep('draw-confirm');
         setMessage('Vẽ lại để xác nhận');
-        setIsError(false);
     };
 
-    const handleSetupConfirmDraw = async (pattern: string) => {
+    const handleSetupPattern2 = (pattern: string) => {
         if (pattern !== firstPatternRef.current) {
             firstPatternRef.current = '';
             setSetupStep('draw-first');
             showError('Hình không khớp! Vẽ lại từ đầu');
             return;
         }
+        setSetupStep('email-entry');
+        setMessage('Nhập Gmail để bảo mật');
+    };
 
+    const handleSetupEmailSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!email.includes('@')) return showError('Email không hợp lệ');
+        const success = await requestOtp(email);
+        if (success) setSetupStep('otp-verify');
+    };
+
+    const handleSetupOtpSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (otp.length !== 6) return showError('Mã phải có 6 chữ số');
+        
         setIsDisabled(true);
         try {
             const res = await fetch('/api/lock/setup', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ pattern }),
+                body: JSON.stringify({ 
+                    pattern: firstPatternRef.current,
+                    email: email,
+                    otp: otp
+                }),
             });
             const data = await res.json();
             if (res.ok && data.success) {
                 setMessage('✓ Thiết lập thành công!');
-                setIsError(false);
-                setTimeout(() => onSetupComplete(), 600);
+                setTimeout(() => onSetupComplete(), 800);
             } else {
                 showError(data.error || 'Lỗi thiết lập');
-                setIsDisabled(false);
             }
-        } catch {
-            showError('Lỗi kết nối server');
+        } catch (e: any) {
+            showError('Lỗi kết nối hoặc parse JSON: ' + (e?.message || ''));
+        } finally {
             setIsDisabled(false);
         }
     };
 
-    const handleSetupDraw = (pattern: string) => {
-        if (setupStep === 'draw-first') {
-            handleSetupFirstDraw(pattern);
-        } else {
-            handleSetupConfirmDraw(pattern);
-        }
-    };
-
-    // ─── VERIFY MODE ──────────────────────────────────────────────
+    // ─── VERIFY FLOW ──────────────────────────────────────────────
+    
     const handleVerifyDraw = async (pattern: string) => {
         if (isDisabled || lockedUntil) return;
         setIsDisabled(true);
@@ -114,161 +184,221 @@ export default function PatternLockScreen({
             const data = await res.json();
             if (res.ok && data.success) {
                 setMessage('✓ Đã mở khóa');
-                setIsError(false);
                 setTimeout(() => onUnlock(), 400);
             } else {
                 const newAttempts = attempts + 1;
                 setAttempts(newAttempts);
-
                 if (newAttempts >= 5) {
-                    // Lock for 30 seconds
-                    const until = Date.now() + 30000;
+                    const until = Date.now() + 60000;
                     setLockedUntil(until);
-                    setIsDisabled(true);
-                    showError('Sai quá nhiều lần! Đợi 30 giây', 30000);
+                    showError('Đã khóa 60 giây', 60000);
                 } else {
-                    showError(`Sai hình vẽ! Còn ${5 - newAttempts} lần thử`);
+                    showError(`Sai! Còn ${5 - newAttempts} lần thử`);
                 }
             }
         } catch {
-            showError('Lỗi kết nối server');
+            showError('Lỗi server');
+        } finally {
+            setIsDisabled(false);
         }
     };
 
-    // ─── INITIAL MESSAGES ─────────────────────────────────────────
-    useEffect(() => {
-        if (isSetupMode) {
-            setMessage('Vẽ hình mở khóa của bạn');
-        } else {
-            setMessage('Vẽ hình để mở khóa');
+    // ─── RESET (FORGOT) FLOW ───────────────────────────────────────
+    
+    const handleResetEmailSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        const success = await requestResetOtp(email);
+        if (success) setResetStep('otp-verify');
+    };
+
+    const handleResetOtpSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (otp.length !== 6) return showError('Mã phải có 6 chữ số');
+        setResetStep('new-draw');
+        setMessage('Vẽ mật mã mới');
+    };
+
+    const handleResetNewPattern1 = (pattern: string) => {
+        firstPatternRef.current = pattern;
+        setResetStep('new-confirm');
+        setMessage('Vẽ lại để xác nhận');
+    };
+
+    const handleResetNewPattern2 = async (pattern: string) => {
+        if (pattern !== firstPatternRef.current) {
+            firstPatternRef.current = '';
+            setResetStep('new-draw');
+            showError('Không khớp! Vẽ lại mã mới');
+            return;
         }
-    }, [isSetupMode]);
 
-    const onPatternComplete = isSetupMode ? handleSetupDraw : handleVerifyDraw;
+        setIsDisabled(true);
+        try {
+            const res = await fetch('/api/lock/reset-complete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    pattern: pattern,
+                    email: email,
+                    otp: otp
+                }),
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                setMessage('✓ Đổi mật khẩu thành công!');
+                setTimeout(() => onUnlock(), 800);
+            } else {
+                showError(data.error || 'Lỗi khôi phục');
+            }
+        } catch {
+            showError('Lỗi server');
+        } finally {
+            setIsDisabled(false);
+        }
+    };
 
-    // Progress dots for setup
-    const stepIndicator = isSetupMode && (
-        <div className="flex gap-2 mb-2">
-            <div
-                className={`h-2 w-8 rounded-full transition-all duration-300 ${setupStep === 'draw-first' ? 'bg-blue-400' : 'bg-blue-400/30'
-                    }`}
-            />
-            <div
-                className={`h-2 w-8 rounded-full transition-all duration-300 ${setupStep === 'draw-confirm' ? 'bg-blue-400' : 'bg-blue-400/30'
-                    }`}
-            />
+    // ─── ROUTER ───────────────────────────────────────────────
+    
+    const onPatternComplete = (pattern: string) => {
+        if (mode === 'setup') {
+            if (setupStep === 'draw-first') handleSetupPattern1(pattern);
+            else if (setupStep === 'draw-confirm') handleSetupPattern2(pattern);
+        } else if (mode === 'verify') {
+            handleVerifyDraw(pattern);
+        } else if (mode === 'reset') {
+            if (resetStep === 'new-draw') handleResetNewPattern1(pattern);
+            else if (resetStep === 'new-confirm') handleResetNewPattern2(pattern);
+        }
+    };
+
+    const handleForgotClick = () => {
+        setMode('reset');
+        setResetStep('email-entry');
+        setEmail('');
+        setOtp('');
+        setMessage('Quên mật khẩu? Nhập Gmail');
+    };
+
+    // ─── RENDERERS ──────────────────────────────────────────────
+    
+    const renderPattern = (customMessage?: string) => (
+        <div className="flex flex-col items-center">
+            <div className="h-8 flex items-center justify-center mb-2">
+                <p className={`text-sm font-medium transition-all ${isError ? 'text-red-400' : 'text-blue-300'}`}>
+                    {lockedUntil ? `🔒 Khóa ${lockCountdown}s` : customMessage || message}
+                </p>
+            </div>
+            <div className={`${isError ? 'animate-shake' : ''}`} style={{ width: 260, height: 260 }}>
+                <PatternLock
+                    size={260}
+                    onComplete={onPatternComplete}
+                    error={isError}
+                    disabled={isDisabled || !!lockedUntil}
+                />
+            </div>
         </div>
     );
 
+    const renderInput = (
+        title: string, 
+        placeholder: string, 
+        value: string, 
+        onChange: (v: string) => void, 
+        onSubmit: (e: React.FormEvent) => void,
+        btnLabel: string
+    ) => (
+        <form onSubmit={onSubmit} className="w-full max-w-[260px] flex flex-col items-center">
+            <div className="h-8 flex items-center justify-center mb-2 text-center">
+                <p className={`text-sm font-medium ${isError ? 'text-red-400' : 'text-white/70'}`}>{message}</p>
+            </div>
+            <h2 className="text-white text-lg font-semibold mb-4">{title}</h2>
+            <input
+                autoFocus
+                type={title.includes('Mã') ? 'text' : 'email'}
+                className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4 transition-all"
+                placeholder={placeholder}
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                disabled={isDisabled}
+            />
+            <button
+                type="submit"
+                disabled={isDisabled}
+                className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold py-3 rounded-xl shadow-lg ring-offset-2 ring-offset-slate-900 focus:ring-2 transition-all"
+            >
+                {isDisabled ? 'Đang xử lý...' : btnLabel}
+            </button>
+            <button 
+                type="button" 
+                onClick={() => {
+                    if (mode === 'reset') setMode('verify');
+                    else if (mode === 'setup') setSetupStep('draw-first');
+                    setMessage('');
+                }}
+                className="mt-4 text-white/40 text-xs hover:text-white/60 underline"
+            >
+                Quay lại
+            </button>
+        </form>
+    );
+
+    let content;
+    if (mode === 'setup') {
+        if (setupStep === 'draw-first') content = renderPattern('Vẽ mã mở khóa mới');
+        else if (setupStep === 'draw-confirm') content = renderPattern('Vẽ lại để xác nhận');
+        else if (setupStep === 'email-entry') content = renderInput('Nhập Gmail bảo mật', 'example@gmail.com', email, setEmail, handleSetupEmailSubmit, 'Gửi mã xác thực');
+        else if (setupStep === 'otp-verify') content = renderInput('Xác thực Gmail', 'XXXXXX', otp, setOtp, handleSetupOtpSubmit, 'Hoàn tất thiết lập');
+    } else if (mode === 'verify') {
+        content = (
+            <div className="flex flex-col items-center">
+                {renderPattern('Vẽ hình để mở khóa')}
+                {!lockedUntil && (
+                    <button 
+                        onClick={handleForgotClick}
+                        className="mt-6 text-blue-400/80 text-sm hover:text-blue-300 transition-colors underline decoration-blue-400/30 underline-offset-4"
+                    >
+                        Quên mật khẩu?
+                    </button>
+                )}
+                <div className="flex gap-1.5 mt-4">
+                    {Array.from({ length: 5 }).map((_, i) => (
+                        <div key={i} className={`w-2 h-2 rounded-full transition-all ${i < attempts ? 'bg-red-400' : 'bg-white/20'}`} />
+                    ))}
+                </div>
+            </div>
+        );
+    } else if (mode === 'reset') {
+        if (resetStep === 'email-entry') content = renderInput('Khôi phục mật khẩu', 'Nhập Gmail đã đăng ký', email, setEmail, handleResetEmailSubmit, 'Gửi mã khôi phục');
+        else if (resetStep === 'otp-verify') content = renderInput('Xác thực mã 6 số', 'Nhập mã từ Gmail', otp, setOtp, handleResetOtpSubmit, 'Xác thực mã');
+        else if (resetStep === 'new-draw') content = renderPattern('Vẽ mật mã mới');
+        else if (resetStep === 'new-confirm') content = renderPattern('Xác nhận mã mới');
+    }
+
     return (
-        <div
-            className="fixed inset-0 z-[9999] flex flex-col items-center justify-center"
-            style={{
-                background: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%)',
-            }}
-        >
-            {/* Decorative background circles */}
+        <div className="fixed inset-0 z-[9999] flex flex-col items-center justify-center" style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%)' }}>
             <div className="absolute inset-0 overflow-hidden pointer-events-none">
-                <div
-                    className="absolute rounded-full opacity-10"
-                    style={{
-                        width: 600,
-                        height: 600,
-                        top: '-20%',
-                        left: '-15%',
-                        background: 'radial-gradient(circle, #6366f1 0%, transparent 70%)',
-                    }}
-                />
-                <div
-                    className="absolute rounded-full opacity-10"
-                    style={{
-                        width: 400,
-                        height: 400,
-                        bottom: '-10%',
-                        right: '-10%',
-                        background: 'radial-gradient(circle, #3b82f6 0%, transparent 70%)',
-                    }}
-                />
+                <div className="absolute rounded-full opacity-10" style={{ width: 600, height: 600, top: '-20%', left: '-15%', background: 'radial-gradient(circle, #6366f1 0%, transparent 70%)' }} />
+                <div className="absolute rounded-full opacity-10" style={{ width: 400, height: 400, bottom: '-10%', right: '-10%', background: 'radial-gradient(circle, #3b82f6 0%, transparent 70%)' }} />
             </div>
 
-            {/* Glassmorphism card */}
-            <div
-                className="relative flex flex-col items-center px-8 py-10 rounded-3xl"
-                style={{
-                    background: 'rgba(255,255,255,0.05)',
-                    backdropFilter: 'blur(20px)',
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    boxShadow: '0 25px 50px rgba(0,0,0,0.5)',
-                    minWidth: 320,
-                }}
-            >
-                {/* Logo / Title */}
+            <div className="relative flex flex-col items-center px-8 py-10 rounded-3xl" style={{ background: 'rgba(255,255,255,0.05)', backdropFilter: 'blur(20px)', border: '1px solid rgba(255,255,255,0.1)', boxShadow: '0 25px 50px rgba(0,0,0,0.5)', minWidth: 320, minHeight: 480 }}>
                 <div className="flex flex-col items-center mb-6">
-                    <div
-                        className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4 shadow-lg"
-                        style={{ background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)' }}
-                    >
+                    <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4 shadow-lg" style={{ background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)' }}>
                         <span className="material-icons text-white text-3xl">videocam</span>
                     </div>
                     <h1 className="text-white text-xl font-bold tracking-wide">NVR AI View</h1>
                     <p className="text-white/50 text-xs mt-1 tracking-widest uppercase">
-                        {isSetupMode ? 'Thiết lập mật khẩu' : 'Xác thực danh tính'}
+                        {mode === 'setup' ? 'Thiết lập bảo mật' : mode === 'reset' ? 'Khôi phục mật khẩu' : 'Xác thực hệ thống'}
                     </p>
                 </div>
 
-                {/* Step indicator */}
-                {stepIndicator}
+                {content}
 
-                {/* Message */}
-                <div className="h-8 flex items-center justify-center mb-2">
-                    <p
-                        className={`text-sm font-medium transition-all duration-200 ${isError ? 'text-red-400' : lockedUntil ? 'text-yellow-400' : 'text-blue-300'
-                            }`}
-                    >
-                        {lockedUntil
-                            ? `🔒 Thử lại sau ${lockCountdown}s`
-                            : message}
-                    </p>
-                </div>
-
-                {/* Pattern Lock Grid */}
-                <div
-                    className={`${isError ? 'animate-shake' : ''}`}
-                    style={{ width: 260, height: 260 }}
-                >
-                    <PatternLock
-                        size={260}
-                        onComplete={onPatternComplete}
-                        error={isError}
-                        disabled={isDisabled || !!lockedUntil}
-                    />
-                </div>
-
-                {/* Attempt dots (verify mode) */}
-                {!isSetupMode && (
-                    <div className="flex gap-1.5 mt-3">
-                        {Array.from({ length: 5 }).map((_, i) => (
-                            <div
-                                key={i}
-                                className={`w-2 h-2 rounded-full transition-all duration-300 ${i < attempts ? 'bg-red-400 scale-110' : 'bg-white/20'
-                                    }`}
-                            />
-                        ))}
-                    </div>
-                )}
-
-                {/* Hint text */}
-                <p className="text-white/25 text-xs mt-4 text-center max-w-[220px] leading-relaxed">
-                    {isSetupMode
-                        ? setupStep === 'draw-first'
-                            ? 'Kéo qua ít nhất 3 điểm để tạo hình mở khóa'
-                            : 'Vẽ lại đúng hình vừa tạo để xác nhận'
-                        : 'Kéo qua các điểm theo đúng hình đã tạo'}
+                <p className="text-white/25 text-xs mt-8 text-center max-w-[220px] leading-relaxed">
+                    NVR v2.1 • Secured with AI View
                 </p>
             </div>
-
-            {/* Version tag */}
-            <p className="absolute bottom-4 text-white/20 text-xs">NVR v2.0 • Secured</p>
+            <p className="absolute bottom-4 text-white/20 text-xs">Phát triển bởi AI View Team</p>
         </div>
     );
 }

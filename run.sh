@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- ALL-IN-ONE NVR DEPLOYMENT (PHIÊN BẢN 3.0) ---
+# --- ALL-IN-ONE NVR DEPLOYMENT (PHIÊN BẢN 4.0 - CI/CD READY) ---
 
 if [[ $EUID -ne 0 ]]; then
    echo "CRITICAL: Vui lòng chạy script này với quyền sudo: sudo ./run.sh"
@@ -7,15 +7,16 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 echo "===================================================="
-echo "   Hệ thống Setup NVR Tự động (PHIÊN BẢN 3.0)        "
+echo "   Hệ thống Setup NVR Tự động (PHIÊN BẢN 4.0 - CI/CD) "
 echo "===================================================="
 
-read -p "[?] Bạn có muốn DỌN SẠCH dữ liệu/cấu hình cũ (Factory Reset) trước khi cài đặt không? Chỉ dùng cho máy mới. (y/n): " DO_RESET
+read -p "[?] Bạn có muốn DỌN SẠCH dữ liệu/cấu hình cũ (Factory Reset) trước khi cài đặt không? Chỉ dùng cho cấu hình máy mới tinh. (y/n): " DO_RESET
 if [[ "$DO_RESET" =~ ^[Yy]$ ]]; then
     echo "[*] 0. Khởi tạo lại hệ thống (Factory Reset)..."
     docker compose down -v --remove-orphans >/dev/null 2>&1 || true
     rm -rf data/nvr.db* data/*.db media/* mosquitto/data/* mosquitto/log/* logs/*
     
+    mkdir -p config
     cat <<EOF > config/config.yml
 version: 0.16-0
 mqtt:
@@ -35,6 +36,7 @@ EOF
         fi
     done
 
+    # Xoá các biến cũ nhưng giữ lại file
     [ -f .env ] && sed -i '/FRIGATE_HOST_IP/d' .env
     [ -f .env ] && sed -i '/TAILSCALE_AUTH_KEY/d' .env
     echo "  -> Đã dọn dẹp xong."
@@ -43,7 +45,7 @@ fi
 # 1. Cài đặt các thành phần nền tảng
 echo "[*] Bước 1: Cài đặt Docker, MergerFS và công cụ nền tảng..."
 apt-get update
-apt-get install -y curl wget git mergerfs fuse3 util-linux
+apt-get install -y curl wget git mergerfs fuse3 util-linux jq
 
 # Đảm bảo các thư mục cấu trúc luôn có sẵn
 mkdir -p data media mosquitto/data mosquitto/log mosquitto/config config logs nginx/html
@@ -97,20 +99,45 @@ if [ -n "$DRIVE_LIST" ]; then
 fi
 
 # 3. Mạng và Môi trường
-echo "[*] Bước 3: Cấu hình Mạng nội bộ..."
+echo "[*] Bước 3: Cấu hình Mạng nội bộ và Biến theo dõi (CI/CD)..."
 LAN_IP=$(hostname -I | awk '{print $1}')
 echo "[i] Địa chỉ IP máy là: $LAN_IP"
 
-if [ -f ".env" ]; then
-    if grep -q "^FRIGATE_HOST_IP=" .env; then
-        sed -i "s/^FRIGATE_HOST_IP=.*/FRIGATE_HOST_IP=$LAN_IP/" .env
-    else
-        echo "FRIGATE_HOST_IP=$LAN_IP" >> .env
-    fi
+touch .env
+if grep -q "^FRIGATE_HOST_IP=" .env; then
+    sed -i "s/^FRIGATE_HOST_IP=.*/FRIGATE_HOST_IP=$LAN_IP/" .env
 else
-    echo "FRIGATE_HOST_IP=$LAN_IP" > .env
-    echo "TZ=Asia/Ho_Chi_Minh" >> .env
-    echo "FRIGATE_VERSION=0.16.3" >> .env
+    echo "FRIGATE_HOST_IP=$LAN_IP" >> .env
+fi
+grep -q "^TZ=" .env || echo "TZ=Asia/Ho_Chi_Minh" >> .env
+grep -q "^FRIGATE_VERSION=" .env || echo "FRIGATE_VERSION=0.16.3" >> .env
+
+# --- CẤU HÌNH GHCR / TELEGRAM / WATCHTOWER ---
+if ! grep -q "GITHUB_TOKEN=" .env; then
+    echo ""
+    echo "--- CẤU HÌNH LIÊN KẾT GITHUB & TELEGRAM ---"
+    read -p "[?] Nhập GitHub Username (Của bạn hoặc Tổ chức) [Mặc định: toannice]: " GH_USER
+    GH_USER=${GH_USER:-toannice}
+    
+    read -p "[?] Nhập GitHub Personal Access Token (Bắt buộc để pull từ ghcr.io): " GH_PAT
+    
+    # Trích xuất mặc định từ deploy/edge_ota_update.sh (Hoặc hardcode theo thông tin đã quét được)
+    DEFAULT_TG_BOT="8637751033:AAFTEi0-kdVIjTYCwRrb4xLVVFqCShipi6s"
+    DEFAULT_TG_CHAT="6655437760"
+
+    read -p "[?] Nhập Telegram Bot Token [Mặc định: $DEFAULT_TG_BOT]: " TELEGRAM_TOKEN
+    TELEGRAM_TOKEN=${TELEGRAM_TOKEN:-$DEFAULT_TG_BOT}
+    
+    read -p "[?] Nhập Telegram Chat ID [Mặc định: $DEFAULT_TG_CHAT]: " TELEGRAM_CHAT_ID
+    TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-$DEFAULT_TG_CHAT}
+
+    echo "GITHUB_USERNAME=$GH_USER" >> .env
+    echo "GITHUB_TOKEN=$GH_PAT" >> .env
+    echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_TOKEN" >> .env
+    echo "TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID" >> .env
+    # Tạo Token ngẫu nhiên bảo mật cho API cập nhật thủ công
+    echo "WATCHTOWER_TOKEN=$(date +%s | sha256sum | base64 | tr -dc 'a-zA-Z0-9' | head -c 24)" >> .env
+    echo "WATCHTOWER_SCHEDULE=0 0 3 * * *" >> .env  # Tự động cập nhật 3h sáng
 fi
 
 # 4. Tailscale & SSH
@@ -138,23 +165,41 @@ if [[ "$INSTALL_TS" =~ ^[Yy]$ ]]; then
     [ -n "$TS_KEY" ] && tailscale up --authkey="$TS_KEY"
 fi
 
-# 5. Fix Permissions (Đảm bảo không lỗi ghi thư mục)
+# 5. Fix Permissions
 echo "[*] Bước 5: Mở khóa thư mục (Fix Permissions)..."
 chmod -R 777 media data logs mosquitto config
 if [ ! -z "$SUDO_USER" ]; then
     chown -R $SUDO_USER:$SUDO_USER .
 fi
 
-# 6. Khởi chạy Dịch vụ (QUAN TRỌNG)
-echo "[*] Bước 6: Đang kích hoạt hệ thống NVR bằng Docker..."
+# 6. Khởi chạy Dịch vụ (Docker Pull & Run)
+echo "[*] Bước 6: Kích hoạt hệ thống NVR và các dịch vụ..."
+source .env
+if [ -n "$GITHUB_TOKEN" ] && [ -n "$GITHUB_USERNAME" ]; then
+    echo "[*] Đăng nhập GitHub Container Registry..."
+    echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_USERNAME" --password-stdin
+fi
+
 docker compose pull
 docker compose up -d
+
+# Tạo script trigger update thủ công
+cat << 'EOF' > update-now.sh
+#!/bin/bash
+source .env
+echo "[*] Yêu cầu máy trạm kéo bản cập nhật mới nhất ngay lập tức..."
+curl -H "Authorization: Bearer $WATCHTOWER_TOKEN" http://localhost:8080/v1/update
+echo ""
+echo "[*] Thành công! Xem log với: docker logs -f watchtower"
+EOF
+chmod +x update-now.sh
 
 # 7. Thông báo
 echo "===================================================="
 echo "Hệ thống NVR đã sẵn sàng!"
 echo "Truy cập tại: https://$LAN_IP"
 echo "Lưu ý: Bạn MUST dùng HTTPS (vì hệ thống đã cài SSL bảo mật)"
+echo "Để gửi lệnh Cập Nhật Thủ Công ngay, chạy lệnh: ./update-now.sh"
 echo "===================================================="
 
 if [ -n "$DISPLAY" ]; then

@@ -36,12 +36,13 @@ fun Application.configureSecurity() {
 }
 
 /**
- * Basic SHA-256 hashing for pattern strings.
- * In a high-security environment, BCrypt/Argon2 would be preferred.
+ * Basic SHA-256 hashing for strings (pattern, email).
  */
-fun hashPattern(pattern: String): String {
-    val salt = "NVR_SECRET_2026_AIVIEW" // Salt should ideally be unique per device
+fun hashString(input: String): String {
+    val salt = "NVR_SECRET_2026_AIVIEW"
     val digest = MessageDigest.getInstance("SHA-256")
-    val hashBytes = digest.digest((pattern + salt).toByteArray())
+    val hashBytes = digest.digest((input + salt).toByteArray())
     return hashBytes.joinToString("") { "%02x".format(it) }
 }
+
+fun hashPattern(pattern: String) = hashString(pattern)

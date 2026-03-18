@@ -6,6 +6,7 @@ val sqlite_version: String by project
 val paho_mqtt_version: String by project
 val snakeyaml_version: String by project
 val coroutines_version: String by project
+val jakarta_mail_version: String by project
 
 plugins {
     kotlin("jvm") version "2.0.21"
@@ -62,6 +63,9 @@ dependencies {
     
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:$coroutines_version")
+    
+    // Email
+    implementation("com.sun.mail:jakarta.mail:$jakarta_mail_version")
     
     // Testing
     testImplementation("io.ktor:ktor-server-tests-jvm:$ktor_version")

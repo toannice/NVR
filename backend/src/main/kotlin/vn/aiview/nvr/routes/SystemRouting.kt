@@ -24,6 +24,9 @@ data class StorageInfo(
     val cameraUsage: Map<String, Long>
 )
 
+@Serializable
+data class GeneralResponse(val success: Boolean, val error: String? = null, val filename: String? = null, val size: Long? = null)
+
 val appVersion = System.getenv("APP_VERSION") ?: "1.1.0"
 val startTime = System.currentTimeMillis()
 
@@ -232,9 +235,9 @@ fun Route.systemRouting() {
         val file = File("/app/media/exports/$filename")
         if (file.exists() && file.name.endsWith(".mp4")) {
             file.delete()
-            call.respond(mapOf("success" to true))
+            call.respond(GeneralResponse(true))
         } else {
-            call.respond(io.ktor.http.HttpStatusCode.NotFound, mapOf("error" to "File not found"))
+            call.respond(io.ktor.http.HttpStatusCode.NotFound, GeneralResponse(false, "File not found"))
         }
     }
 
@@ -256,10 +259,10 @@ fun Route.systemRouting() {
             val outFile = File(screenshotsDir, filename)
             outFile.writeBytes(bytes)
 
-            call.respond(mapOf("success" to true, "filename" to outFile.name, "size" to outFile.length()))
+            call.respond(GeneralResponse(true, filename = outFile.name, size = outFile.length()))
         } catch (e: Exception) {
             call.application.environment.log.error("Error saving screenshot", e)
-            call.respond(io.ktor.http.HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Unknown")))
+            call.respond(io.ktor.http.HttpStatusCode.InternalServerError, GeneralResponse(false, e.message ?: "Unknown"))
         }
     }
 
@@ -285,9 +288,9 @@ fun Route.systemRouting() {
         val file = File("/app/media/screenshots/$filename")
         if (file.exists()) {
             file.delete()
-            call.respond(mapOf("success" to true))
+            call.respond(GeneralResponse(true))
         } else {
-            call.respond(io.ktor.http.HttpStatusCode.NotFound, mapOf("error" to "File not found"))
+            call.respond(io.ktor.http.HttpStatusCode.NotFound, GeneralResponse(false, "File not found"))
         }
     }
 }

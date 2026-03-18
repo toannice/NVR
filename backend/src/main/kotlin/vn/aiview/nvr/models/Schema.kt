@@ -30,6 +30,7 @@ object Schedules : Table("schedules") {
 object LockConfig : Table("lock_config") {
     val id = integer("id").default(1)
     val hash = text("hash")
+    val gmailHash = text("gmail_hash").nullable()
     val updatedAt = datetime("updated_at").defaultExpression(CurrentDateTime)
 
     override val primaryKey = PrimaryKey(id)

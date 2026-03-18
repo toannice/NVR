@@ -141,13 +141,19 @@ const LiveCamera = ({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [name, mode, mseKey]);
 
-    // Ensure the video catches up to real-time after returning from another tab
-    // or if it falls behind due to network/CPU lag.
     useEffect(() => {
+        let lastVisibleTime = Date.now();
+
         const handleVisibilityChange = () => {
             if (document.visibilityState === 'visible' && mode === 'mse') {
-                // Force a fresh connection to go2rtc when tab becomes active
-                setMseKey(k => k + 1);
+                const now = Date.now();
+                // If hidden for more than 10 seconds, force a fresh connection
+                if (now - lastVisibleTime > 10000) {
+                    console.log(`[LiveCamera] Tab visible again after ${Math.round((now - lastVisibleTime)/1000)}s gap, reloading stream for ${name}`);
+                    setMseKey(k => k + 1);
+                }
+            } else if (document.visibilityState === 'hidden') {
+                lastVisibleTime = Date.now();
             }
         };
 
@@ -158,21 +164,31 @@ const LiveCamera = ({
             if (video.buffered.length > 0) {
                 const latestBuffer = video.buffered.end(video.buffered.length - 1);
                 const lag = latestBuffer - video.currentTime;
-                // If we are more than 2s behind the live edge, jump forward
-                if (lag > 2) {
-                    video.currentTime = latestBuffer - 0.2;
+                // If we are more than 1.5s behind the live edge, jump forward
+                if (lag > 1.5) {
+                    video.currentTime = latestBuffer - 0.1;
                 }
             }
         };
 
         const interval = setInterval(checkLag, 1000);
+        
+        // Auto-reload the camera every 5 minutes to guarantee true real-time
+        const reloadInterval = setInterval(() => {
+            if (document.visibilityState === 'visible' && mode === 'mse') {
+                console.log(`[LiveCamera] Auto-reloading stream for ${name} to maintain real-time sync`);
+                setMseKey(k => k + 1);
+            }
+        }, 5 * 60 * 1000); // 5 minutes
+
         document.addEventListener('visibilitychange', handleVisibilityChange);
         
         return () => {
             clearInterval(interval);
+            clearInterval(reloadInterval);
             document.removeEventListener('visibilitychange', handleVisibilityChange);
         };
-    }, [mode]);
+    }, [mode, name]);
 
     // ── Snapshot fallback (500 ms refresh) ────────────────────────────────────
     const updateSnapshot = useCallback(() => {
