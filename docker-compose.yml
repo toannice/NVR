@@ -122,6 +122,7 @@ services:
       - "127.0.0.1:8080:8080" # Exposed locally for manual HTTP API trigger
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /root/.docker/config.json:/config.json # Cho phép Watchtower dùng login của host (GHCR)
     environment:
       - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-0 0 3 * * *}
       - WATCHTOWER_CLEANUP=${WATCHTOWER_CLEANUP:-true}
