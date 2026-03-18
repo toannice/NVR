@@ -4,11 +4,13 @@ import io.ktor.server.application.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import io.ktor.server.plugins.*
 import io.ktor.http.HttpStatusCode
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.transactions.transaction
 import vn.aiview.nvr.models.LockConfig
 import kotlinx.serialization.Serializable
+import vn.aiview.nvr.utils.AppLogger
 
 import vn.aiview.nvr.plugins.UserSession
 import vn.aiview.nvr.plugins.hashString
@@ -64,6 +66,8 @@ fun Route.lockRouting() {
                 val isTestBypass = data.email == "test@test.com" && data.otp == "000000"
                 
                 if (!isTestBypass && !EmailService.verifyOtp(data.email, data.otp)) {
+                    val ip = call.request.origin.remoteHost
+                    AppLogger.warn(AppLogger.Module.SECURITY, "AUTH", "SETUP_FAILED", "Invalid OTP for email: ${data.email} | IP: $ip")
                     call.respond(HttpStatusCode.BadRequest, LockResponse(false, "Mã xác thực không chính xác hoặc đã hết hạn"))
                     return@post
                 }
@@ -82,6 +86,8 @@ fun Route.lockRouting() {
                 failedAttempts = 0
                 lockUntil = 0
                 call.sessions.set(UserSession("admin"))
+                val ip = call.request.origin.remoteHost
+                AppLogger.info(AppLogger.Module.SECURITY, "AUTH", "CONFIG_CHANGE", "Admin setup complete (Pattern & Email) | IP: $ip")
                 call.respond(LockResponse(true))
             } catch (e: Exception) {
                 call.respond(HttpStatusCode.InternalServerError, LockResponse(false, "Lỗi thiết lập: ${e.message}"))
@@ -107,11 +113,17 @@ fun Route.lockRouting() {
                     failedAttempts = 0
                     lockUntil = 0
                     call.sessions.set(UserSession("admin"))
+                    val ip = call.request.origin.remoteHost
+                    AppLogger.info(AppLogger.Module.SECURITY, "AUTH", "USER_LOGIN", "User: admin | IP: $ip | Status: Success")
                     call.respond(LockResponse(true))
                 } else {
                     failedAttempts++
+                    val ip = call.request.origin.remoteHost
                     if (failedAttempts >= 5) {
                         lockUntil = System.currentTimeMillis() + 60000 // Lock for 60 seconds
+                        AppLogger.warn(AppLogger.Module.SECURITY, "AUTH", "INVALID_LOGIN", "IP: $ip | Attempts: $failedAttempts | BLOCKED for 60s")
+                    } else {
+                        AppLogger.warn(AppLogger.Module.SECURITY, "AUTH", "INVALID_LOGIN", "IP: $ip | Attempts: $failedAttempts")
                     }
                     call.respond(HttpStatusCode.Unauthorized, LockResponse(false, "Mã vẽ không đúng. Còn ${5 - failedAttempts} lần thử."))
                 }

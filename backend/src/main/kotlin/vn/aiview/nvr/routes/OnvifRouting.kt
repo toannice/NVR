@@ -136,11 +136,21 @@ fun Route.onvifRouting() {
                 val newCamConfig = mapOf(
                     "ffmpeg" to mapOf(
                         "inputs" to listOf(
-                            mapOf("path" to deviceInfo.rtspUrl, "roles" to listOf("detect", "record"))
+                            mapOf(
+                                "path" to "rtsp://127.0.0.1:8554/$slug",
+                                "input_args" to "preset-rtsp-restream",
+                                "roles" to listOf("detect", "record")
+                            )
                         )
                     ),
                     "detect" to mapOf("enabled" to false),
-                    "record" to mapOf("enabled" to true)
+                    "record" to mapOf(
+                        "enabled" to true,
+                        "retain" to mapOf(
+                            "days" to 7,
+                            "mode" to "all"
+                        )
+                    )
                 )
                 
                 cameras[slug] = newCamConfig
@@ -148,7 +158,7 @@ fun Route.onvifRouting() {
                 // Add to go2rtc streams
                 val go2rtc = configData.getOrPut("go2rtc") { mutableMapOf<String, Any>() } as MutableMap<String, Any>
                 val streams = go2rtc.getOrPut("streams") { mutableMapOf<String, Any>() } as MutableMap<String, Any>
-                streams[slug] = listOf(deviceInfo.rtspUrl)
+                streams[slug] = listOf("${deviceInfo.rtspUrl}#tcp")
                 
                 val options = org.yaml.snakeyaml.DumperOptions().apply {
                     defaultFlowStyle = org.yaml.snakeyaml.DumperOptions.FlowStyle.BLOCK

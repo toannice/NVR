@@ -4,8 +4,9 @@ on:
   push:
     branches:
       - main
+      - staging
     tags:
-      - 'v*.*.*' # Chạy pipeline khi push một tag version hoặc push lên main
+      - 'v*.*.*' # Chạy pipeline khi push một tag version hoặc push lên main/staging
 
 jobs:
   test:
@@ -47,6 +48,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=staging,enable=${{ github.ref == 'refs/heads/staging' }}
             type=ref,event=tag
             type=ref,event=branch
 

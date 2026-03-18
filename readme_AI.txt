@@ -54,60 +54,44 @@ Tài liệu này được tạo ra để cung cấp bối cảnh toàn diện v�
 - **Nginx Security Gateway:** Tất cả các luồng truy cập frontend -> backend đều nên đi qua NGINX cấu hình HTTPS để bảo đảm bí mật dữ liệu. NVR Wrapper container không expose port trực tiếp (chạy dạng `host` network hoặc kết nối nội bộ).
 - **Zero-trust Networking:** Đã chuẩn bị stub (có đánh dấu bình luận) trong compose để sử dụng `Cloudflare Tunnel` thay cho việc NAT port truyền thống.
 - **Phân tách Role cập nhật:** Watchtower chỉ quét những container có scope/label `nvr-auto-update`, giữ Frigate độc lập ở phiên bản v0.16.3 được chốt cứng nhằm tránh gãy đổ do update tự động lỗi.
-## 8. Quản lý Đội ngũ & Bảo trì (Fleet Management & Maintenance)
-Hệ thống được thiết kế để quản lý hàng loạt (scale-out) mà không cần can thiệp thủ công vào từng thiết bị.
+## 8. CI/CD & OTA (Over-The-Air) Maintenance
+Hệ thống hiện tại đã được nâng cấp lên luồng CI/CD tự động 100% qua GitHub Actions và GitHub Container Registry (GHCR).
 
-### 8.1. Quy trình Cập nhật Phiên bản (OTA & Fleet Deployment)
-Khi bạn có thay đổi về code và muốn đẩy lên tất cả các máy trạm:
+### 8.1. Luồng phát triển 2 Làn (Deployment Pipeline)
+Bạn thao tác hoàn toàn từ **Máy Code (Dev)**, các máy trạm sẽ tự động nhận diện bản build phù hợp:
 
-**Bước 1: Build và Push Image (Tại máy cá nhân/Server chính)**
-1. Mở terminal tại thư mục dự án.
-2. Build image mới: `docker build -t <your-username>/my-nvr:latest .`
-3. Đẩy lên kho lưu trữ: `docker push <your-username>/my-nvr:latest`
+1. **Làn THỬ NGHIỆM (Staging/Beta):**
+   - **Thao tác:** `git push origin staging` (Từ máy dev).
+   - **GitHub Action:** Tự động Build Image và gắn tag `:staging`.
+   - **Máy TEST:** Thiết lập nhận tag `:staging`. Watchtower sẽ tự động kéo bản mới (mỗi 5 phút hoặc qua lệnh thủ công).
+   
+2. **Làn SẢN XUẤT (Production/Stable):**
+   - **Thao tác:** Merge `staging` vào `main` và `git push origin main`.
+   - **GitHub Action:** Tự động Build Image và gắn tag `:latest`.
+   - **10 Máy Trạm:** Chỉ nhận tag `:latest`. Tự động cập nhật âm thầm vào **03:00 sáng** hàng ngày để đảm bảo ổn định.
 
-**Bước 2: Triển khai hàng loạt (Deployment)**
-- **Cách 1: Tự động hàng ngày (Watchtower - Không chạm dữ liệu)**
-  - Mặc định, `watchtower` trên các máy trạm sẽ tự động quét bản mới trên Docker Hub vào lúc 3h sáng và tự cập nhật. Nó chỉ ghi đè container phần mềm, bảo toàn 100% dữ liệu `media` và `data`.
-- **Cách 2: Chủ động lập tức (Ansible - Dành cho nâng cấp hạ tầng)**
-  - Sử dụng file `deploy.yml` đi kèm dự án. 
-  - Khai báo IP (Tailscale) định danh các máy trạm vào file `inventory.ini`.
-  - Khai báo User/Pass Docker Hub (nếu image là Private) qua Terminal Variables:
-    ```bash
-    export DOCKER_USER="<username>"
-    export DOCKER_PASS="<password>"
-    ansible-playbook -i inventory.ini deploy.yml -K
-    ```
-  - Cấu hình hạ tầng mới sẽ được Ansible triển khai và container sẽ tự động restarts.
+### 8.2. Watchtower & Cập nhật tức thì
+- **Cập nhật thủ công (Update Now):** Tại bất kỳ máy nào, chạy `./update-now.sh` để kích hoạt Watchtower kéo code mới ngay lập tức qua HTTP API (Port 8080 nội bộ), không cần đợi đến 3h sáng.
+- **Bảo mật Login:** Watchtower được chia sẻ file `/root/.docker/config.json` để tự động dùng quyền `docker login` của máy host, giúp nó pull được Private Image từ GHCR mà không lộ mật khẩu.
+- **Fix lỗi Docker API:** Đã ép `DOCKER_API_VERSION=1.44` để tương thích hoàn toàn với các phiên bản Docker mới nhất (v25+).
 
-### 8.2. Khởi tạo máy trạm từ con số 0 (Zero-Touch Provisioning)
-Khi lắp đặt nhà hàng/chi nhánh mới:
-1. Copy duy nhất file `run.sh` (Phiên bản All-in-one) qua máy Ubuntu mới.
-2. Chạy lệnh: `sudo ./run.sh`
-3. Kịch bản sẽ tương tác và thực hiện chuỗi các tác vụ:
-   - Hỏi bạn có muốn **Factory Reset** (Xóa sạch DB & Volume cũ) không.
-   - Cài đặt công cụ lõi \& Docker.
-   - Tự động gộp các ổ đĩa vật lý thành `/media` qua MergerFS.
-   - Cài đặt SSH Server & Mạng riêng ảo Tailscale (để kết nối vào Ansible).
-   - Sửa quyền hệ thống (Fix Permissions 777) và dựng NVR.
-4. Ngay khi NVR trực tuyến trên IP mới, người dùng nhấn "Thêm Camera" trên giao diện Web. API Backend (`CameraRouting.kt`) sẽ **tự động sinh toàn bộ bộ khung config.yml tiêu chuẩn** cho Frigate mà không cần ai động đến file text. Cấu trúc cấu hình tối ưu này bao gồm:
-   - **Lưu trữ (Record)**: Bật ghi hình mặc định 24/7 với chế độ xoay vòng 7 ngày.
-   - **Tăng tốc phần cứng**: Tự động chèn `preset-intel-qsv-h264` để giải mã luồng bằng QuickSync của chip Intel đời 8 trở lên, giúp server mát và tiết kiệm CPU.
-   - **Restream & WebRTC (Độ trễ <500ms)**: Sử dụng go2rtc để lấy và phát lại luồng qua giao thức `#tcp`, tự động gán ứng cử viên WebRTC (`{FRIGATE_HOST_IP}:8555` và `stun:8555`).
-   - **Hiển thị trực tiếp**: Camera vừa thêm sẽ được tự động kích hoạt `detect: enabled: true`, đảm bảo màn hình tổng quan (Overview Dashboard) có hình ảnh ngay lập tức.
+### 8.3. Khởi tạo máy trạm v4.0 (run.sh)
+Script `run.sh` đã được tự động hóa tối đa:
+- **Tự động cấu hình:** Hỏi Username, GitHub PAT (Token), Telegram Bot/Chat ID và lưu vào `.env` (có dấu ngoặc kép chuẩn xác).
+- **Tự động Login:** Tự thực hiện `docker login ghcr.io` ngay khi cài đặt.
+- **Tự động sinh Token:** Tạo ngẫu nhiên `WATCHTOWER_TOKEN` bảo mật để bảo vệ cổng API cập nhật.
 
-## 9. Kết nối Từ xa & Xử lý trùng IP (Remote Connectivity & NAT Traversal)
-Khi triển khai nhiều máy trạm ở các địa điểm khác nhau (hệ thống phân tán), dù dải IP nội bộ đều là `192.168.2.x`, hệ thống vẫn hoạt động hoàn hảo nhờ các cơ chế sau:
+## 9. Chế độ Thử nghiệm & Test (Test-Mode)
+- **Bypass Setup Gmail:** Để thuận tiện cho việc test nhanh trên 10 máy, bước xác thực OTP qua Gmail đã được cấu hình "Bypass" (Bỏ qua).
+- **Cách dùng:** Khi cài máy mới, bạn chỉ cần vẽ hình mở khóa 2 lần. Hệ thống Frontend sẽ tự động gửi dữ liệu giả (`test@test.com`/`000000`) để hoàn tất cài đặt và cho phép vào giao diện chính ngay lập tức.
 
-### 9.1. Cập nhật qua Docker Hub (Outbound)
-- Các máy trạm chủ động "nhìn" ra ngoài internet để lấy bản cập nhật từ Docker Hub. 
-- Việc trùng dải IP nội bộ (`192.168.2.x`) ở các công trình khác nhau không ảnh hưởng gì vì mỗi máy đều đứng sau một Router riêng và có IP Public (hoặc NAT) riêng để đi ra ngoài.
+## 10. Kết nối Từ xa & Quản lý Fleet
+- **Tailscale (Mesh VPN):** Dùng IP `100.x.x.x` duy nhất cho mỗi máy để bạn SSH quản lý hàng loạt qua Ansible.
+- **Cloudflare Tunnel:** Để Remote Web View qua HTTPS mà không cần mở Port modem (NAT).
+- **Telegram Alert:** Mọi sự kiện Cập nhật thành công/Thất bại hoặc Lỗi ổ cứng đều được báo về Telegram của bạn theo thời gian thực.
 
-### 9.2. Quản lý tập trung (Inbound & Ansible)
-Để bạn có thể dùng Ansible điều khiển các máy này từ văn phòng mà không cần NAT Port hay cài VPN phức tạp:
-- **Giải pháp khuyên dùng: Tailscale (Mesh VPN)**
-  - Cài Tailscale lên mỗi máy Ubuntu trạm. 
-  - Mỗi máy sẽ được cấp một IP duy nhất (dải `100.x.x.x`) không bao giờ trùng nhau.
-  - Bạn dùng IP Tailscale này để khai báo vào file `hosts` của Ansible. Bạn có thể SSH vào bất kỳ máy nào ở bất kỳ đâu chỉ bằng một IP cố định này.
-- **Giải pháp Zero-Trust: Cloudflare Tunnel**
-  - Tôi đã để sẵn "stub" (đoạn mã gợi ý) trong `docker-compose.yml`. 
-  - Giúp bạn ánh xạ giao diện Web (Port 80/443) của từng máy trạm thành các subdomain như `station1.yourdomain.com`, `station2.yourdomain.com` để xem live từ xa mà không cần mở port modem.
+## 11. Logic Thêm Mới Camera & Tối Ưu Cấu Hình (go2rtc)
+Khi người dùng thêm camera mới (thủ công qua RTSP hoặc tự động qua ONVIF), hệ thống Backend Kotlin sẽ áp dụng chuẩn cấu hình trực tiếp vào file `config/config.yml` mặc định như sau:
+- **Tập trung luồng (go2rtc):** Đường dẫn gốc RTSP của camera (ví dụ: `rtsp://...#tcp`) được lưu duy nhất tại thẻ `go2rtc -> streams`. Hệ thống NVR chỉ tạo kết nối một lần duy nhất với camera gốc, đặc biệt hữu ích cho các mạng có kết nối truyền dẫn kém, giúp chia sẻ băng thông.
+- **Tái sử dụng nội bộ (Local Restream):** Ở khối cấu hình của camera trong Frigate (`cameras -> <slug> -> ffmpeg -> inputs`), hệ thống thay thế đường dẫn trực tiếp bằng địa chỉ proxy mạng nội bộ: `path: rtsp://127.0.0.1:8554/<slug>`. Đồng thời sử dụng `input_args: preset-rtsp-restream` nhằm thông báo cho FFmpeg bỏ qua giai đoạn sửa lỗi luồng phân mảnh, giảm thiểu buffer để đẩy tốc độ Load (Live View) xuống gần 0ms.
+- **Cấu hình Lưu trữ (Recording):** Camera mới tự động được bật (`enabled: true`) và cấu hình sẵn chế độ lưu trữ 24/7 trong 7 ngày (`retain: -> days: 7, mode: all`), đảm bảo không thất thoát đoạn ghi hình nào ngay khi thiết bị vừa được thêm.

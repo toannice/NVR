@@ -52,7 +52,7 @@ const Header = ({ activeTab, setActiveTab, currentTime }: {
 
     <div className="flex items-center space-x-3 text-sm shrink-0">
       <span className="hidden xl:inline font-medium opacity-90 whitespace-nowrap">NVR AI View - {currentTime.toLocaleTimeString('vi-VN')}</span>
-      <button 
+      <button
         onClick={() => {
           if (confirm('Bạn có muốn đăng xuất không?')) {
             (window as any).logout();
@@ -277,14 +277,18 @@ const CameraGridItem = ({
   cameraIndex?: number,
 }) => {
   if (!cam) {
-    return <div className="w-full h-full bg-[#111827] pointer-events-none"></div>;
+    return (
+      <div className="w-full h-full bg-[#111827] pointer-events-none flex items-center justify-center">
+        <img src={customLogo} alt="AI View Logo" className="h-16 w-auto object-contain opacity-30 grayscale" />
+      </div>
+    );
   }
 
   return (
     <>
       <LiveCamera
         name={cam.id}
-        className={`w-full h-full object-cover ${!cam.isOnline ? 'hidden' : ''}`}
+        className={`w-full h-full object-cover object-top ${!cam.isOnline ? 'hidden' : ''}`}
         isFullscreen={!!fullscreenCamId}
         isGrid={!fullscreenCamId}
       />
@@ -306,7 +310,7 @@ const CameraGridItem = ({
         </div>
       )}
 
-      <div className="absolute top-2 left-2 flex items-center space-x-2 z-20">
+      <div className="absolute top-4 left-2 flex items-center space-x-2 z-20">
         {cam.record && <span className="bg-red-600 text-white text-[10px] px-1.5 py-0.5 rounded animate-pulse">REC</span>}
         <span className="bg-black/60 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm">{cam.name}</span>
         {/* Show active detection count badge */}
@@ -386,7 +390,7 @@ const MiniPlayer = ({ camId, onClose, onExpand }: { camId: string, onClose: () =
         </div>
       </div>
       <div className="flex-1 bg-black overflow-hidden relative" onDoubleClick={onClose}>
-        <LiveCamera name={camId} className="w-full h-full object-contain" isFullscreen={true} isGrid={false} />
+        <LiveCamera name={camId} className="w-full h-full object-cover object-top" isFullscreen={true} isGrid={false} />
       </div>
     </div>
   );
@@ -855,10 +859,10 @@ const PlaybackRightPanel = ({ showExport, setShowExport: _setShowExport, onExpor
                         const cameraMatch = cameras?.find((c: any) => c.slug === evt.camera || c.id === evt.camera || c.original_slug === evt.camera);
                         const camDisplayName = cameraMatch?.name;
                         const zoneName = evt.zones && evt.zones.length > 0 ? evt.zones[0] : '';
-                        
+
                         // Use camera display name if found, otherwise use zone name, otherwise use raw camera ID
                         const location = camDisplayName || zoneName || evt.camera || '';
-                        
+
                         return `Phát hiện ${label}${location ? ` ở ${location}` : ''}`;
                       })()}
                     </div>
@@ -1461,10 +1465,10 @@ const PlaybackView = ({
       }
     } catch (err: any) {
       console.error('Screenshot failed:', err);
-      addToast({ 
-        type: 'error', 
-        title: 'Lỗi chụp ảnh', 
-        message: err.message || 'Không thể lưu hình ảnh vào hệ thống.' 
+      addToast({
+        type: 'error',
+        title: 'Lỗi chụp ảnh',
+        message: err.message || 'Không thể lưu hình ảnh vào hệ thống.'
       });
     }
   };

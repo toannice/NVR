@@ -210,7 +210,7 @@ const LiveCamera = ({
                 <video
                     key={mseKey}
                     ref={videoRef}
-                    className={`w-full h-full object-contain ${className ?? ''}`}
+                    className={className || "w-full h-full object-contain"}
                     autoPlay playsInline muted
                 />
             )}
@@ -218,7 +218,7 @@ const LiveCamera = ({
                 <div className="relative w-full h-full">
                     <img
                         ref={imgRef}
-                        className={`w-full h-full object-contain ${className ?? ''}`}
+                        className={className || "w-full h-full object-contain"}
                         alt={name}
                         onError={() => setMode('error')}
                     />

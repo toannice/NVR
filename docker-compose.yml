@@ -59,6 +59,7 @@ services:
   nvr-wrapper:
     container_name: nvr-wrapper
     image: ghcr.io/toannice/nvr:latest # Sử dụng bản build từ GitHub CI/CD
+    #build: .
     restart: unless-stopped
     network_mode: "host" # Required for ONVIF multicast (WS-Discovery) to work
     labels:
