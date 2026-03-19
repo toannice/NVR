@@ -1071,7 +1071,7 @@ const PlaybackView = ({
       }
 
       // Add a random parameter to prevent caching of the playlist
-      const url = `/api/frigate/vod/${playbackCam}/start/${start}/end/${end}/master.m3u8`;
+      const url = `/api/frigate/vod/${playbackCam}/start/${start}/end/${end}/index.m3u8`;
       setVideoUrl(`${url}?t=${Date.now()}`);
     } else {
       setVideoUrl('');
@@ -3554,7 +3554,11 @@ function App() {
         })
       });
 
-      if (!res.ok) {
+      let exportId = null;
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        exportId = data.export_id || null;
+      } else {
         const err = await res.json().catch(() => ({ error: 'Unknown error' }));
         let errorMsg = err.error || 'Export failed';
         if (errorMsg.includes('No recordings found')) {
@@ -3564,7 +3568,7 @@ function App() {
         throw new Error(errorMsg);
       }
 
-      console.log('Export requested from Frigate. Waiting for file to be ready...');
+      console.log('Export requested from Frigate. Waiting for file to be ready...', exportId);
 
       // Polling for Completion
       let attempts = 0;
@@ -3574,11 +3578,17 @@ function App() {
           const statusRes = await fetch('/api/list-exports');
           if (statusRes.ok) {
             const exports = await statusRes.json();
-            // Look for recent export matching camera
-            const latest = exports[0]; // Already sorted newest first
+            // Look for the specific export file by export_id if available,
+            // otherwise fallback to checking the most recent export matching camera name.
+            let latest = null;
+            if (exportId) {
+              latest = exports.find((e: any) => e.name === exportId);
+            } else {
+              latest = exports.find((e: any) => e.name.includes(exportParams.cam));
+            }
 
-            // Check if latest looks like our file (by camera name) and is relatively new
-            if (latest && latest.name.includes(exportParams.cam)) {
+            // Check if file is found
+            if (latest) {
               // Wait a tiny bit extra to ensure file is fully flushed (sometimes Frigate creates the file before it's done writing)
               clearInterval(checkInterval);
 

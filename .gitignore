@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+config/
+data/nvr.db
+docker-compose.yml
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
