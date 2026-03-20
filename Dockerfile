@@ -23,6 +23,12 @@ RUN ./gradlew installDist --no-daemon
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 
+# Build-time version labels (injected by GitHub Actions)
+ARG DEPLOY_VERSION=dev
+ARG APP_VERSION=1.2.0
+ENV DEPLOY_VERSION=${DEPLOY_VERSION}
+ENV APP_VERSION=${APP_VERSION}
+
 # Install tools for healthchecks and operations
 RUN apk add --no-cache bash docker-cli sqlite curl wget
 

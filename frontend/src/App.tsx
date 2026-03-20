@@ -29,10 +29,27 @@ const Header = ({ activeTab, setActiveTab, currentTime }: {
   activeTab: string,
   setActiveTab: (t: string) => void,
   currentTime: Date
-}) => (
+}) => {
+  const [deployVersion, setDeployVersion] = useState<string>('');
+  useEffect(() => {
+    fetch('/api/version')
+      .then(r => r.json())
+      .then(d => setDeployVersion(d.deployVersion || ''))
+      .catch(() => {});
+  }, []);
+
+  return (
   <header className="h-14 flex items-center justify-between px-4 shadow-md z-20 shrink-0 text-white overflow-hidden relative" style={{ backgroundColor: '#EF4444' }}>
     <div className="flex items-center space-x-2 shrink-0">
       <img src={customLogo} alt="AI View Logo" className="h-10 w-auto object-contain rounded-sm" />
+      {deployVersion && (
+        <span
+          title={`Build: ${deployVersion}`}
+          className="hidden sm:inline-block bg-white/20 text-white text-[10px] font-mono px-1.5 py-0.5 rounded border border-white/30 leading-tight cursor-default select-none"
+        >
+          {deployVersion.length > 10 ? deployVersion.slice(0, 7) : deployVersion}
+        </span>
+      )}
     </div>
 
     <nav className="flex items-center space-x-1 flex-1 overflow-x-auto justify-center px-4 no-scrollbar">
@@ -65,7 +82,8 @@ const Header = ({ activeTab, setActiveTab, currentTime }: {
       </button>
     </div>
   </header>
-)
+  )
+}
 
 // ============================================
 // PTZ Control Component (Feature 2)
