@@ -5,6 +5,7 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.http.HttpStatusCode
+import org.jetbrains.exposed.sql.transactions.transaction
 
 // In a real production Kotlin app, we'd use a dedicated ONVIF library (like be.teletask.onvif:onvif-java-lib)
 // or implement the SOAP XML requests manually via Ktor client.
@@ -205,8 +206,60 @@ fun Route.onvifRouting() {
         }
         
         post("/test-connection") {
-            // TODO: Extract RTSP URL from XML SOAP Response
             call.respond(mapOf("success" to true, "message" to "Connection verified (Simulated)"))
+        }
+    }
+
+    // ── PTZ control endpoints ──────────────────────────────────────────────────
+    // Placed outside /api/onvif so they follow the pattern /api/cameras/{id}/ptz/*
+
+    get("/api/cameras/{id}/ptz/capabilities") {
+        val id = call.parameters["id"] ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing camera id"))
+        try {
+            val (ip, onvifPort, username, password) = getCameraOnvifConfig(id)
+                ?: return@get call.respond(HttpStatusCode.NotFound, mapOf("error" to "Camera not found"))
+
+            val capabilities = OnvifSoapClient.checkPtzCapability(ip, onvifPort, username, password)
+            call.respond(capabilities)
+        } catch (e: Exception) {
+            call.application.environment.log.warn("PTZ capability check failed for $id: ${e.message}")
+            call.respond(mapOf("hasPtz" to false, "hasPanTilt" to false, "hasZoom" to false))
+        }
+    }
+
+    post("/api/cameras/{id}/ptz/move") {
+        val id = call.parameters["id"] ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing camera id"))
+        try {
+            val (ip, onvifPort, username, password) = getCameraOnvifConfig(id)
+                ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to "Camera not found"))
+
+            val jsonStr = call.receiveText()
+            val json = Json.parseToJsonElement(jsonStr).jsonObject
+            val pan  = json["pan"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0
+            val tilt = json["tilt"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0
+            val zoom = json["zoom"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0
+
+            val (ptzUrl, profileToken) = OnvifSoapClient.getPtzServiceUrlAndToken(ip, onvifPort, username, password)
+            OnvifSoapClient.continuousMove(ptzUrl, profileToken, username, password, pan, tilt, zoom)
+            call.respond(mapOf("success" to true))
+        } catch (e: Exception) {
+            call.application.environment.log.error("PTZ move failed for $id", e)
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "PTZ move failed")))
+        }
+    }
+
+    post("/api/cameras/{id}/ptz/stop") {
+        val id = call.parameters["id"] ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing camera id"))
+        try {
+            val (ip, onvifPort, username, password) = getCameraOnvifConfig(id)
+                ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to "Camera not found"))
+
+            val (ptzUrl, profileToken) = OnvifSoapClient.getPtzServiceUrlAndToken(ip, onvifPort, username, password)
+            OnvifSoapClient.stopMove(ptzUrl, profileToken, username, password)
+            call.respond(mapOf("success" to true))
+        } catch (e: Exception) {
+            call.application.environment.log.error("PTZ stop failed for $id", e)
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "PTZ stop failed")))
         }
     }
 
@@ -244,7 +297,56 @@ fun Route.onvifRouting() {
     }
 }
 
+/**
+ * Reads camera config (IP, ONVIF port, username, password) for a given camera slug.
+ * Returns null if camera not found.
+ * Returns a data class (ip, onvifPort, username, password).
+ */
+private data class CameraOnvifConfig(val ip: String, val onvifPort: Int, val username: String, val password: String?)
+
+private fun getCameraOnvifConfig(slug: String): CameraOnvifConfig? {
+    val configPath = System.getenv("CONFIG_PATH") ?: "config/config.yml"
+    val configFile = java.io.File(configPath)
+    if (!configFile.exists()) return null
+
+    val yaml = org.yaml.snakeyaml.Yaml()
+    val configData = yaml.load<Map<String, Any>>(configFile.readText()) ?: return null
+    val go2rtc = configData["go2rtc"] as? Map<String, Any> ?: return null
+    val streams = go2rtc["streams"] as? Map<String, Any> ?: return null
+    val streamList = streams[slug] as? List<*> ?: return null
+    val streamUrl = streamList.firstOrNull()?.toString() ?: return null
+
+    // Strip trailing #tcp or #udp suffix
+    val rtspUrl = if (streamUrl.endsWith("#tcp") || streamUrl.endsWith("#udp")) {
+        streamUrl.substringBeforeLast("#")
+    } else streamUrl
+
+    // Parse rtsp://user:pass@ip:port/path
+    val afterScheme = rtspUrl.removePrefix("rtsp://")
+    val atIdx = afterScheme.lastIndexOf('@')
+    if (atIdx < 0) return null
+    val credentials = afterScheme.substring(0, atIdx)
+    val hostPart = afterScheme.substring(atIdx + 1).substringBefore("/")
+    val ip = hostPart.substringBefore(":")
+
+    // credentials may contain colons in password: split only on first ':'
+    val colonIdx = credentials.indexOf(':')
+    val username = if (colonIdx >= 0) credentials.substring(0, colonIdx) else credentials
+    val password = if (colonIdx >= 0) credentials.substring(colonIdx + 1) else null
+
+    // Read onvif_port from DB (default 80)
+    val onvifPort: Int = transaction {
+        vn.aiview.nvr.models.Cameras.selectAll()
+            .where { vn.aiview.nvr.models.Cameras.slug eq slug }
+            .firstOrNull()
+            ?.get(vn.aiview.nvr.models.Cameras.onvifPort) ?: 80
+    }
+
+    return CameraOnvifConfig(ip, onvifPort, username, password)
+}
+
 private suspend fun discoverOnvifDevices(): List<OnvifDevice> = withContext(Dispatchers.IO) {
+
     val devices = mutableListOf<OnvifDevice>()
     val messageId = "uuid:${UUID.randomUUID()}"
     val probeMsg = """

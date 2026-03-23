@@ -90,185 +90,101 @@ const Header = ({ activeTab, setActiveTab, currentTime }: {
 // ============================================
 
 const PtzControls = ({ cameraId }: { cameraId: string }) => {
-  console.log('PTZ Controls for camera:', PtzControls);
   const [hasPtz, setHasPtz] = useState(false);
+  const [hasPanTilt, setHasPanTilt] = useState(false);
+  const [hasZoom, setHasZoom] = useState(false);
+  const [isPtzOpen, setIsPtzOpen] = useState(false);
   const [isMoving, setIsMoving] = useState(false);
   const moveIntervalRef = useRef<number | null>(null);
 
   // Check if camera has PTZ on mount
   useEffect(() => {
-    fetch(`/api/camera/${cameraId}/ptz/capabilities`)
+    fetch(`/api/cameras/${cameraId}/ptz/capabilities`)
       .then(res => res.json())
-      .then(data => {
-        if (data.hasPtz) {
-          setHasPtz(true);
-        }
+      .then(data => { 
+          if (data.hasPtz) setHasPtz(true); 
+          if (data.hasPanTilt) setHasPanTilt(true);
+          if (data.hasZoom) setHasZoom(true);
       })
-      .catch(err => console.error('PTZ capability check failed:', err));
+      .catch(() => {});
   }, [cameraId]);
 
   const sendPtzCommand = (pan: number, tilt: number, zoom: number = 0) => {
-    fetch(`/api/camera/${cameraId}/ptz/move`, {
+    fetch(`/api/cameras/${cameraId}/ptz/move`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pan, tilt, zoom })
-    }).catch(err => console.error('PTZ move failed:', err));
+    }).catch(() => {});
   };
 
   const stopPtz = () => {
-    fetch(`/api/camera/${cameraId}/ptz/stop`, {
-      method: 'POST'
-    }).catch(err => console.error('PTZ stop failed:', err));
-
-    if (moveIntervalRef.current) {
-      clearInterval(moveIntervalRef.current);
-      moveIntervalRef.current = null;
-    }
+    fetch(`/api/cameras/${cameraId}/ptz/stop`, { method: 'POST' }).catch(() => {});
+    if (moveIntervalRef.current) { clearInterval(moveIntervalRef.current); moveIntervalRef.current = null; }
     setIsMoving(false);
   };
 
   const startContinuousMove = (pan: number, tilt: number, zoom: number = 0) => {
     setIsMoving(true);
-
-    // Send initial command
     sendPtzCommand(pan, tilt, zoom);
-
-    // Continue sending commands every 800ms for smooth continuous movement
-    moveIntervalRef.current = window.setInterval(() => {
-      sendPtzCommand(pan, tilt, zoom);
-    }, 800);
+    moveIntervalRef.current = window.setInterval(() => sendPtzCommand(pan, tilt, zoom), 800);
   };
 
+  // Don't render anything if camera has no PTZ
   if (!hasPtz) return null;
 
+  const btnBase = "w-8 h-8 bg-gray-700 hover:bg-gray-600 active:bg-gray-500 rounded text-white flex items-center justify-center transition-colors select-none";
+  const diagBase = `${btnBase} text-xs`;
+
   return (
-    <div className="bg-black/70 backdrop-blur-sm rounded-lg p-2 shadow-xl border border-gray-600" onClick={(e) => e.stopPropagation()}>
-      <div className="grid grid-cols-3 gap-1 mb-2">
-        {/* Up-Left */}
-        <button
-          onMouseDown={() => startContinuousMove(-0.5, 0.5)}
-          onMouseUp={stopPtz}
-          onMouseLeave={stopPtz}
-          className="w-8 h-8 bg-gray-700 hover:bg-gray-600 rounded text-white text-xs flex items-center justify-center transition-colors"
-          title="Pan left & tilt up"
-        >
-          ↖
-        </button>
+    <div onClick={(e) => e.stopPropagation()} className="relative">
+      {/* ── Toggle button: small icon, always visible ──────────────────── */}
+      <button
+        onClick={() => { setIsPtzOpen(o => !o); if (isMoving) stopPtz(); }}
+        className={`flex items-center justify-center w-8 h-8 rounded-full shadow-lg border transition-colors
+          ${isPtzOpen
+            ? 'bg-blue-600 border-blue-400 text-white'
+            : 'bg-black/70 border-gray-500 text-gray-200 hover:bg-black/90 hover:border-gray-300'
+          }`}
+        title="Điều khiển PTZ"
+      >
+        <Icon name="open_with" className="text-base" />
+      </button>
 
-        {/* Up */}
-        <button
-          onMouseDown={() => startContinuousMove(0, 0.5)}
-          onMouseUp={stopPtz}
-          onMouseLeave={stopPtz}
-          className="w-8 h-8 bg-gray-700 hover:bg-gray-600 rounded text-white flex items-center justify-center transition-colors"
-          title="Tilt up"
-        >
-          <Icon name="arrow_upward" className="text-sm" />
-        </button>
+      {/* ── D-pad panel: shown above the toggle button ─────────────────── */}
+      {isPtzOpen && (
+        <div className="absolute bottom-10 left-0 bg-black/80 backdrop-blur-sm rounded-lg p-2 shadow-2xl border border-gray-600 z-40">
+          {/* Direction grid 3×3 */}
+          {hasPanTilt && (
+          <div className="grid grid-cols-3 gap-1 mb-1.5">
+            <button onMouseDown={() => startContinuousMove(-0.5,  0.5)} onMouseUp={stopPtz} onMouseLeave={stopPtz} className={diagBase} title="↖">↖</button>
+            <button onMouseDown={() => startContinuousMove( 0,    0.5)} onMouseUp={stopPtz} onMouseLeave={stopPtz} className={btnBase}  title="Lên"><Icon name="arrow_upward"   className="text-sm" /></button>
+            <button onMouseDown={() => startContinuousMove( 0.5,  0.5)} onMouseUp={stopPtz} onMouseLeave={stopPtz} className={diagBase} title="↗">↗</button>
 
-        {/* Up-Right */}
-        <button
-          onMouseDown={() => startContinuousMove(0.5, 0.5)}
-          onMouseUp={stopPtz}
-          onMouseLeave={stopPtz}
-          className="w-8 h-8 bg-gray-700 hover:bg-gray-600 rounded text-white text-xs flex items-center justify-center transition-colors"
-          title="Pan right & tilt up"
-        >
-          ↗
-        </button>
+            <button onMouseDown={() => startContinuousMove(-0.5,  0  )} onMouseUp={stopPtz} onMouseLeave={stopPtz} className={btnBase}  title="Trái"><Icon name="arrow_back"     className="text-sm" /></button>
+            <button onClick={stopPtz} className="w-8 h-8 bg-red-600 hover:bg-red-500 rounded text-white flex items-center justify-center transition-colors" title="Dừng"><Icon name="stop" className="text-sm" /></button>
+            <button onMouseDown={() => startContinuousMove( 0.5,  0  )} onMouseUp={stopPtz} onMouseLeave={stopPtz} className={btnBase}  title="Phải"><Icon name="arrow_forward"  className="text-sm" /></button>
 
-        {/* Left */}
-        <button
-          onMouseDown={() => startContinuousMove(-0.5, 0)}
-          onMouseUp={stopPtz}
-          onMouseLeave={stopPtz}
-          className="w-8 h-8 bg-gray-700 hover:bg-gray-600 rounded text-white flex items-center justify-center transition-colors"
-          title="Pan left"
-        >
-          <Icon name="arrow_back" className="text-sm" />
-        </button>
+            <button onMouseDown={() => startContinuousMove(-0.5, -0.5)} onMouseUp={stopPtz} onMouseLeave={stopPtz} className={diagBase} title="↙">↙</button>
+            <button onMouseDown={() => startContinuousMove( 0,   -0.5)} onMouseUp={stopPtz} onMouseLeave={stopPtz} className={btnBase}  title="Xuống"><Icon name="arrow_downward" className="text-sm" /></button>
+            <button onMouseDown={() => startContinuousMove( 0.5, -0.5)} onMouseUp={stopPtz} onMouseLeave={stopPtz} className={diagBase} title="↘">↘</button>
+          </div>
+          )}
 
-        {/* Center (Home/Stop) */}
-        <button
-          onClick={stopPtz}
-          className="w-8 h-8 bg-red-600 hover:bg-red-500 rounded text-white flex items-center justify-center transition-colors"
-          title="Stop"
-        >
-          <Icon name="stop" className="text-sm" />
-        </button>
+          {/* Zoom row */}
+          {hasZoom && (
+          <div className="flex gap-1">
+            <button onMouseDown={() => startContinuousMove(0, 0,  0.3)} onMouseUp={stopPtz} onMouseLeave={stopPtz}
+              className="flex-1 h-6 bg-gray-700 hover:bg-gray-600 rounded text-white text-xs flex items-center justify-center gap-0.5 transition-colors">
+              <Icon name="add" className="text-xs" />Zoom
+            </button>
+            <button onMouseDown={() => startContinuousMove(0, 0, -0.3)} onMouseUp={stopPtz} onMouseLeave={stopPtz}
+              className="flex-1 h-6 bg-gray-700 hover:bg-gray-600 rounded text-white text-xs flex items-center justify-center gap-0.5 transition-colors">
+              <Icon name="remove" className="text-xs" />Zoom
+            </button>
+          </div>
+          )}
 
-        {/* Right */}
-        <button
-          onMouseDown={() => startContinuousMove(0.5, 0)}
-          onMouseUp={stopPtz}
-          onMouseLeave={stopPtz}
-          className="w-8 h-8 bg-gray-700 hover:bg-gray-600 rounded text-white flex items-center justify-center transition-colors"
-          title="Pan right"
-        >
-          <Icon name="arrow_forward" className="text-sm" />
-        </button>
-
-        {/* Down-Left */}
-        <button
-          onMouseDown={() => startContinuousMove(-0.5, -0.5)}
-          onMouseUp={stopPtz}
-          onMouseLeave={stopPtz}
-          className="w-8 h-8 bg-gray-700 hover:bg-gray-600 rounded text-white text-xs flex items-center justify-center transition-colors"
-          title="Pan left & tilt down"
-        >
-          ↙
-        </button>
-
-        {/* Down */}
-        <button
-          onMouseDown={() => startContinuousMove(0, -0.5)}
-          onMouseUp={stopPtz}
-          onMouseLeave={stopPtz}
-          className="w-8 h-8 bg-gray-700 hover:bg-gray-600 rounded text-white flex items-center justify-center transition-colors"
-          title="Tilt down"
-        >
-          <Icon name="arrow_downward" className="text-sm" />
-        </button>
-
-        {/* Down-Right */}
-        <button
-          onMouseDown={() => startContinuousMove(0.5, -0.5)}
-          onMouseUp={stopPtz}
-          onMouseLeave={stopPtz}
-          className="w-8 h-8 bg-gray-700 hover:bg-gray-600 rounded text-white text-xs flex items-center justify-center transition-colors"
-          title="Pan right & tilt down"
-        >
-          ↘
-        </button>
-      </div>
-
-      {/* Zoom Controls */}
-      <div className="flex gap-1">
-        <button
-          onMouseDown={() => startContinuousMove(0, 0, 0.3)}
-          onMouseUp={stopPtz}
-          onMouseLeave={stopPtz}
-          className="flex-1 h-6 bg-gray-700 hover:bg-gray-600 rounded text-white text-xs flex items-center justify-center transition-colors gap-1"
-          title="Zoom in"
-        >
-          <Icon name="add" className="text-xs" />
-          Zoom
-        </button>
-        <button
-          onMouseDown={() => startContinuousMove(0, 0, -0.3)}
-          onMouseUp={stopPtz}
-          onMouseLeave={stopPtz}
-          className="flex-1 h-6 bg-gray-700 hover:bg-gray-600 rounded text-white text-xs flex items-center justify-center transition-colors gap-1"
-          title="Zoom out"
-        >
-          <Icon name="remove" className="text-xs" />
-          Zoom
-        </button>
-      </div>
-
-      {isMoving && (
-        <div className="mt-1 text-center text-xs text-green-400">
-          Moving...
+          {isMoving && <div className="mt-1 text-center text-[10px] text-green-400">Đang di chuyển…</div>}
         </div>
       )}
     </div>
@@ -356,6 +272,13 @@ const CameraGridItem = ({
           <Icon name="close" className="text-sm" />
         </button>
       </div>
+
+      {/* PTZ Controls - bottom left, self-hides if camera has no PTZ */}
+      {cam.isOnline && (
+        <div className="absolute bottom-2 left-2 z-30" onClick={(e) => e.stopPropagation()}>
+          <PtzControls cameraId={cam.id} />
+        </div>
+      )}
 
     </>
   );
@@ -2949,7 +2872,7 @@ function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
       const rtspUrl = `rtsp://${formData.username}:${formData.password}@${formData.ip}:${finalRtspPort}${normalizedPath}`;
 
       // We wrap this in a promise because onAdd (handleAddCamera) might be async but typed loosely here
-      await Promise.resolve(onAdd({ name: finalName, rtspUrl: rtspUrl, record: true }));
+      await Promise.resolve(onAdd({ name: finalName, rtspUrl: rtspUrl, record: true, onvifPort: parseInt(formData.port) || 80 }));
 
       // If successful (no error thrown), close modal
       onClose();
