@@ -202,8 +202,8 @@ $authHeader
             val hasPtzNodeWithToken = Regex("""<[^>:]*:?PTZNode[^>]+token\s*=\s*["'][^"']+["']""", RegexOption.IGNORE_CASE)
                 .containsMatchIn(nodesRes)
 
-            val hasPanTilt = nodesRes.contains("ContinuousPanTiltVelocitySpace", ignoreCase = true)
-            val hasZoom = nodesRes.contains("ContinuousZoomVelocitySpace", ignoreCase = true)
+            val hasPanTilt = nodesRes.contains("PanTilt", ignoreCase = true)
+            val hasZoom = nodesRes.contains("Zoom", ignoreCase = true)
 
             if (hasPtzNodeWithToken && (hasPanTilt || hasZoom)) {
                 mapOf("hasPtz" to true, "hasPanTilt" to hasPanTilt, "hasZoom" to hasZoom)
