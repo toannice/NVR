@@ -113,7 +113,6 @@ const PtzControls = ({ cameraId, ptzEnabled }: { cameraId: string; ptzEnabled: b
   const startContinuousMove = (pan: number, tilt: number, zoom: number = 0) => {
     setIsMoving(true);
     sendPtzCommand(pan, tilt, zoom);
-    moveIntervalRef.current = window.setInterval(() => sendPtzCommand(pan, tilt, zoom), 800);
   };
 
 

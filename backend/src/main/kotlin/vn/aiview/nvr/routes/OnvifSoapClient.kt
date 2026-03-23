@@ -224,13 +224,17 @@ $authHeader
         pan: Double, tilt: Double, zoom: Double
     ) {
         val authHeader = getOnvifAuthHeader(username, password)
+        val panTiltNode = if (pan != 0.0 || tilt != 0.0) """<tt:PanTilt x="$pan" y="$tilt" space="http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace"/>""" else ""
+        val zoomNode = if (zoom != 0.0) """<tt:Zoom x="$zoom" space="http://www.onvif.org/ver10/tptz/ZoomSpaces/VelocityGenericSpace"/>""" else ""
+        
         val body = """
             <tptz:ContinuousMove>
                 <tptz:ProfileToken>$profileToken</tptz:ProfileToken>
                 <tptz:Velocity>
-                    <tt:PanTilt x="$pan" y="$tilt" space="http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace"/>
-                    <tt:Zoom x="$zoom" space="http://www.onvif.org/ver10/tptz/ZoomSpaces/VelocityGenericSpace"/>
+                    $panTiltNode
+                    $zoomNode
                 </tptz:Velocity>
+                <tptz:Timeout>PT10S</tptz:Timeout>
             </tptz:ContinuousMove>
         """.trimIndent()
         sendSoapPost(ptzUrl, buildSoapRequest(authHeader, body))
