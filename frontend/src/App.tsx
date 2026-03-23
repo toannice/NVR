@@ -2022,7 +2022,7 @@ const RecordingScheduleSection = ({ cameras, addToast }: any) => {
   );
 };
 
-const SetupView = ({ setupTab, setSetupTab, cameras, handleDeleteCamera, handleAddCamera, setupStatus, fetchCameras, addToast, setMiniPlayerCamId }: any) => {
+const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDeleteCamera, handleAddCamera, setupStatus, fetchCameras, addToast, setMiniPlayerCamId }: any) => {
   const [showOnvifModal, setShowOnvifModal] = useState(false);
   const [showManualModal, setShowManualModal] = useState(false);
   const [showCredentialsModal, setShowCredentialsModal] = useState(false);
@@ -3387,7 +3387,8 @@ function App() {
           fps: statusMap[c.id]?.fps ?? 0,
           ip: c.ip, // ONVIF metadata
           manufacturer: c.manufacturer, // ONVIF metadata
-          model: c.model // ONVIF metadata
+          model: c.model, // ONVIF metadata
+          ptzEnabled: c.ptzEnabled // Manually toggled PTZ flag
         }));
         setCameras(list);
         setVisibleCamIds(list.map((c: any) => c.id));
@@ -3654,6 +3655,7 @@ function App() {
             fetchCameras={fetchCameras}
             addToast={addToast}
             setActiveTab={setActiveTab}
+            setCameras={setCameras}
             visibleCamIds={visibleCamIds}
             toggleCamera={toggleCamera}
             setMiniPlayerCamId={setMiniPlayerCamId}
