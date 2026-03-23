@@ -2,10 +2,15 @@ package vn.aiview.watchdog.modules
 
 import org.jetbrains.exposed.dao.id.LongIdTable
 import org.jetbrains.exposed.sql.*
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.less
 import org.jetbrains.exposed.sql.transactions.transaction
-import org.jetbrains.exposed.sql.javatime.datetime
+import org.jetbrains.exposed.sql.javatime.*
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.greaterEq
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.lessEq
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.less
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.slf4j.LoggerFactory
-import vn.aiview.watchdog.config.WatchdogConfig
+import vn.aiview.watchdog.model.WatchdogConfig
 import java.io.File
 import java.time.LocalDateTime
 import java.time.ZoneOffset
@@ -99,7 +104,7 @@ class EventLogger(private val config: WatchdogConfig) {
         val since = LocalDateTime.now().minusHours(sinceHours)
         return try {
             transaction {
-                Events.select { Events.timestamp greaterEq since }
+                Events.selectAll().where { Events.timestamp greaterEq since }
                     .orderBy(Events.timestamp, SortOrder.ASC)
                     .map {
                         WatchdogEvent(
@@ -139,7 +144,8 @@ class EventLogger(private val config: WatchdogConfig) {
     }
 
     fun pruneOldLogs() {
-        val cutoff = LocalDateTime.now().minusDays(config.log.keep_days.toLong())
+        val keepDays = config.log.keep_days.toLong()
+        val cutoff = LocalDateTime.now().minusDays(keepDays)
         try {
             transaction {
                 Events.deleteWhere { Events.timestamp less cutoff }

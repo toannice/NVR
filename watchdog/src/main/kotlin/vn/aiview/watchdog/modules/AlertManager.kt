@@ -3,7 +3,7 @@ package vn.aiview.watchdog.modules
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import org.slf4j.LoggerFactory
-import vn.aiview.watchdog.config.WatchdogConfig
+import vn.aiview.watchdog.model.WatchdogConfig
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL

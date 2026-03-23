@@ -3,8 +3,8 @@ package vn.aiview.watchdog
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import org.slf4j.LoggerFactory
-import vn.aiview.watchdog.config.WatchdogConfig
-import vn.aiview.watchdog.config.loadConfig
+import vn.aiview.watchdog.model.WatchdogConfig
+import vn.aiview.watchdog.model.loadConfig
 import vn.aiview.watchdog.modules.*
 import java.time.Instant
 

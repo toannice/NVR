@@ -2,7 +2,7 @@ package vn.aiview.watchdog.modules
 
 import kotlinx.coroutines.delay
 import org.slf4j.LoggerFactory
-import vn.aiview.watchdog.config.WatchdogConfig
+import vn.aiview.watchdog.model.WatchdogConfig
 import java.io.File
 import java.time.ZonedDateTime
 import java.time.ZoneId
