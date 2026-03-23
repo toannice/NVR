@@ -48,6 +48,7 @@ services:
         condition: service_healthy
     environment:
       - FRIGATE_HOST_IP=${FRIGATE_HOST_IP}
+      - TZ=${TZ:-Asia/Ho_Chi_Minh}
     healthcheck:
       test: [ "CMD-SHELL", "curl -f http://localhost:5000/api/version || exit 1" ]
       interval: 30s
