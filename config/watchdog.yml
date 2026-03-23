@@ -1,0 +1,60 @@
+# ─── NVR Watchdog Configuration ───────────────────────────────────────────────
+# File YAML thuần - không chứa code, không chứa câu lệnh
+# Chỉnh sửa file này rồi restart container nvr-watchdog là áp dụng ngay.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Container cần giám sát
+containers:
+  - name: "nvr-wrapper"
+    image: "ghcr.io/toannice/nvr:latest"
+    health_endpoint: "http://localhost:3000/api/health"
+    managed: true          # UpdateManager sẽ OTA container này
+  - name: "frigate"
+    image: "ghcr.io/blakeblackshear/frigate:0.16.3"
+    health_endpoint: "http://localhost:5000/api/version"
+    managed: false         # Frigate chốt cứng version - KHÔNG OTA
+  - name: "mosquitto"
+    image: "eclipse-mosquitto:2"
+    health_endpoint: ""    # Không có HTTP endpoint
+    managed: false
+  - name: "nvr-nginx"
+    image: "nginx:stable-alpine"
+    health_endpoint: ""
+    managed: false
+
+# Ngưỡng cảnh báo phần cứng
+thresholds:
+  cpu_percent: 95          # CPU > 95% tính là ngưỡng
+  ram_percent: 90          # RAM > 90%
+  disk_percent: 95         # Disk > 95%
+  temp_celsius: 85         # Nhiệt độ CPU > 85°C
+  consecutive_failures: 2  # Phải vi phạm ngưỡng 2 lần liên tiếp mới tính là thật
+
+# Lịch báo cáo hằng ngày
+schedule:
+  report_hour: 9           # Gửi lúc 9h sáng
+  report_minute: 0
+  timezone: "Asia/Ho_Chi_Minh"
+
+# Cấu hình OTA (UpdateManager)
+update:
+  check_interval_minutes: 60     # Kiểm tra image mới mỗi 60 phút
+  enable_rollback: true          # Tự rollback nếu bản mới lỗi
+  max_rollback_attempts: 2       # Tối đa 2 lần rollback
+  health_wait_seconds: 120       # Chờ tối đa 120s để verify health sau update
+
+# SelfHealingEngine
+self_healing:
+  max_restarts_per_hour: 3       # Không restart quá 3 lần/giờ
+  disk_cleanup_trigger_percent: 88   # Bắt đầu dọn khi disk > 88%
+  disk_cleanup_target_percent: 83    # Dọn cho đến khi xuống dưới 83%
+
+# Telegram Bot
+telegram:
+  bot_token: "${TELEGRAM_BOT_TOKEN}"   # Lấy từ file .env của dự án
+  chat_id: "${TELEGRAM_CHAT_ID}"
+
+# Logging
+log:
+  level: "INFO"          # DEBUG | INFO | WARN | ERROR
+  keep_days: 90          # Giữ log tối đa 90 ngày
