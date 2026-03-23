@@ -6,7 +6,7 @@
 # Container cần giám sát
 containers:
   - name: "nvr-wrapper"
-    image: "ghcr.io/toannice/nvr:latest"
+    image: "ghcr.io/toannice/nvr:staging"
     health_endpoint: "http://localhost:3000/api/health"
     managed: true          # UpdateManager sẽ OTA container này
   - name: "frigate"

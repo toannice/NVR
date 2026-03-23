@@ -12,9 +12,11 @@ dist
 dist-ssr
 *.local
 
-config/
-data/nvr.db
-docker-compose.yml
+# Configuration (Essential templates should be committed, state should not)
+config/*.db*
+config/.jwt_secret
+config/model_cache/
+config/backup.db
 docker-compose.override.yml
 *.py
 data/nvr.db-shm

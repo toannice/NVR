@@ -63,6 +63,14 @@ class DockerApi {
         } catch (e: Exception) { null }
     }
 
+    // Get a specific label from an image
+    fun getImageLabel(image: String, label: String): String? {
+        return try {
+            val format = "{{index .Config.Labels \"$label\"}}"
+            exec("docker", "inspect", "--format=$format", image).trim().takeIf { it.isNotBlank() && it != "<no value>" }
+        } catch (e: Exception) { null }
+    }
+
     // Stop a container
     fun stopContainer(name: String) { exec("docker", "stop", name) }
 

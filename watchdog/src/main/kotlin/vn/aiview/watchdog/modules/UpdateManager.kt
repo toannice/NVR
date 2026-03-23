@@ -68,10 +68,14 @@ class UpdateManager(
 
         if (healthy) {
             saveVersionState(containerName, newImageId)
+            
+            // Try to get Version/Git SHA from labels
+            val revision = docker.getImageLabel(image, "org.opencontainers.image.revision")?.take(7) ?: "unknown"
+            
             docker.removeImage(currentImageId)
-            db.log(EventType.UPDATE_SUCCESS, "Updated $containerName to $newImageId", severity = Severity.INFO)
+            db.log(EventType.UPDATE_SUCCESS, "Updated $containerName to $newImageId ($revision)", severity = Severity.INFO)
             alertManager.sendAlert(AlertEvent(AlertType.UPDATE_SUCCESS,
-                "✅ <b>$containerName</b> đã cập nhật thành công!\n📦 Image: <code>$newImageId</code>"))
+                "✅ <b>$containerName</b> đã cập nhật thành công!\n📦 Version: <code>$revision</code>"))
         } else {
             log.error("Health check failed after update — initiating rollback")
             db.log(EventType.UPDATE_FAILED, "Update failed for $containerName — rolling back", severity = Severity.ERROR)
