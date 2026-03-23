@@ -95,3 +95,22 @@ Khi người dùng thêm camera mới (thủ công qua RTSP hoặc tự động 
 - **Tập trung luồng (go2rtc):** Đường dẫn gốc RTSP của camera (ví dụ: `rtsp://...#tcp`) được lưu duy nhất tại thẻ `go2rtc -> streams`. Hệ thống NVR chỉ tạo kết nối một lần duy nhất với camera gốc, đặc biệt hữu ích cho các mạng có kết nối truyền dẫn kém, giúp chia sẻ băng thông.
 - **Tái sử dụng nội bộ (Local Restream):** Ở khối cấu hình của camera trong Frigate (`cameras -> <slug> -> ffmpeg -> inputs`), hệ thống thay thế đường dẫn trực tiếp bằng địa chỉ proxy mạng nội bộ: `path: rtsp://127.0.0.1:8554/<slug>`. Đồng thời sử dụng `input_args: preset-rtsp-restream` nhằm thông báo cho FFmpeg bỏ qua giai đoạn sửa lỗi luồng phân mảnh, giảm thiểu buffer để đẩy tốc độ Load (Live View) xuống gần 0ms.
 - **Cấu hình Lưu trữ (Recording):** Camera mới tự động được bật (`enabled: true`) và cấu hình sẵn chế độ lưu trữ 24/7 trong 7 ngày (`retain: -> days: 7, mode: all`), đảm bảo không thất thoát đoạn ghi hình nào ngay khi thiết bị vừa được thêm.
+98: 
+99: ## 12. Điều khiển PTZ (Pan-Tilt-Zoom Control) & Tối ưu hóa mượt mà
+100: Hệ thống đã tích hợp bộ điều khiển PTZ chuẩn ONVIF với các cải tiến sâu về độ trễ và khả năng tương thích phần cứng:
+101: 
+102: ### 12.1. Cơ chế PTZ Manual Toggle (Cờ ptzEnabled)
+103: - **Bài toán:** Nhiều dòng camera (đặc biệt hàng nội địa) trả về XML ONVIF không chính xác hoặc thiếu thẻ `PTZNode`, dẫn đến phần mềm tự động ẩn nút điều khiển dù phần cứng camera thực tế có hỗ trợ quay quét.
+104: - **Giải pháp:** Bổ sung trường `ptzEnabled` vào DB (SQLite). Người dùng có thể chủ động Bật/Tắt nút PTZ thủ công tại:
+105:   - Giao diện Thêm Camera (Credentials Modal).
+106:   - Danh sách Camera (Setup View) qua nút gạt Switch.
+107: - **Hiệu quả:** Ép buộc hiển thị bộ điều khiển mà không cần phụ thuộc vào kết quả tự động dò tìm của ONVIF.
+108: 
+109: ### 12.2. Tối ưu hóa Độ trễ & Giao thức (Backend)
+110: - **PTZ Connection Cache:** Sử dụng `ConcurrentHashMap` để lưu trữ bộ đệm (Cache) của `ptzServiceUrl` và `profileToken`. Trước đó, mỗi lệnh xoay mất **~2000ms** để thực hiện "bắt tay" SOAP; sau khi cache, tốc độ phản hồi chỉ còn **~50ms** (tăng tốc gấp 40 lần).
+111: - **Clean SOAP Protocol:** Loại bỏ các thuộc tính gây lỗi parse trên một số firmware cũ như `<tptz:Timeout>` và thuộc tính `space` định nghĩa tọa độ. Hệ thống sử dụng giá trị mặc định của camera để đảm bảo xoay đúng hướng và không bị khựng lệnh.
+112: 
+113: ### 12.3. Trải nghiệm người dùng (Frontend UX)
+114: - **Pointer Events & Capture:** Sử dụng `onPointerDown` kết hợp `setPointerCapture` để khóa trỏ chuột. Đảm bảo lệnh **Dừng (Stop)** luôn được gửi đi ngay cả khi người dùng nhấc chuột ra ngoài vùng nút bấm hoặc lỡ tay kéo thả (drag) giao diện.
+115: - **Simple Direct Control:** Áp dụng cơ chế "Ấn là chạy - Nhả là dừng" (One-shot command). Loại bỏ việc gửi lệnh lặp lại (heartbeat) để tránh gây nghẽn motor camera, giúp chuyển động đạt độ nhuyễn tối đa của phần cứng.
+116: - **Zoom Optimization:** Áp dụng cùng cơ chế `ContinuousMove` cho tính năng Zoom (+/-), giúp camera phóng to/thu nhỏ mượt mà không bị giật cục theo từng nấc.

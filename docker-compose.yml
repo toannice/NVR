@@ -48,6 +48,7 @@ services:
         condition: service_healthy
     environment:
       - FRIGATE_HOST_IP=${FRIGATE_HOST_IP}
+      - TZ=${TZ:-Asia/Ho_Chi_Minh}
     healthcheck:
       test: [ "CMD-SHELL", "curl -f http://localhost:5000/api/version || exit 1" ]
       interval: 30s
@@ -58,8 +59,8 @@ services:
   # ─── NVR Wrapper (Our App) ─────────────────────────────────
   nvr-wrapper:
     container_name: nvr-wrapper
-    image: ghcr.io/toannice/nvr:latest # Sử dụng bản build từ GitHub CI/CD
-    #build: .
+    #image: ghcr.io/toannice/nvr:latest # Sử dụng bản build từ GitHub CI/CD
+    build: .
     restart: unless-stopped
     network_mode: "host" # Required for ONVIF multicast (WS-Discovery) to work
     # ports:
@@ -112,8 +113,8 @@ services:
   # with rollback support. Runs independently — restart: always.
   nvr-watchdog:
     container_name: nvr-watchdog
-    image: ghcr.io/toannice/nvr-watchdog:latest
-    #build: ./watchdog
+    #image: ghcr.io/toannice/nvr-watchdog:latest
+    build: ./watchdog
     restart: always             # Always restarts — must survive crashes
     hostname: ${HOSTNAME:-nvr-edge-node}
     networks:

@@ -10,6 +10,7 @@ import java.text.SimpleDateFormat
 import java.util.Base64
 import java.util.Date
 import java.util.TimeZone
+import java.util.concurrent.ConcurrentHashMap
 
 data class OnvifDeviceInfo(
     val manufacturer: String,
@@ -18,6 +19,7 @@ data class OnvifDeviceInfo(
 )
 
 object OnvifSoapClient {
+    private val ptzCache = ConcurrentHashMap<String, Pair<String, String>>()
 
     private fun getOnvifAuthHeader(username: String, password: String?): String {
         if (password.isNullOrEmpty()) {
@@ -145,6 +147,13 @@ $authHeader
 
     // ── NEW: PTZ helpers ──────────────────────────────────────────────────────
 
+    suspend fun getPtzServiceUrlAndTokenCached(ip: String, port: Int, username: String, password: String?): Pair<String, String> {
+        val cacheKey = "$ip:$port:$username"
+        return ptzCache.getOrPut(cacheKey) {
+            getPtzServiceUrlAndToken(ip, port, username, password)
+        }
+    }
+
     /**
      * Returns (ptzServiceUrl, profileToken) needed to send PTZ commands.
      */
@@ -215,17 +224,15 @@ $authHeader
         }
     }
 
-    /**
-     * Sends ContinuousMove. pan/tilt/zoom in range -1.0 to 1.0.
-     */
     suspend fun continuousMove(
         ptzUrl: String, profileToken: String,
         username: String, password: String?,
         pan: Double, tilt: Double, zoom: Double
     ) {
         val authHeader = getOnvifAuthHeader(username, password)
-        val panTiltNode = if (pan != 0.0 || tilt != 0.0) """<tt:PanTilt x="$pan" y="$tilt" space="http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace"/>""" else ""
-        val zoomNode = if (zoom != 0.0) """<tt:Zoom x="$zoom" space="http://www.onvif.org/ver10/tptz/ZoomSpaces/VelocityGenericSpace"/>""" else ""
+        // Omit `space` entirely! Let the camera use its default Velocity space.
+        val panTiltNode = if (pan != 0.0 || tilt != 0.0) """<tt:PanTilt x="$pan" y="$tilt"/>""" else ""
+        val zoomNode = if (zoom != 0.0) """<tt:Zoom x="$zoom"/>""" else ""
         
         val body = """
             <tptz:ContinuousMove>
@@ -234,7 +241,6 @@ $authHeader
                     $panTiltNode
                     $zoomNode
                 </tptz:Velocity>
-                <tptz:Timeout>PT10S</tptz:Timeout>
             </tptz:ContinuousMove>
         """.trimIndent()
         sendSoapPost(ptzUrl, buildSoapRequest(authHeader, body))

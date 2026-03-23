@@ -241,7 +241,7 @@ fun Route.onvifRouting() {
             val tilt = json["tilt"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0
             val zoom = json["zoom"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0
 
-            val (ptzUrl, profileToken) = OnvifSoapClient.getPtzServiceUrlAndToken(ip, onvifPort, username, password)
+            val (ptzUrl, profileToken) = OnvifSoapClient.getPtzServiceUrlAndTokenCached(ip, onvifPort, username, password)
             OnvifSoapClient.continuousMove(ptzUrl, profileToken, username, password, pan, tilt, zoom)
             call.respond(mapOf("success" to true))
         } catch (e: Exception) {
@@ -256,7 +256,7 @@ fun Route.onvifRouting() {
             val (ip, onvifPort, username, password) = getCameraOnvifConfig(id)
                 ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to "Camera not found"))
 
-            val (ptzUrl, profileToken) = OnvifSoapClient.getPtzServiceUrlAndToken(ip, onvifPort, username, password)
+            val (ptzUrl, profileToken) = OnvifSoapClient.getPtzServiceUrlAndTokenCached(ip, onvifPort, username, password)
             OnvifSoapClient.stopMove(ptzUrl, profileToken, username, password)
             call.respond(mapOf("success" to true))
         } catch (e: Exception) {

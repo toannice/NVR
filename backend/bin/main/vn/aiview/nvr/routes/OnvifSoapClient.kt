@@ -10,6 +10,7 @@ import java.text.SimpleDateFormat
 import java.util.Base64
 import java.util.Date
 import java.util.TimeZone
+import java.util.concurrent.ConcurrentHashMap
 
 data class OnvifDeviceInfo(
     val manufacturer: String,
@@ -18,6 +19,7 @@ data class OnvifDeviceInfo(
 )
 
 object OnvifSoapClient {
+    private val ptzCache = ConcurrentHashMap<String, Pair<String, String>>()
 
     private fun getOnvifAuthHeader(username: String, password: String?): String {
         if (password.isNullOrEmpty()) {
@@ -53,7 +55,11 @@ object OnvifSoapClient {
 
     private fun buildSoapRequest(authHeader: String, body: String): String {
         return """<?xml version="1.0" encoding="utf-8"?>
-<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:tds="http://www.onvif.org/ver10/device/wsdl" xmlns:trt="http://www.onvif.org/ver10/media/wsdl" xmlns:tt="http://www.onvif.org/ver10/schema">
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
+            xmlns:tds="http://www.onvif.org/ver10/device/wsdl"
+            xmlns:trt="http://www.onvif.org/ver10/media/wsdl"
+            xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl"
+            xmlns:tt="http://www.onvif.org/ver10/schema">
 $authHeader
 <s:Body>$body</s:Body>
 </s:Envelope>""".trimIndent()
@@ -80,7 +86,6 @@ $authHeader
     }
 
     private fun extractValue(xml: String, tag: String): String? {
-        // Regex to extract value inside XML tags ignoring namespaces e.g. <tt:Manufacturer>Value</tt:Manufacturer>
         val regex = Regex("<(?:[a-zA-Z0-9]+:)?$tag>(.*?)</(?:[a-zA-Z0-9]+:)?$tag>")
         return regex.find(xml)?.groupValues?.get(1)?.trim()
     }
@@ -89,6 +94,8 @@ $authHeader
         val regex = Regex("<(?:[a-zA-Z0-9]+:)?$tag[^>]*$attr=\"([^\"]+)\"")
         return regex.find(xml)?.groupValues?.get(1)?.trim()
     }
+
+    // ── Existing: Device info + stream URI ────────────────────────────────────
 
     suspend fun getDeviceInfoAndStream(ip: String, port: Int = 80, username: String, password: String?): OnvifDeviceInfo {
         val baseUrl = "http://$ip:$port/onvif/device_service"
@@ -110,15 +117,11 @@ $authHeader
         val getCapReq = buildSoapRequest(authHeader, "<tds:GetCapabilities><tds:Category>Media</tds:Category></tds:GetCapabilities>")
         val capRes = sendSoapPost(baseUrl, getCapReq)
         val rawMediaUrl = extractValue(capRes, "XAddr") ?: throw Exception("Media service not found on device")
-        
-        // Ensure local IP is used if XAddr returns weird internal IPs
         val mediaUrl = rawMediaUrl.replace(Regex("http://[0-9\\.]+(:[0-9]+)?"), "http://$ip:$port")
 
         // 3. Get Profiles
         val getProfilesReq = buildSoapRequest(authHeader, "<trt:GetProfiles/>")
         val profilesRes = sendSoapPost(mediaUrl, getProfilesReq)
-        
-        // Find the first Profile token
         val firstProfileToken = extractAttribute(profilesRes, "Profiles", "token") ?: throw Exception("No media profiles found")
 
         // 4. Get Stream URI
@@ -131,15 +134,133 @@ $authHeader
                 <trt:ProfileToken>$firstProfileToken</trt:ProfileToken>
             </trt:GetStreamUri>
         """.trimIndent())
-        
+
         val streamUriRes = sendSoapPost(mediaUrl, getStreamUriReq)
         var streamUri = extractValue(streamUriRes, "Uri") ?: throw Exception("Could not retrieve Stream URI")
 
-        // Make sure it contains credentials
         if (password != null && !streamUri.contains("@")) {
             streamUri = streamUri.replace("rtsp://", "rtsp://$username:$password@")
         }
 
         return OnvifDeviceInfo(manufacturer, model, streamUri)
+    }
+
+    // ── NEW: PTZ helpers ──────────────────────────────────────────────────────
+
+    suspend fun getPtzServiceUrlAndTokenCached(ip: String, port: Int, username: String, password: String?): Pair<String, String> {
+        val cacheKey = "$ip:$port:$username"
+        return ptzCache.getOrPut(cacheKey) {
+            getPtzServiceUrlAndToken(ip, port, username, password)
+        }
+    }
+
+    /**
+     * Returns (ptzServiceUrl, profileToken) needed to send PTZ commands.
+     */
+    suspend fun getPtzServiceUrlAndToken(ip: String, port: Int, username: String, password: String?): Pair<String, String> {
+        val baseUrl = "http://$ip:$port/onvif/device_service"
+        val authHeader = getOnvifAuthHeader(username, password)
+
+        // PTZ service URL
+        val capReq = buildSoapRequest(authHeader, "<tds:GetCapabilities><tds:Category>PTZ</tds:Category></tds:GetCapabilities>")
+        val capRes = sendSoapPost(baseUrl, capReq)
+        val rawPtzUrl = extractValue(capRes, "XAddr") ?: throw Exception("PTZ service not found on this device")
+        val ptzUrl = rawPtzUrl.replace(Regex("http://[0-9\\.]+(:[0-9]+)?"), "http://$ip:$port")
+
+        // Profile token (from Media service)
+        val authHeader2 = getOnvifAuthHeader(username, password)
+        val mediaCapReq = buildSoapRequest(authHeader2, "<tds:GetCapabilities><tds:Category>Media</tds:Category></tds:GetCapabilities>")
+        val mediaCapRes = sendSoapPost(baseUrl, mediaCapReq)
+        val rawMediaUrl = extractValue(mediaCapRes, "XAddr") ?: throw Exception("Media service not found on device")
+        val mediaUrl = rawMediaUrl.replace(Regex("http://[0-9\\.]+(:[0-9]+)?"), "http://$ip:$port")
+
+        val authHeader3 = getOnvifAuthHeader(username, password)
+        val profilesReq = buildSoapRequest(authHeader3, "<trt:GetProfiles/>")
+        val profilesRes = sendSoapPost(mediaUrl, profilesReq)
+        val profileToken = extractAttribute(profilesRes, "Profiles", "token") ?: throw Exception("No media profiles found")
+
+        return Pair(ptzUrl, profileToken)
+    }
+
+    /**
+     * Returns true if the device advertises a PTZ service AND has at least one real PTZ node
+     * (i.e. a <PTZNode token="..."> element with content, not just an empty service stub).
+     * Returns a map with hasPtz, hasPanTilt, and hasZoom boolean flags.
+     */
+    suspend fun checkPtzCapability(ip: String, port: Int, username: String, password: String?): Map<String, Boolean> {
+        val defaultRet = mapOf("hasPtz" to false, "hasPanTilt" to false, "hasZoom" to false)
+        return try {
+            val baseUrl = "http://$ip:$port/onvif/device_service"
+            val authHeader = getOnvifAuthHeader(username, password)
+
+            // Step 1: check GetCapabilities PTZ XAddr
+            val capReq = buildSoapRequest(authHeader, "<tds:GetCapabilities><tds:Category>PTZ</tds:Category></tds:GetCapabilities>")
+            val capRes = sendSoapPost(baseUrl, capReq)
+            val ptzXAddr = extractValue(capRes, "XAddr")
+            if (ptzXAddr.isNullOrBlank()) return defaultRet
+
+            val ptzUrl = ptzXAddr.replace(Regex("http://[0-9\\.]+(:[0-9]+)?"), "http://$ip:$port")
+
+            // Step 2: call GetNodes and check for actual PTZNode elements with a token attribute
+            val authHeader2 = getOnvifAuthHeader(username, password)
+            val nodesReq = buildSoapRequest(authHeader2, "<tptz:GetNodes/>")
+            val nodesRes = sendSoapPost(ptzUrl, nodesReq)
+
+            // A real PTZ node always has a token attribute: <tptz:PTZNode token="...">
+            // Check for the pattern to avoid matching namespace declarations or empty responses
+            val hasPtzNodeWithToken = Regex("""<[^>:]*:?PTZNode[^>]+token\s*=\s*["'][^"']+["']""", RegexOption.IGNORE_CASE)
+                .containsMatchIn(nodesRes)
+
+            val hasPanTilt = nodesRes.contains("PanTilt", ignoreCase = true)
+            val hasZoom = nodesRes.contains("Zoom", ignoreCase = true)
+
+            if (hasPtzNodeWithToken && (hasPanTilt || hasZoom)) {
+                mapOf("hasPtz" to true, "hasPanTilt" to hasPanTilt, "hasZoom" to hasZoom)
+            } else {
+                defaultRet
+            }
+        } catch (e: Exception) {
+            defaultRet
+        }
+    }
+
+    suspend fun continuousMove(
+        ptzUrl: String, profileToken: String,
+        username: String, password: String?,
+        pan: Double, tilt: Double, zoom: Double
+    ) {
+        val authHeader = getOnvifAuthHeader(username, password)
+        // Omit `space` entirely! Let the camera use its default Velocity space.
+        val panTiltNode = if (pan != 0.0 || tilt != 0.0) """<tt:PanTilt x="$pan" y="$tilt"/>""" else ""
+        val zoomNode = if (zoom != 0.0) """<tt:Zoom x="$zoom"/>""" else ""
+        
+        val body = """
+            <tptz:ContinuousMove>
+                <tptz:ProfileToken>$profileToken</tptz:ProfileToken>
+                <tptz:Velocity>
+                    $panTiltNode
+                    $zoomNode
+                </tptz:Velocity>
+            </tptz:ContinuousMove>
+        """.trimIndent()
+        sendSoapPost(ptzUrl, buildSoapRequest(authHeader, body))
+    }
+
+    /**
+     * Sends Stop to halt any ongoing PTZ movement.
+     */
+    suspend fun stopMove(
+        ptzUrl: String, profileToken: String,
+        username: String, password: String?
+    ) {
+        val authHeader = getOnvifAuthHeader(username, password)
+        val body = """
+            <tptz:Stop>
+                <tptz:ProfileToken>$profileToken</tptz:ProfileToken>
+                <tptz:PanTilt>true</tptz:PanTilt>
+                <tptz:Zoom>true</tptz:Zoom>
+            </tptz:Stop>
+        """.trimIndent()
+        sendSoapPost(ptzUrl, buildSoapRequest(authHeader, body))
     }
 }

@@ -15,6 +15,10 @@ dist-ssr
 config/
 data/nvr.db
 docker-compose.yml
+docker-compose.override.yml
+*.py
+data/nvr.db-shm
+data/nvr.db-wal
 
 # Editor directories and files
 .vscode/*

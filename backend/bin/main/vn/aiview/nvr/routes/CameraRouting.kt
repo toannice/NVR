@@ -23,7 +23,7 @@ import kotlinx.serialization.Serializable
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 
 @Serializable
-data class CameraStatus(val id: String, val name: String, val rtsp: String, val ip: String?, val manufacturer: String, val model: String)
+data class CameraStatus(val id: String, val name: String, val rtsp: String, val ip: String?, val manufacturer: String, val model: String, val onvifPort: Int = 80, val ptzEnabled: Boolean = false)
 
 @Serializable
 data class CameraStats(val isOnline: Boolean, val fps: Double)
@@ -75,7 +75,9 @@ fun Route.cameraRouting() {
                     rtsp = originalRtspUrl,
                     ip = ip,
                     manufacturer = dbRecord?.get(Cameras.manufacturer) ?: "Unknown",
-                    model = dbRecord?.get(Cameras.model) ?: "Unknown"
+                    model = dbRecord?.get(Cameras.model) ?: "Unknown",
+                    onvifPort = dbRecord?.get(Cameras.onvifPort) ?: 80,
+                    ptzEnabled = dbRecord?.get(Cameras.ptzEnabled) ?: false
                 )
             }
             
@@ -100,6 +102,8 @@ fun Route.cameraRouting() {
             val rtspUrl = json["rtspUrl"]?.jsonPrimitive?.content ?: ""
             val recordStr = json["record"]?.jsonPrimitive?.content
             val record = recordStr?.toBoolean() ?: true
+            val onvifPort = json["onvifPort"]?.jsonPrimitive?.content?.toIntOrNull() ?: 80
+            val ptzEnabled = json["ptzEnabled"]?.jsonPrimitive?.content?.toBoolean() ?: false
             
             val ipAddr = parseIpFromRtsp(rtspUrl) ?: ""
             // Ensure unique slug by appending IP if name is generic
@@ -154,6 +158,8 @@ fun Route.cameraRouting() {
                                 it[this.ip] = ipAddr
                                 it[this.manufacturer] = "Unknown"
                                 it[this.model] = "Unknown"
+                                it[this.onvifPort] = onvifPort
+                                it[this.ptzEnabled] = ptzEnabled
                             }
                         }
                     }
@@ -519,6 +525,28 @@ fun Route.cameraRouting() {
             call.respond(mapOf("success" to "true", "message" to "Frigate restart triggered"))
         } catch (e: Exception) {
             call.application.environment.log.error("Error in /ai/apply", e)
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Unknown error")))
+        }
+    }
+
+    patch("/api/cameras/{id}/ptz-enabled") {
+        val id = call.parameters["id"] ?: return@patch call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
+        try {
+            val jsonStr = call.receiveText()
+            val json = Json.parseToJsonElement(jsonStr).jsonObject
+            val enabled = json["ptzEnabled"]?.jsonPrimitive?.content?.toBoolean() ?: false
+            val updated = transaction {
+                Cameras.update({ Cameras.slug eq id }) {
+                    it[Cameras.ptzEnabled] = enabled
+                }
+            }
+            if (updated > 0) {
+                call.respond(mapOf("success" to true, "ptzEnabled" to enabled))
+            } else {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Camera not found"))
+            }
+        } catch (e: Exception) {
+            call.application.environment.log.error("Error updating PTZ flag for $id", e)
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Unknown error")))
         }
     }
