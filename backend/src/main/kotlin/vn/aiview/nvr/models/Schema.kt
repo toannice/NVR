@@ -10,6 +10,8 @@ object Cameras : Table("cameras") {
     val ip = varchar("ip", 50).nullable()
     val manufacturer = varchar("manufacturer", 100).default("Unknown")
     val model = varchar("model", 100).default("Unknown")
+    val onvifPort = integer("onvif_port").default(80)
+    val ptzEnabled = bool("ptz_enabled").default(false)
     val createdAt = datetime("created_at").defaultExpression(CurrentDateTime)
     val updatedAt = datetime("updated_at").defaultExpression(CurrentDateTime)
 

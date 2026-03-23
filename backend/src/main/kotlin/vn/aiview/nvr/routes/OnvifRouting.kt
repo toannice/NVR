@@ -65,6 +65,7 @@ fun Route.onvifRouting() {
                 
                 val username = credsObj?.get("username")?.jsonPrimitive?.content ?: "admin"
                 val password = credsObj?.get("password")?.jsonPrimitive?.content ?: ""
+                val ptzEnabled = deviceObj?.get("ptzEnabled")?.jsonPrimitive?.content?.toBoolean() ?: false
                 
                 // Fetch real device information and stream URI through SOAP
                 val deviceInfo = OnvifSoapClient.getDeviceInfoAndStream(ip, port, username, password)
@@ -117,6 +118,7 @@ fun Route.onvifRouting() {
                                     it[vn.aiview.nvr.models.Cameras.ip] = ip
                                     it[vn.aiview.nvr.models.Cameras.manufacturer] = deviceInfo.manufacturer
                                     it[vn.aiview.nvr.models.Cameras.model] = deviceInfo.model
+                                    it[vn.aiview.nvr.models.Cameras.ptzEnabled] = ptzEnabled
                                 }
                             }
                         }

@@ -89,26 +89,13 @@ const Header = ({ activeTab, setActiveTab, currentTime }: {
 // PTZ Control Component (Feature 2)
 // ============================================
 
-const PtzControls = ({ cameraId }: { cameraId: string }) => {
-  const [hasPtz, setHasPtz] = useState(false);
-  const [hasPanTilt, setHasPanTilt] = useState(false);
-  const [hasZoom, setHasZoom] = useState(false);
+const PtzControls = ({ cameraId, ptzEnabled }: { cameraId: string; ptzEnabled: boolean }) => {
   const [isPtzOpen, setIsPtzOpen] = useState(false);
   const [isMoving, setIsMoving] = useState(false);
   const moveIntervalRef = useRef<number | null>(null);
 
-  // Check if camera has PTZ on mount
-  useEffect(() => {
-    fetch(`/api/cameras/${cameraId}/ptz/capabilities`)
-      .then(res => res.json())
-      .then(data => { 
-          if (data.hasPtz) setHasPtz(true); 
-          if (data.hasPanTilt) setHasPanTilt(true);
-          if (data.hasZoom) setHasZoom(true);
-      })
-      .catch(() => {});
-  }, [cameraId]);
-
+  // Don't render anything if camera doesn't have PTZ enabled
+  if (!ptzEnabled) return null;
   const sendPtzCommand = (pan: number, tilt: number, zoom: number = 0) => {
     fetch(`/api/cameras/${cameraId}/ptz/move`, {
       method: 'POST',
@@ -129,8 +116,6 @@ const PtzControls = ({ cameraId }: { cameraId: string }) => {
     moveIntervalRef.current = window.setInterval(() => sendPtzCommand(pan, tilt, zoom), 800);
   };
 
-  // Don't render anything if camera has no PTZ
-  if (!hasPtz) return null;
 
   const btnBase = "w-8 h-8 bg-gray-700 hover:bg-gray-600 active:bg-gray-500 rounded text-white flex items-center justify-center transition-colors select-none";
   const diagBase = `${btnBase} text-xs`;
@@ -154,7 +139,6 @@ const PtzControls = ({ cameraId }: { cameraId: string }) => {
       {isPtzOpen && (
         <div className="absolute bottom-10 left-0 bg-black/80 backdrop-blur-sm rounded-lg p-2 shadow-2xl border border-gray-600 z-40">
           {/* Direction grid 3×3 */}
-          {hasPanTilt && (
           <div className="grid grid-cols-3 gap-1 mb-1.5">
             <button onMouseDown={() => startContinuousMove(-0.5,  0.5)} onMouseUp={stopPtz} onMouseLeave={stopPtz} className={diagBase} title="↖">↖</button>
             <button onMouseDown={() => startContinuousMove( 0,    0.5)} onMouseUp={stopPtz} onMouseLeave={stopPtz} className={btnBase}  title="Lên"><Icon name="arrow_upward"   className="text-sm" /></button>
@@ -168,10 +152,8 @@ const PtzControls = ({ cameraId }: { cameraId: string }) => {
             <button onMouseDown={() => startContinuousMove( 0,   -0.5)} onMouseUp={stopPtz} onMouseLeave={stopPtz} className={btnBase}  title="Xuống"><Icon name="arrow_downward" className="text-sm" /></button>
             <button onMouseDown={() => startContinuousMove( 0.5, -0.5)} onMouseUp={stopPtz} onMouseLeave={stopPtz} className={diagBase} title="↘">↘</button>
           </div>
-          )}
 
           {/* Zoom row */}
-          {hasZoom && (
           <div className="flex gap-1">
             <button onMouseDown={() => startContinuousMove(0, 0,  0.3)} onMouseUp={stopPtz} onMouseLeave={stopPtz}
               className="flex-1 h-6 bg-gray-700 hover:bg-gray-600 rounded text-white text-xs flex items-center justify-center gap-0.5 transition-colors">
@@ -182,7 +164,6 @@ const PtzControls = ({ cameraId }: { cameraId: string }) => {
               <Icon name="remove" className="text-xs" />Zoom
             </button>
           </div>
-          )}
 
           {isMoving && <div className="mt-1 text-center text-[10px] text-green-400">Đang di chuyển…</div>}
         </div>
@@ -276,7 +257,7 @@ const CameraGridItem = ({
       {/* PTZ Controls - bottom left, self-hides if camera has no PTZ */}
       {cam.isOnline && (
         <div className="absolute bottom-2 left-2 z-30" onClick={(e) => e.stopPropagation()}>
-          <PtzControls cameraId={cam.id} />
+          <PtzControls cameraId={cam.id} ptzEnabled={!!cam.ptzEnabled} />
         </div>
       )}
 
@@ -2066,6 +2047,25 @@ const SetupView = ({ setupTab, setSetupTab, cameras, handleDeleteCamera, handleA
     }
   };
 
+  const togglePtzSetting = async (id: string, newEnabled: boolean) => {
+    try {
+      const res = await fetch(`/api/cameras/${id}/ptz-enabled`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ptzEnabled: newEnabled })
+      });
+      if (res.ok) {
+        setCameras((prev: any[]) => prev.map(c => c.id === id ? { ...c, ptzEnabled: newEnabled } : c));
+        addToast({ type: 'success', title: 'Thành công', message: 'Đã cập nhật cấu hình PTZ' });
+      } else {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Lỗi không xác định');
+      }
+    } catch (e: any) {
+      addToast({ type: 'error', title: 'Lỗi', message: `Không thể cập nhật PTZ: ${e.message}` });
+    }
+  };
+
   const handleAddOnvifDevice = async (device: any, data: { username: string, password: string, name: string }) => {
     setIsAddingDevice(true);
     // Update device name with the one from the modal
@@ -2152,6 +2152,7 @@ const SetupView = ({ setupTab, setSetupTab, cameras, handleDeleteCamera, handleA
                     <th className="p-4 text-xs font-semibold tracking-wide text-gray-500 dark:text-gray-400 uppercase border-b border-gray-200 dark:border-gray-700">Tên Camera</th>
                     <th className="p-4 text-xs font-semibold tracking-wide text-gray-500 dark:text-gray-400 uppercase border-b border-gray-200 dark:border-gray-700">Địa chỉ IP</th>
                     <th className="p-4 text-xs font-semibold tracking-wide text-gray-500 dark:text-gray-400 uppercase border-b border-gray-200 dark:border-gray-700 text-center">Trạng thái</th>
+                    <th className="p-4 text-xs font-semibold tracking-wide text-gray-500 dark:text-gray-400 uppercase border-b border-gray-200 dark:border-gray-700 text-center">PTZ</th>
                     <th className="p-4 text-xs font-semibold tracking-wide text-gray-500 dark:text-gray-400 uppercase border-b border-gray-200 dark:border-gray-700 text-center w-40">Hành động</th>
                   </tr>
                 </thead>
@@ -2176,6 +2177,18 @@ const SetupView = ({ setupTab, setSetupTab, cameras, handleDeleteCamera, handleA
                           <span className={`w-1.5 h-1.5 rounded-full ${c.isOnline ? 'bg-green-500' : 'bg-red-500'} mr-1.5`}></span>
                           {c.isOnline ? 'Online' : 'Offline'}
                         </span>
+                      </td>
+                      <td className="p-4 text-center">
+                        <button
+                          onClick={() => togglePtzSetting(c.id, !c.ptzEnabled)}
+                          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
+                            c.ptzEnabled ? 'bg-[#F04E30]' : 'bg-gray-300 dark:bg-gray-600'
+                          }`}
+                        >
+                          <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-md transition-transform ${
+                            c.ptzEnabled ? 'translate-x-[18px]' : 'translate-x-1'
+                          }`} />
+                        </button>
                       </td>
                       <td className="p-4">
                         <div className="flex justify-center space-x-2">
@@ -2583,6 +2596,7 @@ function OnvifCredentialsModal({ device, onClose, onSubmit, isLoading, addToast 
     username: 'admin',
     password: ''
   });
+  const [ptzEnabled, setPtzEnabled] = useState(false);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -2595,7 +2609,7 @@ function OnvifCredentialsModal({ device, onClose, onSubmit, isLoading, addToast 
       return;
     }
     // Pass the edited name along with credentials
-    onSubmit({ ...credentials, name: cameraName });
+    onSubmit({ ...credentials, name: cameraName, ptzEnabled });
   };
 
   return (
@@ -2671,6 +2685,25 @@ function OnvifCredentialsModal({ device, onClose, onSubmit, isLoading, addToast 
                   disabled={isLoading}
                 />
               </div>
+            </div>
+
+            {/* PTZ Toggle */}
+            <div className="flex items-center justify-between py-2 px-3 bg-gray-50 dark:bg-gray-800/50 rounded border border-gray-200 dark:border-gray-700">
+              <div>
+                <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Camera hỗ trợ PTZ</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Bật nếu camera có thể xoay / tilt / zoom</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPtzEnabled(v => !v)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
+                  ptzEnabled ? 'bg-[#F04E30]' : 'bg-gray-300 dark:bg-gray-600'
+                }`}
+              >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-md transition-transform ${
+                  ptzEnabled ? 'translate-x-6' : 'translate-x-1'
+                }`} />
+              </button>
             </div>
 
             <div className="text-xs text-gray-500 dark:text-gray-400 mt-2 bg-gray-50 dark:bg-gray-800/50 p-2 rounded border border-gray-200 dark:border-gray-700">
