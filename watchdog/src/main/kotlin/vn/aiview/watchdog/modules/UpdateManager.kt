@@ -15,6 +15,7 @@ class UpdateManager(
     private val log = LoggerFactory.getLogger(javaClass)
     private val docker = DockerApi()
     private val stateFile = File("/data/version_state.json")
+    private val hostname = System.getenv("HOSTNAME") ?: "nvr-node"
 
     suspend fun run() {
         val intervalMs = config.update.check_interval_minutes * 60_000L
@@ -75,10 +76,12 @@ class UpdateManager(
             docker.removeImage(currentImageId)
             db.log(EventType.UPDATE_SUCCESS, "Updated $containerName to $newImageId ($revision)", severity = Severity.INFO)
             alertManager.sendAlert(AlertEvent(AlertType.UPDATE_SUCCESS,
-                "✅ <b>$containerName</b> đã cập nhật thành công!\n📦 Version: <code>$revision</code>"))
+                "🖥️ <b>[$hostname]</b>\n✅ <b>$containerName</b> cập nhật thành công!\n📦 Version: <code>$revision</code>"))
         } else {
             log.error("Health check failed after update — initiating rollback")
             db.log(EventType.UPDATE_FAILED, "Update failed for $containerName — rolling back", severity = Severity.ERROR)
+            alertManager.sendAlert(AlertEvent(AlertType.UPDATE_FAILED,
+                "🖥️ <b>[$hostname]</b>\n⚠️ <b>$containerName</b> cập nhật THẤT BẠI! Đang rollback..."))
             performRollback(containerName, currentImageId, healthEndpoint)
         }
     }
