@@ -122,7 +122,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro  # Read container states
       - ./config/watchdog.yml:/config/watchdog.yml:ro  # Config (read-only)
-      - /mnt/recordings:/recordings:ro                # Measure disk & cleanup via path
+      - ./media/recordings:/recordings                # Measure disk & cleanup via path
       - ./docker-compose.yml:/compose/docker-compose.yml:ro  # Used during rollback
       - /root/.docker/config.json:/root/.docker/config.json:ro  # Pull private GHCR images
       - watchdog-data:/data    # events.db, reports/, version_state.json
