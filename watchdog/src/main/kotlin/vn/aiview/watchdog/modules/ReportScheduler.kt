@@ -21,7 +21,8 @@ class ReportScheduler(
     suspend fun run() {
         while (true) {
             try {
-                val tz = ZoneId.of(config.schedule.timezone)
+                val tzStr = config.schedule.timezone.ifBlank { "Asia/Ho_Chi_Minh" }
+                val tz = ZoneId.of(tzStr)
                 val now = ZonedDateTime.now(tz)
 
                 val isReportTime = now.hour == config.schedule.report_hour
@@ -29,11 +30,19 @@ class ReportScheduler(
                         && now.toLocalDate() != lastReportDate
 
                 if (isReportTime) {
-                    lastReportDate = now.toLocalDate()
-                    sendDailyReport()
+                    val success = try {
+                        sendDailyReport()
+                        true
+                    } catch (e: Exception) {
+                        log.error("Failed to send daily report: ${e.message}")
+                        false
+                    }
+                    if (success) {
+                        lastReportDate = now.toLocalDate()
+                    }
                 }
             } catch (e: Exception) {
-                log.error("ReportScheduler error: ${e.message}")
+                log.error("ReportScheduler loop error: ${e.message}")
             }
             delay(30_000)
         }
@@ -43,10 +52,10 @@ class ReportScheduler(
         log.info("Generating daily report...")
         db.pruneOldLogs()
 
-        val cpuPct = healthMonitor.readCpuPercent()
-        val ramPct = healthMonitor.readRamPercent()
-        val diskPct = healthMonitor.readDiskPercent("/recordings")
-        val tempC = healthMonitor.readCpuTemp()
+        val cpuPct = try { healthMonitor.readCpuPercent() } catch (e: Exception) { 0 }
+        val ramPct = try { healthMonitor.readRamPercent() } catch (e: Exception) { 0 }
+        val diskPct = try { healthMonitor.readDiskPercent("/recordings") } catch (e: Exception) { 0 }
+        val tempC = try { healthMonitor.readCpuTemp() } catch (e: Exception) { null }
 
         val events24h = db.getEvents(24)
         val downtimeSeconds = db.getDowntimeSeconds(24)
@@ -55,25 +64,39 @@ class ReportScheduler(
         val restartCount = events24h.count { it.type == EventType.NVR_RESTARTED || it.type == EventType.CONTAINER_RESTARTED }
         val activeIncident = events24h.any { it.type == EventType.NVR_DOWN && !it.resolved }
 
+        // Get container status (like the shell script)
+        val containerStatuses = try {
+            val docker = DockerApi()
+            config.containers.map { it.name }.joinToString("\n") { name ->
+                val state = docker.getContainerState(name)
+                val emoji = if (state == "running") "✅" else "🔴"
+                "  $emoji $name: <b>$state</b>"
+            }
+        } catch (e: Exception) { "  ⚠️ Không thể lấy trạng thái container" }
+
         val tz = ZoneId.of(config.schedule.timezone)
         val dateStr = ZonedDateTime.now(tz).format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"))
 
         val msg = buildString {
-            append("📊 <b>BÁO CÁO NVR HẰNG NGÀY</b>\n")
-            append("🕒 $dateStr\n\n")
+            append("📊 <b>BÁO CÁO NHẬT KÝ HỆ THỐNG NVR</b>\n")
+            append("🗓 <b>Thời gian:</b> $dateStr\n\n")
             append("━━━━━━━━━━━━━━━━━━━━━━\n")
-            append("⚙️ <b>Tài nguyên hiện tại:</b>\n")
+            append("⚙️ <b>Thông số phần cứng:</b>\n")
             append("  🖥️ CPU: <b>$cpuPct%</b>\n")
             append("  💾 RAM: <b>$ramPct%</b>\n")
             append("  💿 Disk: <b>$diskPct%</b>\n")
-            if (tempC != null) append("  🌡️ Nhiệt: <b>${tempC}°C</b>\n")
+            if (tempC != null) append("  🌡️ Nhiệt độ: <b>${tempC}°C</b>\n")
             append("\n")
             append("📈 <b>Tình trạng 24h qua:</b>\n")
             append("  ✅ Uptime: <b>${String.format("%.2f", uptimePct)}%</b>\n")
             append("  ⏱️ Thời gian chết: <b>${downtimeSeconds / 60} phút</b>\n")
             append("  🚨 Sự cố: <b>$incidentCount lần</b>\n")
             append("  🔄 Restart: <b>$restartCount lần</b>\n")
-            append("  📍 Hiện tại: <b>${if (activeIncident) "⛔ Đang sự cố" else "✅ Ổn định"}</b>\n")
+            append("\n")
+            append("📦 <b>Trạng thái Vùng chứa (Containers):</b>\n")
+            append(containerStatuses)
+            append("\n\n")
+            append("📍 Hiện tại: <b>${if (activeIncident) "⛔ Đang có sự cố" else "✅ Hoạt động ổn định"}</b>")
         }
 
         // Save to file

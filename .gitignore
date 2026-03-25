@@ -17,6 +17,8 @@ config/*.db*
 config/.jwt_secret
 config/model_cache/
 config/backup.db
+config/config.yml
+
 docker-compose.override.yml
 *.py
 data/nvr.db-shm
@@ -45,3 +47,5 @@ mosquitto/data/*.db
 mosquitto/log/
 .env
 media/
+
+

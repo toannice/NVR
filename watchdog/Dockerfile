@@ -17,7 +17,7 @@ FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 
 # Install docker-cli (to call docker commands on the host via mounted socket)
-RUN apk add --no-cache docker-cli curl
+RUN apk add --no-cache docker-cli curl tzdata
 
 COPY --from=builder /app/build/libs/*.jar nvr-watchdog.jar
 

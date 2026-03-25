@@ -23,6 +23,7 @@ fun main() = runBlocking {
     db.log(EventType.SYSTEM_STARTUP, "Watchdog daemon started", severity = Severity.INFO)
 
     val alertManager = AlertManager(config, db)
+    alertManager.sendTelegram("🚀 <b>Hệ thống NVR Watchdog đã khởi động</b>\nLịch thông báo: 9:00 AM hằng ngày.")
     val selfHealing = SelfHealingEngine(config, alertManager, db)
     val healthMonitor = SystemHealthMonitor(config, alertChannel, db, selfHealing)
     val reportScheduler = ReportScheduler(config, alertManager, db)

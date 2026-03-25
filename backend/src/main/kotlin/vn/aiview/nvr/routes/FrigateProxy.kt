@@ -93,6 +93,56 @@ fun Route.frigateProxyRouting() {
         }
     }
 
+    get("/api/frigate/api/recordings/summary") {
+        val camera = call.request.queryParameters["camera"] ?: call.request.queryParameters["cameras"]
+        val recordingsDir = java.io.File("/app/media/recordings")
+        val summaryMap = mutableMapOf<String, Boolean>()
+        
+        if (recordingsDir.exists() && recordingsDir.isDirectory) {
+            val zoneId = java.time.ZoneId.systemDefault()
+            val formatter = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH")
+            
+            recordingsDir.listFiles()?.filter { it.isDirectory }?.forEach { dateDir ->
+                val dateStr = dateDir.name // e.g. "2026-03-25"
+                if (dateStr.matches(Regex("\\d{4}-\\d{2}-\\d{2}"))) {
+                    dateDir.listFiles()?.filter { it.isDirectory }?.forEach { hourDir ->
+                        val hourStr = hourDir.name // e.g. "00", "07"
+                        
+                        var hasVideo = false
+                        if (!camera.isNullOrBlank()) {
+                            val camList = camera.split(",")
+                            for (cam in camList) {
+                                val camDir = java.io.File(hourDir, cam)
+                                if (camDir.exists() && camDir.isDirectory && (camDir.list()?.isNotEmpty() == true)) {
+                                    hasVideo = true
+                                    break
+                                }
+                            }
+                        } else {
+                            val cams = hourDir.listFiles()?.filter { it.isDirectory } ?: emptyList()
+                            hasVideo = cams.any { it.list()?.isNotEmpty() == true }
+                        }
+                        
+                        if (hasVideo) {
+                            try {
+                                val utcStr = "$dateStr $hourStr"
+                                val utcDate = java.time.LocalDateTime.parse(utcStr, formatter)
+                                val zonedDateTimeUtc = utcDate.atZone(java.time.ZoneId.of("UTC"))
+                                val localDateTime = zonedDateTimeUtc.withZoneSameInstant(zoneId).toLocalDate()
+                                
+                                val localDateStr = localDateTime.toString()
+                                summaryMap[localDateStr] = true
+                            } catch (e: Exception) {
+                                call.application.environment.log.warn("Error parsing date: \$dateStr \$hourStr", e)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        call.respond(summaryMap)
+    }
+
     route("/api/frigate/{path...}") {
         handle {
             val path = call.parameters.getAll("path")?.joinToString("/") ?: ""
