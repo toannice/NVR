@@ -200,9 +200,10 @@ fun Route.cameraRouting() {
             
             val newCamConfig = mapOf(
                 "ffmpeg" to mapOf(
+                    "hwaccel_args" to emptyList<String>(), // override global QSV — RTSP sources may have incompatible codec
                     "inputs" to listOf(
                         mapOf(
-                            "path" to "rtsp://127.0.0.1:8554/$slug", 
+                            "path" to "rtsp://127.0.0.1:8554/$slug",
                             "input_args" to "preset-rtsp-restream",
                             "roles" to listOf("record", "detect")
                         )
