@@ -2780,6 +2780,7 @@ const ToastContainer = ({ toasts, removeToast }: any) => {
 
 // Manual Camera Add Form Component matching design
 function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
+  const [activeMode, setActiveMode] = useState<'onvif' | 'rtsp'>('onvif');
   const [formData, setFormData] = useState({
     name: '',
     ip: '',
@@ -2790,6 +2791,7 @@ function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
     path: '/stream1',
     addToLiveView: true
   });
+  const [rtspData, setRtspData] = useState({ name: '', rtsp: '', ip: '' });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isProbing, setIsProbing] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -2927,6 +2929,25 @@ function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
     }
   };
 
+  const handleRtspSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rtspData.name.trim()) { setError('Vui lòng nhập tên camera'); return; }
+    if (!rtspData.rtsp.trim()) { setError('Vui lòng nhập đường dẫn RTSP'); return; }
+    if (!rtspData.rtsp.startsWith('rtsp://')) { setError('Đường dẫn RTSP phải bắt đầu bằng rtsp://'); return; }
+    setIsSubmitting(true);
+    setError('');
+    try {
+      await Promise.resolve(onAdd({ name: rtspData.name.trim(), rtspUrl: rtspData.rtsp.trim(), ip: rtspData.ip.trim() || undefined, record: true }));
+      onClose();
+    } catch (e: any) {
+      const msg = e.message || 'Không thể kết nối RTSP. Kiểm tra lại đường dẫn và đảm bảo camera đang hoạt động.';
+      setError(msg);
+      addToast({ type: 'error', title: 'Lỗi thêm camera RTSP', message: msg });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <div className="bg-white dark:bg-[#2D2D2D] w-full max-w-2xl rounded-lg shadow-2xl flex flex-col max-h-[90vh] z-20 border border-gray-200 dark:border-gray-700 overflow-hidden animate-fade-in-up">
@@ -2939,6 +2960,104 @@ function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
             <Icon name="close" />
           </button>
         </div>
+
+        {/* Tab switcher */}
+        <div className="flex border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-[#333]">
+          <button
+            type="button"
+            onClick={() => { setActiveMode('onvif'); setError(''); }}
+            className={`flex-1 py-3 text-sm font-medium transition-colors flex items-center justify-center gap-1.5 ${activeMode === 'onvif' ? 'text-[#F04E30] border-b-2 border-[#F04E30]' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}
+          >
+            <Icon name="settings_input_antenna" className="text-base" /> ONVIF / Tự động
+          </button>
+          <button
+            type="button"
+            onClick={() => { setActiveMode('rtsp'); setError(''); }}
+            className={`flex-1 py-3 text-sm font-medium transition-colors flex items-center justify-center gap-1.5 ${activeMode === 'rtsp' ? 'text-[#F04E30] border-b-2 border-[#F04E30]' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}
+          >
+            <Icon name="link" className="text-base" /> RTSP trực tiếp
+          </button>
+        </div>
+
+        {activeMode === 'rtsp' ? (
+          <div className="p-8 flex-1 overflow-y-auto">
+            <form onSubmit={handleRtspSubmit} className="space-y-6">
+              <div className="p-4 bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded-lg flex items-start gap-3">
+                <Icon name="info" className="text-blue-500 mt-0.5" />
+                <div className="text-sm text-blue-800 dark:text-blue-200">
+                  Nhập URL RTSP đầy đủ. Bất kỳ stream nào xem được qua VLC đều hoạt động được.
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Tên camera <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <Icon name="videocam" className="text-gray-400 text-lg" />
+                  </div>
+                  <input
+                    required
+                    className="w-full pl-10 rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white focus:ring-[#F04E30] focus:border-[#F04E30] shadow-sm"
+                    placeholder="Ví dụ: Camera Cổng Chính"
+                    type="text"
+                    value={rtspData.name}
+                    onChange={e => setRtspData({ ...rtspData, name: e.target.value })}
+                    disabled={isSubmitting}
+                    autoFocus
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Đường dẫn RTSP <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <Icon name="link" className="text-gray-400 text-lg" />
+                  </div>
+                  <input
+                    required
+                    className="w-full pl-10 rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white focus:ring-[#F04E30] focus:border-[#F04E30] shadow-sm font-mono text-sm"
+                    placeholder="rtsp://user:pass@192.168.1.xxx:554/stream1"
+                    type="text"
+                    value={rtspData.rtsp}
+                    onChange={e => setRtspData({ ...rtspData, rtsp: e.target.value })}
+                    disabled={isSubmitting}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Địa chỉ IP <span className="text-gray-400 font-normal">(tuỳ chọn)</span>
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <Icon name="dns" className="text-gray-400 text-lg" />
+                  </div>
+                  <input
+                    className="w-full pl-10 rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white focus:ring-[#F04E30] focus:border-[#F04E30] shadow-sm font-mono"
+                    placeholder="192.168.1.xxx"
+                    type="text"
+                    value={rtspData.ip}
+                    onChange={e => setRtspData({ ...rtspData, ip: e.target.value })}
+                    disabled={isSubmitting}
+                  />
+                </div>
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Để trống nếu IP đã có trong đường dẫn RTSP.</p>
+              </div>
+
+              {error && (
+                <div className="text-sm text-center p-3 rounded-lg border bg-red-50 text-red-700 border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800">
+                  {error}
+                </div>
+              )}
+            </form>
+          </div>
+        ) : (
 
         <div className="p-8 flex-1 overflow-y-auto">
           <form onSubmit={handleSubmit} className="space-y-6">
@@ -3105,6 +3224,7 @@ function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
             )}
           </form>
         </div>
+        )} {/* end onvif tab */}
 
         <div className="px-6 py-4 bg-gray-50 dark:bg-[#252525] border-t border-gray-200 dark:border-gray-700 flex justify-end gap-3">
           <button
@@ -3115,7 +3235,7 @@ function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
             Hủy bỏ
           </button>
           <button
-            onClick={handleSubmit}
+            onClick={activeMode === 'rtsp' ? handleRtspSubmit : handleSubmit}
             disabled={isSubmitting}
             className="px-6 py-2.5 bg-[#F04E30] text-white rounded hover:bg-[#D63A1D] transition-colors font-medium shadow-md flex items-center text-sm uppercase tracking-wide disabled:opacity-70 disabled:cursor-not-allowed"
           >
