@@ -21,6 +21,7 @@ import kotlinx.serialization.json.putJsonObject
 
 import kotlinx.serialization.Serializable
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import vn.aiview.nvr.utils.HwaccelDetector
 
 @Serializable
 data class CameraStatus(val id: String, val name: String, val rtsp: String, val ip: String?, val manufacturer: String, val model: String, val onvifPort: Int = 80, val ptzEnabled: Boolean = false)
@@ -191,16 +192,15 @@ fun Route.cameraRouting() {
             if (!configData.containsKey("version")) {
                 configData["version"] = "0.16-0"
             }
-            // Add global hardware acceleration to reduce CPU usage and speed up restarting
             if (!configData.containsKey("ffmpeg")) {
-                configData["ffmpeg"] = mutableMapOf("hwaccel_args" to "preset-intel-qsv-h264")
+                configData["ffmpeg"] = mutableMapOf("hwaccel_args" to HwaccelDetector.detectHwaccelArgs())
             }
 
             val cameras = configData.getOrPut("cameras") { mutableMapOf<String, Any>() } as MutableMap<String, Any>
             
             val newCamConfig = mapOf(
                 "ffmpeg" to mapOf(
-                    "hwaccel_args" to emptyList<String>(), // override global QSV — RTSP sources may have incompatible codec
+                    "hwaccel_args" to HwaccelDetector.detectHwaccelArgs(),
                     "inputs" to listOf(
                         mapOf(
                             "path" to "rtsp://127.0.0.1:8554/$slug",

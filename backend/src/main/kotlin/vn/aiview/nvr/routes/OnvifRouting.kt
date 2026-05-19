@@ -24,6 +24,7 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.SocketTimeoutException
 import java.util.UUID
+import vn.aiview.nvr.utils.HwaccelDetector
 
 @Serializable
 data class OnvifDevice(
@@ -138,6 +139,7 @@ fun Route.onvifRouting() {
                 
                 val newCamConfig = mapOf(
                     "ffmpeg" to mapOf(
+                        "hwaccel_args" to HwaccelDetector.detectHwaccelArgs(),
                         "inputs" to listOf(
                             mapOf(
                                 "path" to "rtsp://127.0.0.1:8554/$slug",

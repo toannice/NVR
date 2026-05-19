@@ -6,4 +6,48 @@ detect:
   enabled: true
 record:
   enabled: true
-cameras: {}
+cameras:
+  agsd_100_64_0_1:
+    ffmpeg:
+      hwaccel_args: []
+      inputs:
+      - path: rtsp://127.0.0.1:8554/agsd_100_64_0_1
+        input_args: preset-rtsp-restream
+        roles:
+        - record
+        - detect
+    detect:
+      enabled: true
+    record:
+      enabled: true
+      retain:
+        days: 7
+        mode: all
+  ai_view_p200_0802n_192_168_2_65:
+    ffmpeg:
+      hwaccel_args: []
+      inputs:
+      - path: rtsp://127.0.0.1:8554/ai_view_p200_0802n_192_168_2_65
+        input_args: preset-rtsp-restream
+        roles:
+        - detect
+        - record
+    detect:
+      enabled: false
+    record:
+      enabled: true
+      retain:
+        days: 7
+        mode: all
+ffmpeg:
+  hwaccel_args: []
+go2rtc:
+  streams:
+    agsd_100_64_0_1:
+    - rtsp://100.64.0.1:8554/camA#tcp
+    ai_view_p200_0802n_192_168_2_65:
+    - rtsp://admin:Bkav@2020@192.168.2.65:554/profile1/live#tcp
+  webrtc:
+    candidates:
+    - '{FRIGATE_HOST_IP}:8555'
+    - stun:8555

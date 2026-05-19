@@ -59,8 +59,8 @@ services:
   # ─── NVR Wrapper (Our App) ─────────────────────────────────
   nvr-wrapper:
     container_name: nvr-wrapper
-    #image: ghcr.io/toannice/nvr:latest # Sử dụng bản build từ GitHub CI/CD
-    build: .
+    image: ghcr.io/toannice/nvr:${WRAPPER_TAG:-staging} # Sử dụng GHCR image để OTA hoạt động
+    # build: .
     restart: unless-stopped
     network_mode: "host" # Required for ONVIF multicast (WS-Discovery) to work
     # ports:
@@ -73,6 +73,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock # Allows `docker restart frigate`
       - /run/systemd/resolve/resolv.conf:/app/dns_config:ro
       - /etc/localtime:/etc/localtime:ro
+      - /sys/class/drm:/sys/class/drm:ro  # GPU vendor detection for hwaccel config
     depends_on:
       frigate:
         condition: service_healthy
@@ -117,16 +118,16 @@ services:
     build: ./watchdog
     restart: always             # Always restarts — must survive crashes
     hostname: ${HOSTNAME:-nvr-edge-node}
-    networks:
-      - nvr-backend
+    network_mode: "host"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro  # Read container states
+      - /var/run/docker.sock:/var/run/docker.sock  # Read container states & Execute Compose
+      - ${PWD:-/home/toan/my-nvr}:${PWD:-/home/toan/my-nvr} # Allow Watchdog to run docker-compose
       - ./config/watchdog.yml:/config/watchdog.yml:ro  # Config (read-only)
       - ./media/recordings:/recordings                # Measure disk & cleanup via path
-      - ./docker-compose.yml:/compose/docker-compose.yml:ro  # Used during rollback
       - /root/.docker/config.json:/root/.docker/config.json:ro  # Pull private GHCR images
       - watchdog-data:/data    # events.db, reports/, version_state.json
     environment:
+      - PROJECT_DIR=${PWD:-/home/toan/my-nvr}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - HOSTNAME=${HOSTNAME:-nvr-edge-node}
