@@ -64,10 +64,10 @@ class SelfHealingEngine(
         var cleaned = 0
         var freedBytes = 0L
 
+        val recordingsDir = java.io.File("/recordings")
         for (file in files) {
-            val monitor = java.nio.file.FileSystems.getDefault().getFileStores().firstOrNull()
-            val total = monitor?.totalSpace ?: 1L
-            val usable = monitor?.usableSpace ?: 0L
+            val total = recordingsDir.totalSpace.takeIf { it > 0 } ?: 1L
+            val usable = recordingsDir.usableSpace
             val pct = ((1.0 - usable.toDouble() / total) * 100).toInt()
             if (pct < targetPercent) break
 

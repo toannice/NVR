@@ -106,7 +106,7 @@ class DockerApi {
         } catch (e: Exception) { emptyList() }
     }
 
-    private fun exec(vararg cmd: String): String {
+    fun exec(vararg cmd: String): String {
         val process = ProcessBuilder(*cmd)
             .redirectErrorStream(true)
             .start()

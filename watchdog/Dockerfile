@@ -16,8 +16,8 @@ RUN ./gradlew jar --no-daemon
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 
-# Install docker-cli (to call docker commands on the host via mounted socket)
-RUN apk add --no-cache docker-cli curl tzdata
+# Install docker-cli and docker-cli-compose (to call docker commands on the host via mounted socket)
+RUN apk add --no-cache docker-cli docker-cli-compose curl tzdata
 
 COPY --from=builder /app/build/libs/*.jar nvr-watchdog.jar
 

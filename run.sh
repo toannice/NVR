@@ -195,6 +195,11 @@ echo "[*] Đã gửi lệnh! Kiểm tra quá trình tải tại: docker logs -f 
 EOF
 chmod +x update-now.sh
 
+echo "[*] Cấu hình tự khởi động (Auto Boot) khi có mạng hoặc sau kết nối..."
+cp nvr-stack.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now nvr-stack.service
+
 # 7. Thông báo
 echo "===================================================="
 echo "Hệ thống NVR đã sẵn sàng!"

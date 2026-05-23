@@ -60,9 +60,14 @@ class UpdateManager(
         log.info("New image detected for $containerName. Upgrading $currentImageId → $newImageId")
         db.log(EventType.UPDATE_STARTED, "Starting update: $containerName → $newImageId")
 
-        // Stop old container, start with new image
-        docker.stopContainer(containerName)
-        docker.startContainer(containerName)
+        val projectDir = System.getenv("PROJECT_DIR") ?: "/home/toan/my-nvr"
+
+        // Execute docker compose up -d to properly recreate the container with new image
+        try {
+            docker.exec("docker", "compose", "-f", "$projectDir/docker-compose.yml", "up", "-d", containerName)
+        } catch (e: Exception) {
+            log.error("Failed to run docker compose up for $containerName: ${e.message}")
+        }
 
         // Wait for health
         val healthy = waitForHealth(healthEndpoint, config.update.health_wait_seconds)
@@ -98,11 +103,19 @@ class UpdateManager(
             rollbackAttempt++
             log.info("Rollback attempt $rollbackAttempt for $containerName with image $oldImageId")
 
-            docker.stopContainer(containerName)
-            // Restart directly from old image ID (already local — no pull needed)
+            val projectDir = System.getenv("PROJECT_DIR") ?: "/home/toan/my-nvr"
             try {
-                Runtime.getRuntime().exec(arrayOf("docker", "run", "-d", "--name", containerName, oldImageId)).waitFor()
+                // Dừng và xoá lỗi
+                docker.exec("docker", "rm", "-f", containerName)
+                
+                // Rollback an toàn: Tag ID cũ đè lên tag hiện tại (vd :staging) để compose up dùng lại bản cũ
+                val targetImage = config.containers.firstOrNull { it.name == containerName }?.image ?: "ghcr.io/toannice/nvr:staging"
+                docker.exec("docker", "tag", oldImageId, targetImage)
+                
+                // Chạy lại với cấu hình chuẩn
+                docker.exec("docker", "compose", "-f", "$projectDir/docker-compose.yml", "up", "-d", containerName)
             } catch (e: Exception) {
+                log.error("Rollback execution failed: ${e.message}")
                 docker.startContainer(containerName) // fallback
             }
 
