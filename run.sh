@@ -173,16 +173,26 @@ if [ ! -z "$SUDO_USER" ]; then
     chown -R $SUDO_USER:$SUDO_USER .
 fi
 
-# 6. Khởi chạy Dịch vụ (Docker Pull & Run)
-echo "[*] Bước 6: Kích hoạt hệ thống NVR và các dịch vụ..."
+# 6. Build & Khởi chạy Dịch vụ
+echo "[*] Bước 6: Build image staging và kích hoạt hệ thống NVR..."
 source .env
 if [ -n "$GITHUB_TOKEN" ] && [ -n "$GITHUB_USERNAME" ]; then
     echo "[*] Đăng nhập GitHub Container Registry..."
     echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_USERNAME" --password-stdin
 fi
 
-docker compose pull
+echo "[*] Build nvr-wrapper từ source code..."
+docker compose build --no-cache nvr-wrapper
+
+echo "[*] Pull các image còn lại (frigate, mosquitto, nginx...)..."
+docker compose pull --ignore-buildable 2>/dev/null || docker compose pull
+
+echo "[*] Khởi chạy toàn bộ stack..."
+docker compose up -d --force-recreate --no-deps nvr-wrapper
 docker compose up -d
+
+echo "[*] Đảm bảo nginx đang chạy..."
+docker compose up -d nginx
 
 # Tạo script trigger update thủ công
 cat << 'EOF' > update-now.sh

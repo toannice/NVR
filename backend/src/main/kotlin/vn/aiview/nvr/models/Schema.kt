@@ -38,6 +38,14 @@ object LockConfig : Table("lock_config") {
     override val primaryKey = PrimaryKey(id)
 }
 
+object OtpTokens : Table("otp_tokens") {
+    val email = varchar("email", 255)
+    val code = varchar("code", 6)
+    val expiry = long("expiry")
+
+    override val primaryKey = PrimaryKey(email)
+}
+
 object AIEvents : Table("ai_events") {
     val id = varchar("id", 255)
     val cameraSlug = varchar("camera_slug", 255).index()

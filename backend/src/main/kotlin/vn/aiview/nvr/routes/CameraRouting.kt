@@ -20,8 +20,12 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 
 import kotlinx.serialization.Serializable
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import vn.aiview.nvr.utils.HwaccelDetector
+
+private val configMutex = Mutex()
 
 @Serializable
 data class CameraStatus(val id: String, val name: String, val rtsp: String, val ip: String?, val manufacturer: String, val model: String, val onvifPort: Int = 80, val ptzEnabled: Boolean = false)
@@ -106,6 +110,12 @@ fun Route.cameraRouting() {
             val onvifPort = json["onvifPort"]?.jsonPrimitive?.content?.toIntOrNull() ?: 80
             val ptzEnabled = json["ptzEnabled"]?.jsonPrimitive?.content?.toBoolean() ?: false
             
+            val urlError = validateRtspUrl(rtspUrl)
+            if (urlError != null) {
+                call.respondText("""{"error":"$urlError"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.BadRequest)
+                return@post
+            }
+
             val ipAddr = parseIpFromRtsp(rtspUrl) ?: ""
             // Ensure unique slug by appending IP if name is generic
             val slug = "${name.lowercase().replace(Regex("[^a-z0-9]+"), "_")}_${ipAddr.replace(".", "_")}"
@@ -172,87 +182,91 @@ fun Route.cameraRouting() {
                 return@post
             }
             
-            val file = File(configPath)
-            val yaml = Yaml()
-            val configData = if (file.exists()) yaml.load<MutableMap<String, Any>>(file.readText()) else mutableMapOf()
-            
-            // Ensure global required configs exist for new deployments
-            if (!configData.containsKey("mqtt")) {
-                configData["mqtt"] = mutableMapOf("host" to "mosquitto", "port" to 1883)
-            }
-            if (!configData.containsKey("record")) {
-                configData["record"] = mutableMapOf(
-                    "enabled" to true,
-                    "retain" to mapOf("days" to 7, "mode" to "all")
-                )
-            }
-            if (!configData.containsKey("detect")) {
-                configData["detect"] = mapOf("enabled" to true)
-            }
-            if (!configData.containsKey("version")) {
-                configData["version"] = "0.16-0"
-            }
-            if (!configData.containsKey("ffmpeg")) {
-                configData["ffmpeg"] = mutableMapOf("hwaccel_args" to HwaccelDetector.detectHwaccelArgs())
-            }
+            configMutex.withLock {
+                val file = File(configPath)
+                val yaml = Yaml()
+                val configData = if (file.exists()) yaml.load<MutableMap<String, Any>>(file.readText()) else mutableMapOf()
 
-            val cameras = configData.getOrPut("cameras") { mutableMapOf<String, Any>() } as MutableMap<String, Any>
-            
-            val newCamConfig = mapOf(
-                "ffmpeg" to mapOf(
-                    "hwaccel_args" to HwaccelDetector.detectHwaccelArgs(),
-                    "inputs" to listOf(
-                        mapOf(
-                            "path" to "rtsp://127.0.0.1:8554/$slug",
-                            "input_args" to "preset-rtsp-restream",
-                            "roles" to listOf("record", "detect")
+                if (!configData.containsKey("mqtt")) {
+                    configData["mqtt"] = mutableMapOf("host" to "mosquitto", "port" to 1883)
+                }
+                if (!configData.containsKey("record")) {
+                    configData["record"] = mutableMapOf(
+                        "enabled" to true,
+                        "retain" to mapOf("days" to 7, "mode" to "all")
+                    )
+                }
+                if (!configData.containsKey("detect")) {
+                    configData["detect"] = mapOf("enabled" to true)
+                }
+                if (!configData.containsKey("version")) {
+                    configData["version"] = "0.16-0"
+                }
+                if (!configData.containsKey("ffmpeg")) {
+                    configData["ffmpeg"] = mutableMapOf("hwaccel_args" to HwaccelDetector.detectHwaccelArgs())
+                }
+
+                val cameras = configData.getOrPut("cameras") { mutableMapOf<String, Any>() } as MutableMap<String, Any>
+
+                val newCamConfig = mapOf(
+                    "ffmpeg" to mapOf(
+                        "hwaccel_args" to HwaccelDetector.detectHwaccelArgs(),
+                        "inputs" to listOf(
+                            mapOf(
+                                "path" to "rtsp://127.0.0.1:8554/$slug",
+                                "input_args" to "preset-rtsp-restream",
+                                "roles" to listOf("record", "detect")
+                            )
+                        )
+                    ),
+                    "detect" to mapOf("enabled" to true),
+                    "record" to mapOf(
+                        "enabled" to record,
+                        "retain" to mapOf(
+                            "days" to 7,
+                            "mode" to "all"
                         )
                     )
-                ),
-                "detect" to mapOf("enabled" to true),
-                "record" to mapOf(
-                    "enabled" to record,
-                    "retain" to mapOf(
-                        "days" to 7,
-                        "mode" to "all"
+                )
+
+                cameras[slug] = newCamConfig
+
+                val go2rtc = configData.getOrPut("go2rtc") { mutableMapOf<String, Any>() } as MutableMap<String, Any>
+                val streams = go2rtc.getOrPut("streams") { mutableMapOf<String, Any>() } as MutableMap<String, Any>
+                streams[slug] = listOf("$rtspUrl#tcp")
+
+                if (!go2rtc.containsKey("webrtc")) {
+                    go2rtc["webrtc"] = mutableMapOf(
+                        "candidates" to listOf("{FRIGATE_HOST_IP}:8555", "stun:8555")
                     )
-                )
-            )
-            
-            cameras[slug] = newCamConfig
-            
-            // Add to go2rtc streams. Use #tcp to avoid UDP drop (giật lag)
-            val go2rtc = configData.getOrPut("go2rtc") { mutableMapOf<String, Any>() } as MutableMap<String, Any>
-            val streams = go2rtc.getOrPut("streams") { mutableMapOf<String, Any>() } as MutableMap<String, Any>
-            streams[slug] = listOf("$rtspUrl#tcp")
-            
-            if (!go2rtc.containsKey("webrtc")) {
-                go2rtc["webrtc"] = mutableMapOf(
-                    "candidates" to listOf("{FRIGATE_HOST_IP}:8555", "stun:8555")
-                )
-            }
-            
-            val options = org.yaml.snakeyaml.DumperOptions().apply {
-                defaultFlowStyle = org.yaml.snakeyaml.DumperOptions.FlowStyle.BLOCK
-            }
-            java.io.FileWriter(file).use { writer ->
-                Yaml(options).dump(configData, writer)
+                }
+
+                val options = org.yaml.snakeyaml.DumperOptions().apply {
+                    defaultFlowStyle = org.yaml.snakeyaml.DumperOptions.FlowStyle.BLOCK
+                }
+                java.io.FileWriter(file).use { writer ->
+                    Yaml(options).dump(configData, writer)
+                }
             }
 
-            // Restart Frigate to apply config
-            try {
+            // Restart Frigate and report status back to frontend
+            val frigateRestarted = try {
                 val frigateUrl = System.getenv("FRIGATE_URL") ?: "http://localhost:5000"
-                val restartUrl = java.net.URL("$frigateUrl/api/restart")
-                val conn = restartUrl.openConnection() as java.net.HttpURLConnection
+                val conn = java.net.URL("$frigateUrl/api/restart").openConnection() as java.net.HttpURLConnection
                 conn.requestMethod = "POST"
                 conn.connectTimeout = 3000
                 conn.readTimeout = 3000
-                conn.responseCode // trigger the request
+                val code = conn.responseCode
+                code in 200..299
             } catch (e: Exception) {
                 call.application.environment.log.warn("Failed to trigger Frigate restart: ${e.message}")
+                false
             }
-            
-            call.respondText("""{"success":true,"message":"Camera added successfully"}""", io.ktor.http.ContentType.Application.Json)
+
+            call.respondText(
+                """{"success":true,"frigateRestarted":$frigateRestarted,"message":"Camera added successfully"}""",
+                io.ktor.http.ContentType.Application.Json
+            )
         } catch (e: Exception) {
             call.application.environment.log.error("Error adding camera", e)
             call.respondText("""{"error":"${e.message}"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.InternalServerError)
@@ -275,20 +289,23 @@ fun Route.cameraRouting() {
 
             // Remove from config.yml
             if (file.exists()) {
-                val yaml = Yaml()
-                val configData = yaml.load<MutableMap<String, Any>>(file.readText()) ?: mutableMapOf()
-                val cameras = configData["cameras"] as? MutableMap<String, Any>
-                val removed = cameras?.remove(cameraId) != null
+                val removed = configMutex.withLock {
+                    val yaml = Yaml()
+                    val configData = yaml.load<MutableMap<String, Any>>(file.readText()) ?: mutableMapOf()
+                    val cameras = configData["cameras"] as? MutableMap<String, Any>
+                    val wasRemoved = cameras?.remove(cameraId) != null
 
-                val go2rtcSection = configData["go2rtc"] as? MutableMap<String, Any>
-                val go2rtcStreams = go2rtcSection?.get("streams") as? MutableMap<String, Any>
-                go2rtcStreams?.remove(cameraId)
+                    val go2rtcSection = configData["go2rtc"] as? MutableMap<String, Any>
+                    val go2rtcStreams = go2rtcSection?.get("streams") as? MutableMap<String, Any>
+                    go2rtcStreams?.remove(cameraId)
 
-                val options = org.yaml.snakeyaml.DumperOptions().apply {
-                    defaultFlowStyle = org.yaml.snakeyaml.DumperOptions.FlowStyle.BLOCK
-                }
-                java.io.FileWriter(file).use { writer ->
-                    Yaml(options).dump(configData, writer)
+                    val options = org.yaml.snakeyaml.DumperOptions().apply {
+                        defaultFlowStyle = org.yaml.snakeyaml.DumperOptions.FlowStyle.BLOCK
+                    }
+                    java.io.FileWriter(file).use { writer ->
+                        Yaml(options).dump(configData, writer)
+                    }
+                    wasRemoved
                 }
 
                 // Remove from DB
@@ -410,92 +427,86 @@ fun Route.cameraRouting() {
                 call.respond(HttpStatusCode.NotFound, mapOf("error" to "Config file not found"))
                 return@post
             }
-            
-            val yaml = Yaml()
-            val configData = yaml.load<MutableMap<String, Any>>(file.readText())
-            val cameras = configData["cameras"] as? MutableMap<String, Any>
-            if (cameras == null || cameras[id] == null) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Camera not found"))
-                return@post
-            }
-            
-            val camConfig = cameras[id] as MutableMap<String, Any>
-            
-            val allObjects = mutableSetOf<String>()
-            val zoneNames = zonesMap.keys.toList()
-            zonesMap.values.forEach { zData ->
-                val zMap = zData as? Map<String, Any>
-                val objs = zMap?.get("objects") as? List<String>
-                objs?.let { allObjects.addAll(it) }
-            }
 
-            // update detect
-            val detectRaw = camConfig["detect"] as? Map<*, *>
-            val detect = if (detectRaw != null) (detectRaw as Map<String, Any>).toMutableMap() else mutableMapOf()
-            
-            // Final AI state: Only enabled if user checked it AND there is at least one object in a zone
-            val finalEnabled = enabled && allObjects.isNotEmpty()
-            detect["enabled"] = finalEnabled
-            camConfig["detect"] = detect
+            configMutex.withLock {
+                val yaml = Yaml()
+                val configData = yaml.load<MutableMap<String, Any>>(file.readText())
+                val cameras = configData["cameras"] as? MutableMap<String, Any>
+                if (cameras == null || cameras[id] == null) return@withLock
 
-            // update review config to restrict alerts to chosen zones
-            val reviewRaw = camConfig["review"] as? Map<*, *>
-            val review = if (reviewRaw != null) (reviewRaw as Map<String, Any>).toMutableMap() else mutableMapOf()
-            val alertsRaw = review["alerts"] as? Map<*, *>
-            val alerts = if (alertsRaw != null) (alertsRaw as Map<String, Any>).toMutableMap() else mutableMapOf()
+                val camConfig = cameras[id] as MutableMap<String, Any>
 
-            if (zonesMap.isEmpty() || allObjects.isEmpty()) {
-                camConfig.remove("zones")
-                alerts.remove("required_zones") 
-            } else {
-                camConfig["zones"] = zonesMap
-                alerts["required_zones"] = zoneNames
-            }
-            
-            if (alerts.isEmpty()) review.remove("alerts") else review["alerts"] = alerts
-            if (review.isEmpty()) camConfig.remove("review") else review["review"] = review
-            
-            // update tracked objects - EXCLUSIVE (no more additive)
-            if (allObjects.isNotEmpty()) {
-                val objectsRaw = camConfig["objects"] as? Map<*, *>
-                val objects = if (objectsRaw != null) (objectsRaw as Map<String, Any>).toMutableMap() else mutableMapOf()
-                objects["track"] = allObjects.toList()
-                camConfig["objects"] = objects
-            } else {
-                camConfig.remove("objects")
-            }
-
-            // update roles dynamically
-            val ffmpegRaw = camConfig["ffmpeg"] as? Map<*, *>
-            val ffmpeg = if (ffmpegRaw != null) (ffmpegRaw as Map<String, Any>).toMutableMap() else mutableMapOf()
-            
-            val inputsRaw = ffmpeg["inputs"] as? List<*>
-            if (inputsRaw != null && inputsRaw.isNotEmpty()) {
-                val inputs = inputsRaw.toMutableList()
-                val firstInputRaw = inputs[0] as? Map<*, *>
-                if (firstInputRaw != null) {
-                    val firstInput = (firstInputRaw as Map<String, Any>).toMutableMap()
-                    val rolesRaw = firstInput["roles"] as? List<*>
-                    val roles = rolesRaw?.map { it.toString() }?.toMutableList() ?: mutableListOf()
-                    
-                    if (finalEnabled) {
-                        if (!roles.contains("detect")) roles.add("detect")
-                    } else {
-                        roles.remove("detect")
-                    }
-                    
-                    firstInput["roles"] = roles
-                    inputs[0] = firstInput
-                    ffmpeg["inputs"] = inputs
+                val allObjects = mutableSetOf<String>()
+                val zoneNames = zonesMap.keys.toList()
+                zonesMap.values.forEach { zData ->
+                    val zMap = zData as? Map<String, Any>
+                    val objs = zMap?.get("objects") as? List<String>
+                    objs?.let { allObjects.addAll(it) }
                 }
-            }
-            camConfig["ffmpeg"] = ffmpeg
-            
-            val options = org.yaml.snakeyaml.DumperOptions().apply {
-                defaultFlowStyle = org.yaml.snakeyaml.DumperOptions.FlowStyle.BLOCK
-            }
-            java.io.FileWriter(file).use { writer ->
-                Yaml(options).dump(configData, writer)
+
+                val detectRaw = camConfig["detect"] as? Map<*, *>
+                val detect = if (detectRaw != null) (detectRaw as Map<String, Any>).toMutableMap() else mutableMapOf()
+
+                val finalEnabled = enabled && allObjects.isNotEmpty()
+                detect["enabled"] = finalEnabled
+                camConfig["detect"] = detect
+
+                val reviewRaw = camConfig["review"] as? Map<*, *>
+                val review = if (reviewRaw != null) (reviewRaw as Map<String, Any>).toMutableMap() else mutableMapOf()
+                val alertsRaw = review["alerts"] as? Map<*, *>
+                val alerts = if (alertsRaw != null) (alertsRaw as Map<String, Any>).toMutableMap() else mutableMapOf()
+
+                if (zonesMap.isEmpty() || allObjects.isEmpty()) {
+                    camConfig.remove("zones")
+                    alerts.remove("required_zones")
+                } else {
+                    camConfig["zones"] = zonesMap
+                    alerts["required_zones"] = zoneNames
+                }
+
+                if (alerts.isEmpty()) review.remove("alerts") else review["alerts"] = alerts
+                if (review.isEmpty()) camConfig.remove("review") else review["review"] = review
+
+                if (allObjects.isNotEmpty()) {
+                    val objectsRaw = camConfig["objects"] as? Map<*, *>
+                    val objects = if (objectsRaw != null) (objectsRaw as Map<String, Any>).toMutableMap() else mutableMapOf()
+                    objects["track"] = allObjects.toList()
+                    camConfig["objects"] = objects
+                } else {
+                    camConfig.remove("objects")
+                }
+
+                val ffmpegRaw = camConfig["ffmpeg"] as? Map<*, *>
+                val ffmpeg = if (ffmpegRaw != null) (ffmpegRaw as Map<String, Any>).toMutableMap() else mutableMapOf()
+
+                val inputsRaw = ffmpeg["inputs"] as? List<*>
+                if (inputsRaw != null && inputsRaw.isNotEmpty()) {
+                    val inputs = inputsRaw.toMutableList()
+                    val firstInputRaw = inputs[0] as? Map<*, *>
+                    if (firstInputRaw != null) {
+                        val firstInput = (firstInputRaw as Map<String, Any>).toMutableMap()
+                        val rolesRaw = firstInput["roles"] as? List<*>
+                        val roles = rolesRaw?.map { it.toString() }?.toMutableList() ?: mutableListOf()
+
+                        if (finalEnabled) {
+                            if (!roles.contains("detect")) roles.add("detect")
+                        } else {
+                            roles.remove("detect")
+                        }
+
+                        firstInput["roles"] = roles
+                        inputs[0] = firstInput
+                        ffmpeg["inputs"] = inputs
+                    }
+                }
+                camConfig["ffmpeg"] = ffmpeg
+
+                val options = org.yaml.snakeyaml.DumperOptions().apply {
+                    defaultFlowStyle = org.yaml.snakeyaml.DumperOptions.FlowStyle.BLOCK
+                }
+                java.io.FileWriter(file).use { writer ->
+                    Yaml(options).dump(configData, writer)
+                }
             }
 
             // NOTE: No auto-restart here — user must call /ai/apply to restart Frigate
@@ -584,6 +595,20 @@ fun Route.cameraRouting() {
     }
 }
 
+
+private fun validateRtspUrl(url: String): String? {
+    if (url.isBlank()) return "RTSP URL không được để trống"
+    val lower = url.lowercase()
+    if (!lower.startsWith("rtsp://") && !lower.startsWith("rtsps://")) {
+        return "URL phải bắt đầu bằng rtsp:// hoặc rtsps://"
+    }
+    val host = url.substringAfter("//").substringAfterLast("@").substringBefore("/").substringBefore(":").lowercase()
+    val blockedHosts = setOf("localhost", "host.docker.internal")
+    if (host in blockedHosts) return "URL trỏ đến host bị cấm"
+    if (host == "127.0.0.1" || host.startsWith("127.")) return "URL trỏ đến loopback bị cấm"
+    if (host.startsWith("169.254.")) return "URL trỏ đến địa chỉ bị cấm"
+    return null
+}
 
 private fun parseIpFromRtsp(rtsp: String): String? {
     try {

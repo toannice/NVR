@@ -14,6 +14,8 @@ import vn.aiview.nvr.utils.AppLogger
 
 import vn.aiview.nvr.plugins.UserSession
 import vn.aiview.nvr.plugins.hashString
+import vn.aiview.nvr.plugins.hashPattern
+import vn.aiview.nvr.plugins.verifyPattern
 import vn.aiview.nvr.services.EmailService
 import io.ktor.server.sessions.*
 
@@ -34,6 +36,9 @@ data class SetupRequest(val pattern: String, val email: String, val otp: String)
 
 @Serializable
 data class ResetRequest(val email: String)
+
+@Serializable
+data class VerifyOtpRequest(val email: String, val otp: String)
 
 @Serializable
 data class ResetCompleteRequest(val pattern: String, val email: String, val otp: String)
@@ -62,17 +67,14 @@ fun Route.lockRouting() {
             try {
                 val data = call.receive<SetupRequest>()
                 
-                // HỖ TRỢ TEST: Bỏ qua verify nếu dùng email/otp test
-                val isTestBypass = data.email == "test@test.com" && data.otp == "000000"
-                
-                if (!isTestBypass && !EmailService.verifyOtp(data.email, data.otp)) {
+                if (!EmailService.verifyOtp(data.email, data.otp)) {
                     val ip = call.request.origin.remoteHost
                     AppLogger.warn(AppLogger.Module.SECURITY, "AUTH", "SETUP_FAILED", "Invalid OTP for email: ${data.email} | IP: $ip")
                     call.respond(HttpStatusCode.BadRequest, LockResponse(false, "Mã xác thực không chính xác hoặc đã hết hạn"))
                     return@post
                 }
 
-                val patternHash = hashString(data.pattern)
+                val patternHash = hashPattern(data.pattern)
                 val gmailHash = hashString(data.email)
 
                 transaction {
@@ -103,13 +105,18 @@ fun Route.lockRouting() {
                 }
 
                 val data = call.receive<LockRequest>()
-                val existingHash = transaction {
-                    LockConfig.selectAll().firstOrNull()?.get(LockConfig.hash)
+                val storedRow = transaction {
+                    LockConfig.selectAll().firstOrNull()
                 }
-                
-                val incomingHash = hashString(data.pattern)
-                
-                if (existingHash == incomingHash) {
+                val existingHash = storedRow?.get(LockConfig.hash)
+
+                val (matched, needsRehash) = if (existingHash != null) verifyPattern(data.pattern, existingHash) else Pair(false, false)
+
+                if (matched) {
+                    if (needsRehash) {
+                        // Silently upgrade legacy SHA-256 hash to bcrypt
+                        transaction { LockConfig.update { it[hash] = hashPattern(data.pattern) } }
+                    }
                     failedAttempts = 0
                     lockUntil = 0
                     call.sessions.set(UserSession("admin"))
@@ -129,6 +136,15 @@ fun Route.lockRouting() {
                 }
             } catch (e: Exception) {
                 call.respond(HttpStatusCode.InternalServerError, LockResponse(false, "Xác thực thất bại"))
+            }
+        }
+
+        post("/verify-otp") {
+            val data = call.receive<VerifyOtpRequest>()
+            if (EmailService.peekOtp(data.email, data.otp)) {
+                call.respond(LockResponse(true))
+            } else {
+                call.respond(HttpStatusCode.BadRequest, LockResponse(false, "Mã không đúng hoặc đã hết hạn"))
             }
         }
 
@@ -160,10 +176,10 @@ fun Route.lockRouting() {
                     return@post
                 }
 
-                val patternHash = hashString(data.pattern)
-                
+                val patternHash = hashPattern(data.pattern)
+
                 transaction {
-                    LockConfig.update({ LockConfig.id eq 1 }) {
+                    LockConfig.update {
                         it[hash] = patternHash
                     }
                 }

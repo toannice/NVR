@@ -79,6 +79,8 @@ services:
         condition: service_healthy
       mosquitto:
         condition: service_healthy
+    secrets:
+      - gmail_app_password
     environment:
       - FRIGATE_URL=http://localhost:5000
       - MQTT_URL=tcp://localhost:1883
@@ -87,6 +89,7 @@ services:
       - APP_VERSION=${APP_VERSION:-1.2.0}
       - DEPLOY_VERSION=${DEPLOY_VERSION:-dev}   # Injected by GitHub Actions — shows on Web UI
       - TZ=${TZ:-Asia/Ho_Chi_Minh}
+      - GMAIL_USER=${GMAIL_USER}               # Username is not sensitive, stays as env var
     healthcheck:
       test: [ "CMD-SHELL", "curl -f http://127.0.0.1:3000/api/health || exit 1" ]
       interval: 20s
@@ -144,7 +147,12 @@ services:
       - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
     command: tunnel --no-autoupdate run
 
-  # ─── Networks ──────────────────────────────────────────────
+  # ─── Secrets ───────────────────────────────────────────────
+secrets:
+  gmail_app_password:
+    file: ./secrets/gmail_app_password
+
+# ─── Networks ──────────────────────────────────────────────
 networks:
   nvr-backend:
     name: nvr-backend

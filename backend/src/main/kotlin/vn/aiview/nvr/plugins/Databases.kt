@@ -23,6 +23,7 @@ fun Application.configureDatabases() {
             Cameras,
             Schedules,
             LockConfig,
+            OtpTokens,
             AIEvents
         )
     }

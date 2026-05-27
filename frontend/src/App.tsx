@@ -2761,10 +2761,11 @@ const ToastContainer = ({ toasts, removeToast }: any) => {
         <div
           key={toast.key}
           className={`flex items-center p-4 rounded-lg shadow-lg text-white min-w-[300px] animate-fade-in-up transition-all duration-300 ${toast.type === 'success' ? 'bg-green-600' :
-            toast.type === 'error' ? 'bg-red-600' : 'bg-blue-600'
+            toast.type === 'error' ? 'bg-red-600' :
+            toast.type === 'warning' ? 'bg-yellow-600' : 'bg-blue-600'
             }`}
         >
-          <Icon name={toast.type === 'success' ? 'check_circle' : toast.type === 'error' ? 'error' : 'info'} className="mr-3 text-2xl" />
+          <Icon name={toast.type === 'success' ? 'check_circle' : toast.type === 'error' ? 'error' : toast.type === 'warning' ? 'warning' : 'info'} className="mr-3 text-2xl" />
           <div className="flex-1">
             <h4 className="font-bold text-sm">{toast.title}</h4>
             <p className="text-sm opacity-90">{toast.message}</p>
@@ -3382,7 +3383,7 @@ function App() {
   // Toast State
   const [toasts, setToasts] = useState<any[]>([]);
 
-  const addToast = (toast: { type: 'success' | 'error' | 'info', title: string, message: string }) => {
+  const addToast = (toast: { type: 'success' | 'error' | 'info' | 'warning', title: string, message: string }) => {
     const id = Date.now();
     setToasts(prev => [...prev, { ...toast, key: id }]);
     setTimeout(() => {
@@ -3584,6 +3585,9 @@ function App() {
         setSetupStatus('Added successfully');
         await fetchCameras();
         addToast({ type: 'success', title: 'Thành công', message: `Đã thêm camera "${params.name}" thành công!` });
+        if (data.frigateRestarted === false) {
+          addToast({ type: 'warning', title: 'Cảnh báo', message: 'Không thể restart Frigate. Camera sẽ hoạt động sau khi Frigate khởi động lại.' });
+        }
         return data;
       } else {
         const errorMsg = data.error || 'Failed to add camera';
