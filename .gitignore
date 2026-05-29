@@ -49,3 +49,8 @@ mosquitto/log/
 media/
 
 
+
+# Runtime / secrets / build artifacts
+data/dc-bridge
+data/.device_key
+secrets/

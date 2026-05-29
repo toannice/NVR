@@ -86,6 +86,11 @@ Stage 3: eclipse-temurin:21-jre-alpine → runtime image
 | `backend/src/main/kotlin/vn/aiview/nvr/services/CameraConfigMutex.kt` | Shared mutex for all config.yml + Cameras DB writes |
 | `backend/src/main/kotlin/vn/aiview/nvr/cloud/Go2RtcClient.kt` | Sync PUT/DELETE against go2rtc REST API on 127.0.0.1:1984 |
 | `backend/src/main/kotlin/vn/aiview/nvr/cloud/DeviceConstants.kt` | Placeholder model/firmware/storage values returned to AIView cloud |
+| `backend/src/main/kotlin/vn/aiview/nvr/cloud/DcBridgeManager.kt` | Spawn `dc-bridge` Go sidecar; resolves binary from `DC_BRIDGE_PATH` env / `/app/data/dc-bridge` / `~/.aiview/dc-bridge` |
+| `backend/src/main/kotlin/vn/aiview/nvr/cloud/DataChannelManagerDesktop.kt` | Linux WebRTC DATA peer — HTTP client to dc-bridge on `127.0.0.1:8766` |
+| `backend/src/main/kotlin/vn/aiview/nvr/routes/CloudRouting.kt` | `POST /internal/dc/command` — dc-bridge callback into CommandDispatcher |
+| `data/dc-bridge` | Go Pion WebRTC sidecar binary (linux/amd64), required for device_service DATA queries |
+| `connection_to_server.md` | Full guide: how a Linux device connects to AIView cloud + dc-bridge build steps |
 | `backend/src/main/kotlin/vn/aiview/nvr/routes/LockRouting.kt` | Pattern lock API, OTP verify endpoint |
 | `backend/src/main/kotlin/vn/aiview/nvr/routes/OnvifRouting.kt` | Scan ONVIF, thêm camera qua ONVIF |
 | `backend/src/main/kotlin/vn/aiview/nvr/services/EmailService.kt` | Gmail SMTP, OTP send/peek/verify với SQLite |
@@ -183,6 +188,40 @@ Delete đi qua `CameraService.removeAndPersist(slugOrChannelId)` — idempotent,
 
 ---
 
+## Cloud Connection — Linux Device
+
+Chi tiết đầy đủ: **[connection_to_server.md](./connection_to_server.md)**.
+
+Tóm tắt 3 đường data đi tới cloud:
+
+| Kênh | Vận chuyển | Loại dữ liệu | Phụ thuộc |
+|---|---|---|---|
+| MQTT | tcp 1883 | Camera CRUD (`channel_service`), heartbeat | mosquitto broker reach được cloud |
+| WebRTC LIVE | UDP/TCP qua ICE | Stream video camera | `go2rtc` ở `127.0.0.1:1984` |
+| WebRTC DATA | UDP/TCP qua ICE | **Device info, ethernet, time** (`device_service`) | **Binary `dc-bridge`** ở `data/dc-bridge` |
+
+### dc-bridge (BẮT BUỘC để dashboard hiện Device info)
+
+Cloud KHÔNG hỏi `get_information / get_ethernet / get_time` qua MQTT — chỉ qua WebRTC DATA channel. JVM `dev.onvoid.webrtc` không chạy được headless Linux, nên cần sidecar Go (Pion).
+
+**Build cho linux/amd64:**
+```bash
+SRC=~/Documents/1CodeBkav/B02/aiview_b02_box/dc-bridge
+mkdir -p /tmp/dc-bridge-build && cp "$SRC"/{main.go,go.mod,go.sum} /tmp/dc-bridge-build/
+# Patch port JVM (8080 → 3000 vì backend NVR ở 3000)
+sed -i 's|127.0.0.1:8080/internal/dc/command|127.0.0.1:3000/internal/dc/command|' /tmp/dc-bridge-build/main.go
+cd /tmp/dc-bridge-build
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /home/toan/my-nvr/data/dc-bridge -ldflags='-s -w' .
+chmod +x /home/toan/my-nvr/data/dc-bridge
+docker compose restart nvr-wrapper
+```
+
+Verify ở log: `DC_BRIDGE_STARTED | dc-bridge started from /app/data/dc-bridge`.
+
+`DcBridgeManager` spawn binary tự động khi backend khởi động. Reference source + binary arm64 ở `~/Documents/1CodeBkav/B02/aiview_b02_box/dc-bridge/`.
+
+---
+
 ## Known Issues & Fixes
 
 | Vấn đề | Nguyên nhân | Fix |
@@ -194,6 +233,9 @@ Delete đi qua `CameraService.removeAndPersist(slugOrChannelId)` — idempotent,
 | GHCR pull fail | GitHub token hết hạn | `echo <token> \| docker login ghcr.io -u toannice --password-stdin` |
 | OTP input bị browser validate như email | `renderInput()` dùng `title.includes('Mã')` — fragile | Dùng `isOtp?: boolean` param tường minh |
 | `otp_tokens` table không tự tạo trên DB cũ | Exposed WAL behavior | Tạo thủ công bằng sqlite3 |
+| Dashboard cloud online nhưng KHÔNG có Device info / Ethernet / Time | DATA channel fail vì thiếu binary `dc-bridge` | Build dc-bridge linux/amd64 với JVM port=3000, drop vào `data/dc-bridge` — xem `connection_to_server.md` |
+| `DC_OFFER_FAIL Connection refused` trong log | dc-bridge chưa start hoặc port 8766 bị chiếm | `docker compose logs nvr-wrapper \| grep dc-bridge`; kiểm tra `DC_BRIDGE_STARTED` |
+| dc-bridge start nhưng cloud không nhận response | `jvmCommandURL` trong `main.go` hardcode port 8080, backend NVR ở 3000 | Patch `sed` rồi build lại |
 
 ---
 
