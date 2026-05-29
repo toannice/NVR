@@ -4,6 +4,7 @@ import io.ktor.server.application.*
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
 import vn.aiview.nvr.plugins.*
+import vn.aiview.nvr.services.CloudService
 import vn.aiview.nvr.utils.AppLogger
 import java.io.File
 
@@ -33,4 +34,5 @@ fun Application.module() {
     
     vn.aiview.nvr.services.MqttService.start()
     vn.aiview.nvr.services.RecordingScheduler.start()
+    CloudService.start()
 }

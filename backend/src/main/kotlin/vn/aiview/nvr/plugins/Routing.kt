@@ -23,6 +23,9 @@ fun Application.configureRouting() {
             onvifRouting()
         }
         
+        // Cloud connection (public — internal dc-bridge callback + config endpoints)
+        cloudRouting()
+
         // Static files (for frontend)
         staticFilesRouting()
     }

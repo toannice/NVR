@@ -1,0 +1,29 @@
+{
+  "_comment": "Request + response shapes for component=channel_service, func=post_channels (and put_channels).",
+  "request_body_params_data": {
+    "channel_id": "1",
+    "host": "192.168.2.50",
+    "port": 80,
+    "username": "admin",
+    "password": "secret",
+    "manufacture": "Hikvision"
+  },
+  "response": {
+    "status": true,
+    "message": "post.device.success",
+    "error_code": "I200",
+    "data": {
+      "status": true,
+      "message": "post.device.success",
+      "data": { "status": "" },
+      "error_code": "",
+      "frigate_restarted": true
+    }
+  },
+  "side_effects": [
+    "Upsert into unified Cameras table (slug = cam_<channel_id> if new) with ONVIF tokens + RTSP URL + encrypted password",
+    "Write/update config/config.yml under configMutex",
+    "PUT http://127.0.0.1:1984/api/streams?name=<channel_id>_main&src=<rtsp_url>#backchannel=0 (synchronous, 5s timeout)",
+    "POST http://localhost:5000/api/restart (Frigate reload)"
+  ]
+}

@@ -3,7 +3,11 @@
 ## Repository
 - **GitHub:** https://github.com/toannice/NVR.git
 - **Main branch:** `main`
-- **Active feature branch:** `001-nvr-aibox-connect`
+- **Active feature branch:** `003-cloud-data-sync`
+- **Active feature plan:** `specs/003-cloud-data-sync/plan.md`
+<!-- SPECKIT START -->
+- **Plan:** `specs/003-cloud-data-sync/plan.md`
+<!-- SPECKIT END -->
 - **Working directory on host:** `/home/toan/my-nvr`
 
 ---
@@ -15,7 +19,7 @@ Multi-service NVR (Network Video Recorder) chạy trên Ubuntu, deploy bằng Do
 ```
 mosquitto (MQTT) → frigate (NVR engine) → nvr-wrapper (Kotlin/React app)
                                                     ↑
-                         nvr-watchdog (OTA + health) + nginx (HTTPS) + cloudflared (tunnel)
+                         nvr-watchdog (OTA + health) + nginx (HTTPS)
 ```
 
 ### Services
@@ -26,7 +30,6 @@ mosquitto (MQTT) → frigate (NVR engine) → nvr-wrapper (Kotlin/React app)
 | `nvr-wrapper` | `nvr-wrapper:latest` (override bởi docker-compose.override.yml) | 3000 (host) | App chính (Kotlin backend + React frontend) |
 | `nvr-watchdog` | build local `./watchdog` | — | Self-healing + OTA |
 | `nvr-nginx` | `nginx:stable-alpine` | 443 (host) | HTTPS gateway |
-| `cloudflared` | `cloudflare/cloudflared:latest` | — | Remote tunnel |
 
 ---
 
@@ -78,7 +81,11 @@ Stage 3: eclipse-temurin:21-jre-alpine → runtime image
 |------|-------|
 | `frontend/src/App.tsx` | Toàn bộ React UI (file lớn, ~3000+ dòng) |
 | `frontend/src/components/PatternLockScreen.tsx` | Pattern lock, setup, Gmail OTP flow (~442 dòng) |
-| `backend/src/main/kotlin/vn/aiview/nvr/routes/CameraRouting.kt` | API thêm/xóa/sửa camera, sinh config Frigate; RTSP validation, config mutex |
+| `backend/src/main/kotlin/vn/aiview/nvr/routes/CameraRouting.kt` | Local Web UI camera CRUD endpoints; delegates persistence to `CameraService` |
+| `backend/src/main/kotlin/vn/aiview/nvr/services/CameraService.kt` | Unified add/update/remove path used by Web UI AND cloud handler (003) |
+| `backend/src/main/kotlin/vn/aiview/nvr/services/CameraConfigMutex.kt` | Shared mutex for all config.yml + Cameras DB writes |
+| `backend/src/main/kotlin/vn/aiview/nvr/cloud/Go2RtcClient.kt` | Sync PUT/DELETE against go2rtc REST API on 127.0.0.1:1984 |
+| `backend/src/main/kotlin/vn/aiview/nvr/cloud/DeviceConstants.kt` | Placeholder model/firmware/storage values returned to AIView cloud |
 | `backend/src/main/kotlin/vn/aiview/nvr/routes/LockRouting.kt` | Pattern lock API, OTP verify endpoint |
 | `backend/src/main/kotlin/vn/aiview/nvr/routes/OnvifRouting.kt` | Scan ONVIF, thêm camera qua ONVIF |
 | `backend/src/main/kotlin/vn/aiview/nvr/services/EmailService.kt` | Gmail SMTP, OTP send/peek/verify với SQLite |
@@ -157,14 +164,22 @@ A `kotlinx.coroutines.sync.Mutex` (`configMutex`) in `CameraRouting.kt` wraps al
 
 ---
 
-## Thêm Camera: Luồng dữ liệu
+## Thêm Camera: Luồng dữ liệu (003 — unified)
 
-1. User nhập thông tin trên UI (tab ONVIF hoặc tab RTSP trực tiếp)
-2. Frontend gọi API `/api/add-camera` (POST)
-3. `CameraRouting.kt` validate RTSP URL → acquire mutex → đọc/sửa/ghi `config/config.yml` → release mutex
-4. Backend gọi `POST http://localhost:5000/api/restart` → trả về `frigateRestarted: true/false`
-5. Frontend hiện warning toast nếu `frigateRestarted === false`
-6. Frigate kết nối RTSP qua go2rtc → restream nội bộ trên `rtsp://127.0.0.1:8554/<slug>`
+Cả Web UI lẫn cloud dashboard giờ đi qua **một** code path: `CameraService.applyAndPersist*`.
+
+1. User nhập thông tin (Web UI tab ONVIF/RTSP, hoặc cloud dashboard `post_channels`)
+2. `CameraRouting.kt#addCamera` (Web UI) hoặc `CameraCommandHandler.kt#postOrPutChannels` (cloud) parse request
+3. → `CameraService.applyAndPersistFromRtsp` (Web UI, RTSP URL đã có) hoặc `applyAndPersistFromOnvif` (cloud, ONVIF probe trước)
+4. `CameraService` acquire `CameraConfigMutex.mutex`, làm tuần tự:
+   - UPSERT row vào bảng `Cameras` (unified — không còn `CloudCameras`); gán `channel_id` nếu mới
+   - Ghi `config/config.yml` (cameras + go2rtc.streams entry)
+   - `Go2RtcClient.registerStreamSync("${channelId}_main", ...)` — chờ go2rtc PUT 200 OK (5s timeout)
+5. Trigger `POST http://localhost:5000/api/restart` → trả `frigateRestarted: true/false`
+6. Web UI hiện toast warning nếu `frigateRestarted === false`; cloud trả về `body.data.frigate_restarted`
+7. Cloud `get_channels` đọc cùng bảng `Cameras` → cloud và Web UI luôn thấy danh sách giống nhau
+
+Delete đi qua `CameraService.removeAndPersist(slugOrChannelId)` — idempotent, xóa DB + YAML + go2rtc stream + trigger Frigate restart.
 
 ---
 
@@ -193,6 +208,7 @@ A `kotlinx.coroutines.sync.Mutex` (`configMutex`) in `CameraRouting.kt` wraps al
 | 5 | Frigate restart feedback to UI | ✅ Done |
 | 6 | Gmail OTP persistence (SQLite) | ✅ Done |
 | 7 | Docker secrets for GMAIL_APP_PASSWORD | ✅ Done |
+| 8 | Unified Cameras source of truth (drop CloudCameras drift) | ✅ Done (003) |
 
 ---
 
@@ -204,7 +220,6 @@ NEVER commit `.env`. Các biến quan trọng:
 - `WRAPPER_TAG` — tag image nvr-wrapper (thực tế override bởi docker-compose.override.yml → `nvr-wrapper:latest`)
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — Watchdog alert
 - `GITHUB_TOKEN` — Pull image từ GHCR (cần refresh khi hết hạn)
-- `CLOUDFLARE_TUNNEL_TOKEN` — Remote access tunnel
 - `GMAIL_USER` — Gmail address (not sensitive)
 - `GMAIL_APP_PASSWORD` — **Moved to `secrets/gmail_app_password` Docker secret** (NOT in .env)
 
@@ -212,6 +227,6 @@ NEVER commit `.env`. Các biến quan trọng:
 
 ## Network
 
-- `nvr-wrapper`, `nginx`, `nvr-watchdog`, `cloudflared` dùng `network_mode: host` (cần cho ONVIF multicast và RTSP)
+- `nvr-wrapper`, `nginx`, `nvr-watchdog` dùng `network_mode: host` (cần cho ONVIF multicast và RTSP)
 - `mosquitto`, `frigate` dùng bridge network `nvr-backend`
 - Frigate có thể reach Tailscale/VPN IPs (100.64.x.x) từ trong container

@@ -15,7 +15,19 @@ object Cameras : Table("cameras") {
     val createdAt = datetime("created_at").defaultExpression(CurrentDateTime)
     val updatedAt = datetime("updated_at").defaultExpression(CurrentDateTime)
 
+    // Cloud-side fields (003-cloud-data-sync) — unified source of truth.
+    val channelId = varchar("channel_id", 50).nullable()
+    val username = varchar("username", 255).nullable()
+    val passwordEncrypted = text("password_encrypted").nullable()
+    val mainToken = varchar("main_token", 255).default("")
+    val subToken = varchar("sub_token", 255).default("")
+    val rtspUrl = text("rtsp_url").default("")
+    val subRtspUrl = text("sub_rtsp_url").nullable()
+    val macAddress = varchar("mac_address", 50).nullable()
+    val hasPtz = bool("has_ptz").default(false)
+
     override val primaryKey = PrimaryKey(slug)
+    init { uniqueIndex("cameras_channel_id_uq", channelId) }
 }
 
 object Schedules : Table("schedules") {
@@ -44,6 +56,36 @@ object OtpTokens : Table("otp_tokens") {
     val expiry = long("expiry")
 
     override val primaryKey = PrimaryKey(email)
+}
+
+object CloudConfig : Table("cloud_config") {
+    val id = integer("id").default(1)
+    val domain = varchar("domain", 255).default("")
+    val port = integer("port").default(443)
+    val username = varchar("username", 255).default("")
+    val passwordEncrypted = text("password_encrypted").default("")
+    val serial = varchar("serial", 20).default("")
+    val enabled = bool("enabled").default(false)
+    val updatedAt = datetime("updated_at").defaultExpression(CurrentDateTime)
+
+    override val primaryKey = PrimaryKey(id)
+}
+
+// DEPRECATED: migrated to Cameras in 003-cloud-data-sync. Kept for rollback safety; remove in next release.
+object CloudCameras : Table("cloud_cameras") {
+    val channelId = varchar("channel_id", 50)
+    val name = varchar("name", 255).default("")
+    val ip = varchar("ip", 100).default("")
+    val port = integer("port").default(80)
+    val username = varchar("username", 255).default("")
+    val password = varchar("password", 255).default("")
+    val mainToken = varchar("main_token", 255).default("")
+    val subToken = varchar("sub_token", 255).default("")
+    val rtspUrl = text("rtsp_url").default("")
+    val subRtspUrl = text("sub_rtsp_url").nullable()
+    val macAddress = varchar("mac_address", 50).nullable()
+    val hasPtz = bool("has_ptz").default(false)
+    override val primaryKey = PrimaryKey(channelId)
 }
 
 object AIEvents : Table("ai_events") {

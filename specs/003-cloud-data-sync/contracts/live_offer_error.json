@@ -1,0 +1,15 @@
+{
+  "_comment": "New: WebRTC LIVE answer envelope returned when extend.src does not resolve to any camera. Published on the same session pub topic the offer arrived from.",
+  "context": "signal.webrtc",
+  "type": "answer",
+  "source_id": "<myPeerId>",
+  "target_id": "<server>",
+  "auth": { "type": "inherit" },
+  "version": "1.0.2.3",
+  "data_encode_type": "base64",
+  "message_id": "<from offer>",
+  "offerid": "<from offer>",
+  "channel_id": "<from offer>",
+  "extend": { "type": "LIVE", "src": "<token from offer>" },
+  "data": "<base64 of {\"type\":\"answer\",\"sdp\":\"\",\"error_code\":\"E0007\",\"message\":\"Camera not found\"}>"
+}

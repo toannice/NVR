@@ -15,7 +15,8 @@ import java.util.concurrent.ConcurrentHashMap
 data class OnvifDeviceInfo(
     val manufacturer: String,
     val model: String,
-    val rtspUrl: String
+    val rtspUrl: String,
+    val profileToken: String = ""
 )
 
 object OnvifSoapClient {
@@ -142,7 +143,7 @@ $authHeader
             streamUri = streamUri.replace("rtsp://", "rtsp://$username:$password@")
         }
 
-        return OnvifDeviceInfo(manufacturer, model, streamUri)
+        return OnvifDeviceInfo(manufacturer, model, streamUri, firstProfileToken)
     }
 
     // ── NEW: PTZ helpers ──────────────────────────────────────────────────────

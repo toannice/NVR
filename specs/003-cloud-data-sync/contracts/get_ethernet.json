@@ -1,0 +1,20 @@
+{
+  "_comment": "Response body for cloud command component=device, func=get_ethernet. Returned inside the CommandDispatcher envelope.",
+  "status": true,
+  "message": "get.ip.success",
+  "error_code": "I3000",
+  "data": {
+    "ipv4": {
+      "dns1": "8.8.8.8",
+      "dns2": "8.8.4.4",
+      "gateway": "192.168.2.1",
+      "hostname": "nvr-aiview",
+      "ip_address": "192.168.2.137",
+      "mac_address": "a0:b1:c2:d3:e4:f5",
+      "subnet_mask": "255.255.255.0"
+    },
+    "ipv6": { "ip_address": "", "ip_type": "", "prefix": "", "use": false },
+    "mode": "DHCP",
+    "mode_list": ["DHCP", "Static"]
+  }
+}

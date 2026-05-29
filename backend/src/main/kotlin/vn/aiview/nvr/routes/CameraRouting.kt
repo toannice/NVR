@@ -20,12 +20,12 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 
 import kotlinx.serialization.Serializable
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import vn.aiview.nvr.utils.HwaccelDetector
+import vn.aiview.nvr.services.CameraConfigMutex
 
-private val configMutex = Mutex()
+private val configMutex = CameraConfigMutex.mutex
 
 @Serializable
 data class CameraStatus(val id: String, val name: String, val rtsp: String, val ip: String?, val manufacturer: String, val model: String, val onvifPort: Int = 80, val ptzEnabled: Boolean = false)
@@ -117,154 +117,41 @@ fun Route.cameraRouting() {
             }
 
             val ipAddr = parseIpFromRtsp(rtspUrl) ?: ""
-            // Ensure unique slug by appending IP if name is generic
             val slug = "${name.lowercase().replace(Regex("[^a-z0-9]+"), "_")}_${ipAddr.replace(".", "_")}"
-            
+
             val configPath = System.getenv("CONFIG_PATH") ?: "config/config.yml"
-            
-            var isDuplicate = false
-            var shouldUpdate = false
-            var existingOldSlug = ""
-            transaction {
-                val existingRecord = if (ipAddr.isNotEmpty()) {
-                    Cameras.selectAll().where { Cameras.ip eq ipAddr }.firstOrNull()
-                } else null
-                
-                if (existingRecord != null) {
-                    // If IP exists, check if it's already in the config file
-                    val configFile = File(configPath)
-                    if (configFile.exists()) {
-                        val yaml = Yaml()
-                        val currentConfig = yaml.load<Map<String, Any>>(configFile.readText())
-                        val currentCameras = currentConfig["cameras"] as? Map<String, Any> ?: emptyMap()
-                        val dbSlug = existingRecord[Cameras.slug]
-                        existingOldSlug = dbSlug
-                        
-                        if (currentCameras.containsKey(dbSlug)) {
-                            isDuplicate = true
-                        } else {
-                            // IP exists in DB but not in Config -> Allow update/overwrite
-                            shouldUpdate = true
-                        }
-                    } else {
-                        shouldUpdate = true
-                    }
-                }
-                
-                if (!isDuplicate) {
-                    if (shouldUpdate && ipAddr.isNotEmpty()) {
-                        // Update both displayName AND slug in DB so it matches the config key
-                        Cameras.update({ Cameras.ip eq ipAddr }) {
-                            it[this.displayName] = name
-                            it[this.slug] = slug
-                        }
-                    } else {
-                        val existingSlugCount = Cameras.selectAll().where { Cameras.slug eq slug }.count()
-                        if (existingSlugCount > 0) {
-                            isDuplicate = true
-                        } else {
-                            Cameras.insert {
-                                it[this.slug] = slug
-                                it[this.displayName] = name
-                                it[this.ip] = ipAddr
-                                it[this.manufacturer] = "Unknown"
-                                it[this.model] = "Unknown"
-                                it[this.onvifPort] = onvifPort
-                                it[this.ptzEnabled] = ptzEnabled
-                            }
-                        }
-                    }
+            val existingInDb = transaction {
+                Cameras.selectAll().where { Cameras.slug eq slug }.firstOrNull()
+            }
+            if (existingInDb != null) {
+                val configFile = File(configPath)
+                val alreadyInYaml = if (configFile.exists()) {
+                    val yaml = Yaml()
+                    val cur = yaml.load<Map<String, Any>>(configFile.readText())
+                    (cur?.get("cameras") as? Map<String, Any>)?.containsKey(slug) == true
+                } else false
+                if (alreadyInYaml) {
+                    call.respondText("""{"error":"Camera với Tên hoặc IP này đã tồn tại"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.BadRequest)
+                    return@post
                 }
             }
-            
-            if (isDuplicate) {
-                call.respondText("""{"error":"Camera với Tên hoặc IP này đã tồn tại"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.BadRequest)
+
+            val applied = vn.aiview.nvr.services.CameraService.applyAndPersistFromRtsp(
+                slug = slug,
+                displayName = name,
+                rtspUrl = rtspUrl,
+                ip = ipAddr,
+                onvifPort = onvifPort,
+                ptzEnabled = ptzEnabled,
+                record = record,
+            ).getOrElse {
+                call.application.environment.log.error("CameraService.applyAndPersistFromRtsp failed", it)
+                call.respondText("""{"error":"${it.message}"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.InternalServerError)
                 return@post
-            }
-            
-            configMutex.withLock {
-                val file = File(configPath)
-                val yaml = Yaml()
-                val configData = if (file.exists()) yaml.load<MutableMap<String, Any>>(file.readText()) else mutableMapOf()
-
-                if (!configData.containsKey("mqtt")) {
-                    configData["mqtt"] = mutableMapOf("host" to "mosquitto", "port" to 1883)
-                }
-                if (!configData.containsKey("record")) {
-                    configData["record"] = mutableMapOf(
-                        "enabled" to true,
-                        "retain" to mapOf("days" to 7, "mode" to "all")
-                    )
-                }
-                if (!configData.containsKey("detect")) {
-                    configData["detect"] = mapOf("enabled" to true)
-                }
-                if (!configData.containsKey("version")) {
-                    configData["version"] = "0.16-0"
-                }
-                if (!configData.containsKey("ffmpeg")) {
-                    configData["ffmpeg"] = mutableMapOf("hwaccel_args" to HwaccelDetector.detectHwaccelArgs())
-                }
-
-                val cameras = configData.getOrPut("cameras") { mutableMapOf<String, Any>() } as MutableMap<String, Any>
-
-                val newCamConfig = mapOf(
-                    "ffmpeg" to mapOf(
-                        "hwaccel_args" to HwaccelDetector.detectHwaccelArgs(),
-                        "inputs" to listOf(
-                            mapOf(
-                                "path" to "rtsp://127.0.0.1:8554/$slug",
-                                "input_args" to "preset-rtsp-restream",
-                                "roles" to listOf("record", "detect")
-                            )
-                        )
-                    ),
-                    "detect" to mapOf("enabled" to true),
-                    "record" to mapOf(
-                        "enabled" to record,
-                        "retain" to mapOf(
-                            "days" to 7,
-                            "mode" to "all"
-                        )
-                    )
-                )
-
-                cameras[slug] = newCamConfig
-
-                val go2rtc = configData.getOrPut("go2rtc") { mutableMapOf<String, Any>() } as MutableMap<String, Any>
-                val streams = go2rtc.getOrPut("streams") { mutableMapOf<String, Any>() } as MutableMap<String, Any>
-                streams[slug] = listOf("$rtspUrl#tcp")
-
-                if (!go2rtc.containsKey("webrtc")) {
-                    go2rtc["webrtc"] = mutableMapOf(
-                        "candidates" to listOf("{FRIGATE_HOST_IP}:8555", "stun:8555")
-                    )
-                }
-
-                val options = org.yaml.snakeyaml.DumperOptions().apply {
-                    defaultFlowStyle = org.yaml.snakeyaml.DumperOptions.FlowStyle.BLOCK
-                }
-                java.io.FileWriter(file).use { writer ->
-                    Yaml(options).dump(configData, writer)
-                }
-            }
-
-            // Restart Frigate and report status back to frontend
-            val frigateRestarted = try {
-                val frigateUrl = System.getenv("FRIGATE_URL") ?: "http://localhost:5000"
-                val conn = java.net.URL("$frigateUrl/api/restart").openConnection() as java.net.HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.connectTimeout = 3000
-                conn.readTimeout = 3000
-                val code = conn.responseCode
-                code in 200..299
-            } catch (e: Exception) {
-                call.application.environment.log.warn("Failed to trigger Frigate restart: ${e.message}")
-                false
             }
 
             call.respondText(
-                """{"success":true,"frigateRestarted":$frigateRestarted,"message":"Camera added successfully"}""",
+                """{"success":true,"frigateRestarted":${applied.frigateRestarted},"message":"Camera added successfully"}""",
                 io.ktor.http.ContentType.Application.Json
             )
         } catch (e: Exception) {
@@ -287,33 +174,13 @@ fun Route.cameraRouting() {
             val configPath = System.getenv("CONFIG_PATH") ?: "config/config.yml"
             val file = File(configPath)
 
-            // Remove from config.yml
             if (file.exists()) {
-                val removed = configMutex.withLock {
-                    val yaml = Yaml()
-                    val configData = yaml.load<MutableMap<String, Any>>(file.readText()) ?: mutableMapOf()
-                    val cameras = configData["cameras"] as? MutableMap<String, Any>
-                    val wasRemoved = cameras?.remove(cameraId) != null
-
-                    val go2rtcSection = configData["go2rtc"] as? MutableMap<String, Any>
-                    val go2rtcStreams = go2rtcSection?.get("streams") as? MutableMap<String, Any>
-                    go2rtcStreams?.remove(cameraId)
-
-                    val options = org.yaml.snakeyaml.DumperOptions().apply {
-                        defaultFlowStyle = org.yaml.snakeyaml.DumperOptions.FlowStyle.BLOCK
-                    }
-                    java.io.FileWriter(file).use { writer ->
-                        Yaml(options).dump(configData, writer)
-                    }
-                    wasRemoved
+                vn.aiview.nvr.services.CameraService.removeAndPersist(cameraId).getOrElse {
+                    call.application.environment.log.error("CameraService.removeAndPersist failed", it)
+                    call.respondText("""{"error":"${it.message}"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.InternalServerError)
+                    return@post
                 }
-
-                // Remove from DB
-                transaction {
-                    Cameras.deleteWhere { Cameras.slug eq cameraId }
-                }
-
-                call.respondText("""{"success":true,"removed":$removed}""", io.ktor.http.ContentType.Application.Json)
+                call.respondText("""{"success":true,"removed":true}""", io.ktor.http.ContentType.Application.Json)
             } else {
                 call.respondText("""{"error":"Config file not found"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.NotFound)
             }
@@ -550,6 +417,7 @@ fun Route.cameraRouting() {
             val updated = transaction {
                 Cameras.update({ Cameras.slug eq id }) {
                     it[Cameras.ptzEnabled] = enabled
+                    it[Cameras.hasPtz] = enabled
                 }
             }
             if (updated > 0) {

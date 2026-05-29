@@ -1,0 +1,21 @@
+{
+  "_comment": "component=channel_service, func=del_channels. Idempotent — returns success even if camera already gone.",
+  "request_body_params_data": { "channel_id": "1" },
+  "response": {
+    "status": true,
+    "message": "delete.device.success",
+    "error_code": "I200",
+    "data": {
+      "status": true,
+      "message": "delete.device.success",
+      "data": { "status": "" },
+      "error_code": ""
+    }
+  },
+  "side_effects": [
+    "Delete row from unified Cameras table where channel_id matches (no error if missing)",
+    "Remove camera block from config/config.yml under configMutex",
+    "DELETE http://127.0.0.1:1984/api/streams?src=<channel_id>_main (errors swallowed)",
+    "POST http://localhost:5000/api/restart"
+  ]
+}
