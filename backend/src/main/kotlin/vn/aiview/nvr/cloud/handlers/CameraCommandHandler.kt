@@ -120,6 +120,8 @@ object CameraCommandHandler {
     }
 
     private fun postOrPutChannels(func: String, data: JsonObject): JsonObject {
+        AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "CHANNEL_ADD_PAYLOAD",
+            "func=$func keys=${data.keys} raw=${data.toString().take(500)}")
         val channelId = data["channel_id"]?.jsonPrimitive?.content
             ?: data["channelID"]?.jsonPrimitive?.content
             ?: return CommandDispatcher.errorResponse("E0007", "Missing channel_id")

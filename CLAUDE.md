@@ -222,6 +222,28 @@ Verify ở log: `DC_BRIDGE_STARTED | dc-bridge started from /app/data/dc-bridge`
 
 ---
 
+## PTZ / ONVIF (kể cả camera qua socat proxy)
+
+Web UI điều khiển PTZ qua `/api/cameras/{slug}/ptz/{capabilities,move,stop}` (`OnvifRouting.kt` + `OnvifSoapClient`). **Một code path cho cả camera LAN trực tiếp lẫn camera sau proxy** — vì `OnvifSoapClient` rewrite authority của ONVIF Media/PTZ XAddr về `ip:onvifPort`.
+
+`getCameraOnvifConfig` resolve creds: **ưu tiên `user:pass` nhúng trong URL RTSP của `config.yml`** (camera LAN), **fallback `Cameras.username` + giải mã `passwordEncrypted`** (camera proxy/cloud có URL RTSP không kèm creds).
+
+**Cấu hình camera qua proxy (Web UI → Sửa Camera):**
+- **Cổng ONVIF** = cổng socat proxy (vd `8080`, `8081`...). Mỗi camera field thường có 1 cổng proxy riêng trên gateway.
+- **ONVIF Username / Password** (để trống = giữ creds cũ).
+- **Kiểu PTZ**: `Tự động` (theo ONVIF `GetNodes`) | `Toàn phần` (ép Pan/Tilt/Zoom) | `Chỉ Zoom`. Lưu ở cột `cameras.ptz_mode`.
+- Bật toggle PTZ.
+
+**Vì sao có override "Kiểu PTZ":** nhiều camera PTZ rẻ (kể cả `OSSD2MPVF33XPTZAI`) **chỉ quảng cáo `ContinuousZoomVelocitySpace` trong `GetNodes`** (không có PanTilt space) dù phần cứng có pan/tilt → auto-detect ẩn d-pad. Chọn **Toàn phần** để ép hiện d-pad. `/ptz/capabilities` ưu tiên override → trả ngay, không cần probe camera (chạy cả khi proxy/link tạm down).
+
+`PtzControls` (frontend) fetch `/ptz/capabilities` khi mở panel, ẩn d-pad khi `hasPanTilt=false`, ẩn zoom khi `hasZoom=false`.
+
+> Camera zoom-only thật (Bkav P200-0802N): để `Tự động` hoặc `Chỉ Zoom`. Gửi PanTilt cho nó → fault "speed out of bounds".
+
+Chi tiết: **[connection_to_server.md](./connection_to_server.md)** § "ONVIF / PTZ camera field qua socat proxy".
+
+---
+
 ## Known Issues & Fixes
 
 | Vấn đề | Nguyên nhân | Fix |
@@ -236,6 +258,56 @@ Verify ở log: `DC_BRIDGE_STARTED | dc-bridge started from /app/data/dc-bridge`
 | Dashboard cloud online nhưng KHÔNG có Device info / Ethernet / Time | DATA channel fail vì thiếu binary `dc-bridge` | Build dc-bridge linux/amd64 với JVM port=3000, drop vào `data/dc-bridge` — xem `connection_to_server.md` |
 | `DC_OFFER_FAIL Connection refused` trong log | dc-bridge chưa start hoặc port 8766 bị chiếm | `docker compose logs nvr-wrapper \| grep dc-bridge`; kiểm tra `DC_BRIDGE_STARTED` |
 | dc-bridge start nhưng cloud không nhận response | `jvmCommandURL` trong `main.go` hardcode port 8080, backend NVR ở 3000 | Patch `sed` rồi build lại |
+| Cloud dashboard chỉ hiện 2/N cameras dù local UI có nhiều hơn | Cloud server chỉ đếm cameras được thêm qua `post_channels` (cloud dashboard). Cameras thêm qua local Web UI không được cloud server biết đến | Thêm camera từ cloud dashboard; không phải bug trong device code |
+| Cloud live view không hoạt động — stream.mp4 500 liên tục | Cameras offline (10.34.24.12 — no route to host) gây go2rtc retry liên tục | Xóa hoặc tắt cameras offline; đây không ảnh hưởng đến cameras online |
+| Cloud live view không hoạt động — SDP có `{FRIGATE_HOST_IP}` literal | Frigate 0.16.3 KHÔNG substitute `{FRIGATE_HOST_IP}` trong go2rtc config khi truyền cho go2rtc process. ICE candidate ghi `{FRIGATE_HOST_IP}` thay vì IP thực → cloud browser không parse được | `CloudService.applyIceServersToGo2Rtc()` detect LAN IP qua `detectLanIp()` và replace placeholder; `CameraService.writeYaml()` dùng IP thực từ đầu |
+| `GO2RTC REGISTER ok=false` khi MQTT reconnect | Streams đã tồn tại trong go2rtc (load từ config.yml khi Frigate start) nên go2rtc reject PUT → bình thường, streams vẫn hoạt động | Không cần fix — benign |
+| Live view ĐEN toàn bộ + site thỉnh thoảng 502 (degrade dần dưới tải live) | `FrigateProxy.kt` `proxyClient` (CIO) đặt `socketTimeout = 0`. Ktor 3.0.1 `io.ktor.network.util.Timeout` CHỈ coi `Long.MAX_VALUE` là vô hạn; `0` → coroutine timeout **busy-spin** (runnable). Mỗi luồng live tạo 1 job spin → bão hòa 64 thread `DefaultDispatcher` → mọi response ghi body (file tĩnh + proxy stream) treo. Triệu chứng đánh lừa: `/api/*` (JSON nhỏ) vẫn 200, `GET /` + stream.mp4 trả empty/000 | Đổi `socketTimeout = Long.MAX_VALUE` (KHÔNG dùng 0). Chẩn đoán: `docker exec nvr-wrapper kill -3 1` → 64 thread kẹt ở `io.ktor.network.util.Timeout$initTimeoutJob`; CPU ~300% |
+
+---
+
+## Cloud Live View — Root Cause & Fix (003)
+
+### Luồng LIVE WebRTC (cloud → device → go2rtc → cloud browser)
+
+1. Cloud browser click Live → MQTT LIVE offer → `SignalingManager.handleLiveOffer()`
+2. Resolve `profileToken` → `{chId}_main` stream name (via `resolveStreamId()`)
+3. POST SDP offer đến `http://127.0.0.1:1984/api/webrtc?src={chId}_main`
+4. go2rtc trả về SDP answer (HTTP 201)
+5. Device publish answer về cloud browser qua MQTT
+6. Cloud browser + go2rtc negotiate ICE → video flow
+
+### Vấn đề đã phát hiện & fix
+
+**1. Thiếu TURN credentials trong go2rtc** (đã fix trong `CloudService.kt`)
+- `CloudService.applyIceServersToGo2Rtc()` chạy 1 lần khi startup (guard bởi `iceServersApplied`)
+- Fetch ICE servers từ cloud → ghi vào `config/config.yml` → `go2rtc.webrtc.ice_servers`
+- Restart Frigate → wait go2rtc ready → `registerAllStreams()`
+- Verify: `config/config.yml` phải có `ice_servers: [- urls: [turn:...]...]`
+
+**2. `{FRIGATE_HOST_IP}` literal trong SDP ICE candidates** (fix đang pending build)
+- Frigate 0.16.3 KHÔNG replace `{FRIGATE_HOST_IP}` khi pass config cho go2rtc subprocess
+- go2rtc puts literal `{FRIGATE_HOST_IP}` vào SDP answer → cloud browser parse fail
+- Fix: `detectLanIp()` trong `CloudService` (filter network interfaces, skip docker/br-/veth) → replace placeholder khi write config.yml
+- `FRIGATE_HOST_IP` env var KHÔNG được pass vào nvr-wrapper container (chỉ có trong Frigate env)
+- Fix trong cả `CloudService.applyIceServersToGo2Rtc()` và `CameraService.writeYaml()`
+
+**3. `registerAllStreams()` dùng direct RTSP thay vì internal restream**
+- Code hiện tại: `registerStreamSync("${chId}_main", "$rtspUrl#backchannel=0")` → go2rtc tạo connection mới trực tiếp tới camera
+- Config.yml đúng có: `{chId}_main: [rtsp://127.0.0.1:8554/{slug}]` (qua Frigate restreamer)
+- Sau khi Frigate start, go2rtc load config.yml nên streams đúng; `registerAllStreams()` PUT bị reject (ok=false) nhưng không làm hỏng streams
+- TODO: đổi `registerAllStreams()` dùng `rtsp://127.0.0.1:8554/{slug}` thay vì direct RTSP URL
+
+### Verify live view
+```bash
+# SDP answer phải có relay candidate và IP thực (không phải {FRIGATE_HOST_IP})
+curl -s -X POST "http://localhost:1984/api/webrtc?src=1_main" \
+  -H "Content-Type: application/sdp" --data 'v=0...' | grep "candidate"
+
+# Expected: relay candidate với TURN IP, host candidate với IP thực
+# a=candidate:... typ relay raddr ...
+# a=candidate:... 192.168.x.x 8555 typ host   ← không được là {FRIGATE_HOST_IP}
+```
 
 ---
 
@@ -272,3 +344,6 @@ NEVER commit `.env`. Các biến quan trọng:
 - `nvr-wrapper`, `nginx`, `nvr-watchdog` dùng `network_mode: host` (cần cho ONVIF multicast và RTSP)
 - `mosquitto`, `frigate` dùng bridge network `nvr-backend`
 - Frigate có thể reach Tailscale/VPN IPs (100.64.x.x) từ trong container
+
+## Test E2E
+- `for run test E2E information, read claude_test.md.

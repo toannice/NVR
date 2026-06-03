@@ -33,6 +33,7 @@ services:
       - "5000:5000" # Frigate Web UI & API (dev/admin access)
       - "8554:8554" # RTSP re-stream feeds
       - "1984:1984" # go2rtc API & video streams
+      - "8555:8555/udp" # go2rtc WebRTC UDP (cloud live view ICE candidates)
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - ./config:/config
@@ -90,6 +91,8 @@ services:
       - DEPLOY_VERSION=${DEPLOY_VERSION:-dev}   # Injected by GitHub Actions — shows on Web UI
       - TZ=${TZ:-Asia/Ho_Chi_Minh}
       - GMAIL_USER=${GMAIL_USER}               # Username is not sensitive, stays as env var
+      - DC_BRIDGE_PATH=${DC_BRIDGE_PATH:-}    # Optional: path to dc-bridge binary (default: ~/.aiview/dc-bridge)
+      - E2E_TEST_MODE=${E2E_TEST_MODE:-false} # Set true in .env to enable /api/dev/* endpoints for E2E tests
     healthcheck:
       test: [ "CMD-SHELL", "curl -f http://127.0.0.1:3000/api/health || exit 1" ]
       interval: 20s
@@ -137,15 +140,6 @@ services:
       - TZ=${TZ:-Asia/Ho_Chi_Minh}
     depends_on:
       - nvr-wrapper
-
-  cloudflare-tunnel:
-    container_name: cloudflared
-    image: cloudflare/cloudflared:latest
-    restart: unless-stopped
-    network_mode: "host" 
-    environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
-    command: tunnel --no-autoupdate run
 
   # ─── Secrets ───────────────────────────────────────────────
 secrets:

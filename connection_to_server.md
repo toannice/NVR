@@ -243,3 +243,55 @@ Sau đó vào dashboard cloud refresh — log sẽ thấy:
 | `E0007` | ONVIF probe failed hoặc internal HTTP error |
 | `E0008` | Function not supported |
 | `E0009` | Component not supported |
+
+---
+
+## ONVIF / PTZ camera field qua socat proxy
+
+Một số camera nằm ở mạng trạm, chỉ tới được qua **socat unicast proxy** trên Edge Gateway (vd `10.34.24.12:8080` → camera `192.168.2.65:80`). Proxy là **path-transparent** (forward raw TCP, giữ nguyên HTTP path), nên ONVIF chạy bình thường qua nó.
+
+### Điều khiển PTZ từ Web UI (không cần client riêng)
+
+Đường PTZ production đã proxy-capable, **không cần** truyền creds hay endpoint trong request:
+
+| Endpoint (cookie `auth-session`) | Tác dụng |
+|---|---|
+| `GET /api/cameras/{slug}/ptz/capabilities` | Trả `{hasPtz, hasPanTilt, hasZoom}` (đọc từ ONVIF `GetNodes`) |
+| `POST /api/cameras/{slug}/ptz/move` | ContinuousMove `{pan, tilt, zoom}` |
+| `POST /api/cameras/{slug}/ptz/stop` | Stop |
+
+`getCameraOnvifConfig` resolve `ip / onvifPort / username / password` như sau, rồi `OnvifSoapClient` gọi `GetCapabilities` và **rewrite authority của Media/PTZ XAddr về `ip:onvifPort`** — cùng một code path cho camera trực tiếp lẫn sau proxy:
+
+- **Credentials**: ưu tiên `user:pass` nhúng trong URL RTSP của `config.yml` (camera LAN); nếu URL không có creds (camera proxy/cloud, vd `rtsp://10.34.24.12:8554/camera1M`) thì **fallback sang `username` + `password_encrypted` của record DB** (giải mã bằng `CryptoUtils`).
+- **ip**: host của URL RTSP, fallback `Cameras.ip`.
+- **onvifPort**: luôn lấy từ `Cameras.onvif_port`.
+
+### Cấu hình để PTZ tới được camera sau proxy
+
+1. Camera đã thêm (RTSP) sẽ có `ip` = host của proxy (vd `10.34.24.12`) nhưng `onvif_port` mặc định = **80**, và URL RTSP thường **không kèm creds**.
+2. Mở **Web UI → sửa camera**:
+   - **Cổng ONVIF** = cổng proxy (vd **8080**).
+   - **ONVIF Username / Password** = tài khoản ONVIF của camera (vd `admin` / `Bkav@2020`). Để trống = giữ nguyên creds đã lưu. Password lưu mã hoá (`password_encrypted`).
+3. Bật PTZ cho camera (toggle trong danh sách camera).
+4. Mở panel PTZ ở ô live: UI tự gọi `/ptz/capabilities` và **chỉ hiện nút mà camera hỗ trợ**.
+
+> Verified: với `onvif_port=8080` + creds trong record, `GET /ptz/capabilities` trả `{hasPtz:true,hasPanTilt:false,hasZoom:true}` và `POST /ptz/move {zoom:0.1}` + `/ptz/stop` đều `success:true` qua proxy.
+
+### Nhiều camera field — mỗi camera một cổng proxy
+
+Mỗi camera ở trạm mở **một cổng socat riêng** trên gateway (Pi): vd `8080 → camera1M (P200-0802N)`, `8081 → camera2M (OSSD2MPVF33XPTZAI)`. Trong NVR, mỗi camera là một record với `onvif_port` riêng — không hardcode. Verify từng cổng:
+```bash
+curl -s -m6 -H "Content-Type: application/soap+xml; charset=utf-8" \
+  -d '<?xml version="1.0"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:tds="http://www.onvif.org/ver10/device/wsdl"><s:Body><tds:GetSystemDateAndTime/></s:Body></s:Envelope>' \
+  http://10.34.24.12:8081/onvif/device_service   # đổi 8081 cho từng cam
+```
+
+### Camera zoom-only & override "Kiểu PTZ"
+
+`checkPtzCapability` đọc `GetNodes`: `hasPanTilt`/`hasZoom` dựa trên space mà camera quảng cáo. Vấn đề thực tế: **nhiều camera PTZ rẻ chỉ quảng cáo `ContinuousZoomVelocitySpace`** dù phần cứng có pan/tilt (đã thấy ở cả `OSSD2MPVF33XPTZAI`). Khi đó auto-detect ẩn d-pad nhầm.
+
+→ Dùng **Sửa Camera → Kiểu PTZ = Toàn phần** (lưu `cameras.ptz_mode='full'`). `/ptz/capabilities` ưu tiên override, trả `{hasPtz,hasPanTilt,hasZoom}=true` ngay (không probe), d-pad hiện. Nếu camera chấp nhận `ContinuousMove` PanTilt (firmware lỏng) → pan/tilt chạy; nếu fault "speed out of bounds" thì camera đó không hỗ trợ pan/tilt qua ONVIF (cần API riêng).
+
+Camera **zoom-only thật** (Bkav P200-0802N): để `Tự động` hoặc `Chỉ Zoom` → UI chỉ hiện nút Zoom.
+
+> Test connection trước khi lưu camera (`POST /api/onvif/test-connection`) vẫn nhận creds trong body — đó là chủ đích (camera chưa có trong DB). Chỉ đường PTZ live mới đọc creds từ record.

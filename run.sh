@@ -191,6 +191,43 @@ echo "[*] Khởi chạy toàn bộ stack..."
 docker compose up -d --force-recreate --no-deps nvr-wrapper
 docker compose up -d
 
+# --- Self-heal sau force-recreate (network_mode: host) ---
+# Sau --force-recreate, nvr-wrapper đôi khi kẹt trạng thái Netty: route /api/* trả
+# 200 NHƯNG body file tĩnh (/, /index.html, /assets...) bị treo -> nginx báo 502.
+# (Hay xảy ra khi có camera offline gây bão lỗi go2rtc lúc khởi động.)
+# Cách khắc phục đã kiểm chứng: restart SẠCH nvr-wrapper (không phải build lại).
+wait_backend_ready() {
+    # 0 = OK (API + file tĩnh đều 200); 1 = backend không lên; 2 = degraded (API sống, file tĩnh treo)
+    local i j api root
+    for i in $(seq 1 30); do
+        api=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/api/health 2>/dev/null)
+        if [ "$api" = "200" ]; then
+            # Backend đã start; xác nhận serve được FILE TĨNH (thử vài lần để loại nhiễu)
+            for j in 1 2 3; do
+                root=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/ 2>/dev/null)
+                [ "$root" = "200" ] && return 0
+                sleep 1
+            done
+            return 2
+        fi
+        sleep 2
+    done
+    return 1
+}
+
+echo "[*] Kiểm tra nvr-wrapper phục vụ được giao diện web (không chỉ API)..."
+wait_backend_ready; RC=$?
+if [ "$RC" = "2" ]; then
+    echo "[!] nvr-wrapper kẹt trạng thái (API sống nhưng file tĩnh treo) -> restart sạch..."
+    docker compose restart nvr-wrapper
+    wait_backend_ready; RC=$?
+fi
+case "$RC" in
+    0) echo "  -> OK: web phục vụ bình thường." ;;
+    1) echo "  [!] CẢNH BÁO: backend nvr-wrapper không phản hồi. Kiểm tra: docker compose logs nvr-wrapper" ;;
+    2) echo "  [!] CẢNH BÁO: file tĩnh vẫn treo sau restart. Kiểm tra: docker compose logs nvr-wrapper" ;;
+esac
+
 echo "[*] Đảm bảo nginx đang chạy..."
 docker compose up -d nginx
 

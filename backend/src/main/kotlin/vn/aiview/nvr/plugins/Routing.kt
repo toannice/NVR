@@ -23,6 +23,9 @@ fun Application.configureRouting() {
             onvifRouting()
         }
         
+        // Dev/test helpers (active only when E2E_TEST_MODE=true)
+        devRouting()
+
         // Cloud connection (public — internal dc-bridge callback + config endpoints)
         cloudRouting()
 

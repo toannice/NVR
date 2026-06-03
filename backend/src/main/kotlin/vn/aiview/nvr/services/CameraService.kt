@@ -77,6 +77,7 @@ object CameraService {
             mainToken = mainToken,
             subToken = subToken,
             rtspUrl = rtspUrl,
+            subRtspUrl = info.subRtspUrl,
             record = true,
         )
     }
@@ -86,6 +87,7 @@ object CameraService {
         slug: String,
         displayName: String,
         rtspUrl: String,
+        subRtspUrl: String? = null,
         ip: String,
         onvifPort: Int,
         ptzEnabled: Boolean,
@@ -111,6 +113,7 @@ object CameraService {
             mainToken = mainToken,
             subToken = subToken,
             rtspUrl = rtspUrl,
+            subRtspUrl = subRtspUrl,
             record = record,
             ptzEnabled = ptzEnabled,
         )
@@ -127,8 +130,9 @@ object CameraService {
 
         CameraConfigMutex.mutex.withLock {
             transaction { Cameras.deleteWhere { Cameras.slug eq slug } }
-            removeFromYaml(slug)
+            removeFromYaml(slug, channelId)
             Go2RtcClient.deleteStream("${channelId}_main")
+            Go2RtcClient.deleteStream("${channelId}_sub")
             triggerFrigateRestart()
         }
         AppLogger.info(AppLogger.Module.CAMERA, "CRUD", "CAMERA_REMOVE", "slug=$slug channel_id=$channelId")
@@ -173,13 +177,21 @@ object CameraService {
         mainToken: String,
         subToken: String,
         rtspUrl: String,
+        subRtspUrl: String? = null,
         record: Boolean,
         ptzEnabled: Boolean = false,
     ): AppliedCamera {
         val encryptedPass = if (password.isNullOrBlank()) null else CryptoUtils.encrypt(password)
-        CameraConfigMutex.mutex.withLock {
-            transaction {
-                val existing = Cameras.selectAll().where { Cameras.slug eq slug }.firstOrNull()
+        // Resolve effective slug: a row may already exist for this channel_id under a different
+        // slug (e.g. Web UI added "ai_view_xxx" first, cloud now sends put_channels for same
+        // channel_id). Match on slug OR channel_id and reuse the existing slug to avoid both
+        // a UNIQUE(channel_id) violation and a duplicate YAML/go2rtc entry.
+        val effectiveSlug = CameraConfigMutex.mutex.withLock {
+            val resolved = transaction {
+                val existing = Cameras.selectAll().where {
+                    (Cameras.slug eq slug) or (Cameras.channelId eq channelId)
+                }.firstOrNull()
+                val targetSlug = existing?.get(Cameras.slug) ?: slug
                 if (existing == null) {
                     Cameras.insert {
                         it[Cameras.slug] = slug
@@ -195,10 +207,11 @@ object CameraService {
                         it[Cameras.mainToken] = mainToken
                         it[Cameras.subToken] = subToken
                         it[Cameras.rtspUrl] = rtspUrl
+                        it[Cameras.subRtspUrl] = subRtspUrl
                         it[Cameras.hasPtz] = ptzEnabled
                     }
                 } else {
-                    Cameras.update({ Cameras.slug eq slug }) {
+                    Cameras.update({ Cameras.slug eq targetSlug }) {
                         it[Cameras.displayName] = displayName
                         it[Cameras.ip] = ip
                         it[Cameras.onvifPort] = onvifPort
@@ -210,22 +223,28 @@ object CameraService {
                         it[Cameras.mainToken] = mainToken
                         it[Cameras.subToken] = subToken
                         it[Cameras.rtspUrl] = rtspUrl
+                        it[Cameras.subRtspUrl] = subRtspUrl
                     }
                 }
+                targetSlug
             }
-            writeYaml(slug, rtspUrl, record)
+            writeYaml(resolved, channelId, rtspUrl, subRtspUrl, record)
             Go2RtcClient.registerStreamSync("${channelId}_main", "$rtspUrl#backchannel=0")
+            if (subRtspUrl != null) {
+                Go2RtcClient.registerStreamSync("${channelId}_sub", "$subRtspUrl#backchannel=0")
+            }
+            resolved
         }
         val frigateRestarted = triggerFrigateRestart()
         AppLogger.info(
             AppLogger.Module.CAMERA, "CRUD", "CAMERA_APPLY",
-            "slug=$slug channel_id=$channelId frigate_restarted=$frigateRestarted"
+            "slug=$effectiveSlug channel_id=$channelId frigate_restarted=$frigateRestarted"
         )
-        return AppliedCamera(slug, channelId, rtspUrl, mainToken, subToken, frigateRestarted)
+        return AppliedCamera(effectiveSlug, channelId, rtspUrl, mainToken, subToken, frigateRestarted)
     }
 
     @Suppress("UNCHECKED_CAST")
-    private fun writeYaml(slug: String, rtspUrl: String, record: Boolean) {
+    private fun writeYaml(slug: String, channelId: String, rtspUrl: String, subRtspUrl: String?, record: Boolean) {
         val file = File(configPath())
         val yaml = Yaml()
         val configData: MutableMap<String, Any> =
@@ -241,16 +260,36 @@ object CameraService {
         configData.putIfAbsent("ffmpeg", mutableMapOf("hwaccel_args" to HwaccelDetector.detectHwaccelArgs()))
 
         val cameras = (configData.getOrPut("cameras") { mutableMapOf<String, Any>() }) as MutableMap<String, Any>
+
+        val ffmpegInputs = if (subRtspUrl != null) {
+            // Dual-stream: main for record, sub for detect
+            listOf(
+                mapOf(
+                    "path" to "rtsp://127.0.0.1:8554/$slug",
+                    "input_args" to "preset-rtsp-restream",
+                    "roles" to listOf("record")
+                ),
+                mapOf(
+                    "path" to "rtsp://127.0.0.1:8554/${slug}_sub",
+                    "input_args" to "preset-rtsp-restream",
+                    "roles" to listOf("detect")
+                )
+            )
+        } else {
+            // Single-stream fallback: main handles both roles
+            listOf(
+                mapOf(
+                    "path" to "rtsp://127.0.0.1:8554/$slug",
+                    "input_args" to "preset-rtsp-restream",
+                    "roles" to listOf("record", "detect")
+                )
+            )
+        }
+
         cameras[slug] = mapOf(
             "ffmpeg" to mapOf(
                 "hwaccel_args" to HwaccelDetector.detectHwaccelArgs(),
-                "inputs" to listOf(
-                    mapOf(
-                        "path" to "rtsp://127.0.0.1:8554/$slug",
-                        "input_args" to "preset-rtsp-restream",
-                        "roles" to listOf("record", "detect")
-                    )
-                )
+                "inputs" to ffmpegInputs
             ),
             "detect" to mapOf("enabled" to true),
             "record" to mapOf(
@@ -262,8 +301,17 @@ object CameraService {
         val go2rtc = (configData.getOrPut("go2rtc") { mutableMapOf<String, Any>() }) as MutableMap<String, Any>
         val streams = (go2rtc.getOrPut("streams") { mutableMapOf<String, Any>() }) as MutableMap<String, Any>
         streams[slug] = listOf("$rtspUrl#tcp")
+        // Persistent alias: cloud live view uses {channelId}_main; must survive go2rtc restarts.
+        streams["${channelId}_main"] = listOf("rtsp://127.0.0.1:8554/$slug")
+        if (subRtspUrl != null) {
+            streams["${slug}_sub"] = listOf("$subRtspUrl#tcp")
+            streams["${channelId}_sub"] = listOf("rtsp://127.0.0.1:8554/${slug}_sub")
+        }
+        // Frigate does NOT substitute {FRIGATE_HOST_IP} in go2rtc config — use actual IP.
+        val hostIp = System.getenv("FRIGATE_HOST_IP")?.takeIf { it.isNotBlank() } ?: detectLanIp()
+        val webrtcCandidate = if (hostIp.isNotEmpty()) "$hostIp:8555" else "stun:8555"
         go2rtc.putIfAbsent("webrtc", mutableMapOf(
-            "candidates" to listOf("{FRIGATE_HOST_IP}:8555", "stun:8555")
+            "candidates" to listOf(webrtcCandidate, "stun:8555")
         ))
 
         val options = DumperOptions().apply { defaultFlowStyle = DumperOptions.FlowStyle.BLOCK }
@@ -271,15 +319,132 @@ object CameraService {
     }
 
     @Suppress("UNCHECKED_CAST")
-    private fun removeFromYaml(slug: String) {
+    private fun removeFromYaml(slug: String, channelId: String?) {
         val file = File(configPath())
         if (!file.exists()) return
         val yaml = Yaml()
         val configData: MutableMap<String, Any> = yaml.load(file.readText()) ?: return
         (configData["cameras"] as? MutableMap<String, Any>)?.remove(slug)
-        ((configData["go2rtc"] as? MutableMap<String, Any>)?.get("streams") as? MutableMap<String, Any>)?.remove(slug)
+        val go2rtcStreams = (configData["go2rtc"] as? MutableMap<String, Any>)?.get("streams") as? MutableMap<String, Any>
+        go2rtcStreams?.remove(slug)
+        go2rtcStreams?.remove("${slug}_sub")
+        if (channelId != null) {
+            go2rtcStreams?.remove("${channelId}_main")
+            go2rtcStreams?.remove("${channelId}_sub")
+        }
         val options = DumperOptions().apply { defaultFlowStyle = DumperOptions.FlowStyle.BLOCK }
         FileWriter(file).use { Yaml(options).dump(configData, it) }
+    }
+
+    /**
+     * Sync startup: cameras in config.yml with no DB row get inserted so the cloud `get_channels`
+     * and the Web UI both see the same list.  Assigns channel_id, mainToken, subToken from YAML data.
+     */
+    @Suppress("UNCHECKED_CAST")
+    fun syncYamlCamerasToDb() {
+        val file = File(configPath())
+        if (!file.exists()) return
+        val yaml = Yaml()
+        val configData = yaml.load<Map<String, Any>>(file.readText()) ?: return
+        val yamlCameras = configData["cameras"] as? Map<String, Any> ?: return
+        val go2rtcStreams = ((configData["go2rtc"] as? Map<String, Any>)?.get("streams")) as? Map<String, Any>
+
+        transaction {
+            val existingSlugs = Cameras.selectAll().map { it[Cameras.slug] }.toSet()
+            val usedChannelIds = Cameras.selectAll().mapNotNull { it[Cameras.channelId]?.toIntOrNull() }.toMutableSet()
+
+            for (slug in yamlCameras.keys) {
+                if (slug in existingSlugs) continue
+                // Resolve RTSP URL from go2rtc streams
+                val streamList = go2rtcStreams?.get(slug) as? List<*>
+                val rawUrl = streamList?.firstOrNull()?.toString() ?: continue
+                val rtspUrl = if (rawUrl.contains("#")) rawUrl.substringBefore("#") else rawUrl
+                if (rtspUrl.isBlank() || rtspUrl.startsWith("rtsp://127.0.0.1")) continue
+
+                var nextId = 1
+                while (nextId in usedChannelIds) nextId++
+                usedChannelIds.add(nextId)
+                val chId = nextId.toString()
+                val mainToken = "MediaProfile${chId.padStart(3, '0')}01"
+                val subToken = "MediaProfile${chId.padStart(3, '0')}02"
+                val ip = parseIpFromRtsp(rtspUrl)
+
+                Cameras.insert {
+                    it[Cameras.slug] = slug
+                    it[Cameras.displayName] = slug
+                    it[Cameras.ip] = ip
+                    it[Cameras.channelId] = chId
+                    it[Cameras.mainToken] = mainToken
+                    it[Cameras.subToken] = subToken
+                    it[Cameras.rtspUrl] = rtspUrl
+                }
+                AppLogger.info(AppLogger.Module.CAMERA, "STARTUP", "YAML_CAM_SYNCED",
+                    "slug=$slug channel_id=$chId rtsp=${rtspUrl.take(40)}")
+            }
+        }
+    }
+
+    /** Add missing {channelId}_main alias entries to config.yml so live view survives Frigate restarts. */
+    @Suppress("UNCHECKED_CAST")
+    suspend fun ensureChannelAliasesInYaml() {
+        val file = File(configPath())
+        if (!file.exists()) return
+
+        val cameraMap = transaction {
+            Cameras.selectAll().mapNotNull { row ->
+                val chId = row[Cameras.channelId] ?: return@mapNotNull null
+                row[Cameras.slug] to chId
+            }.toMap()
+        }
+        if (cameraMap.isEmpty()) return
+
+        CameraConfigMutex.mutex.withLock {
+            val yaml = Yaml()
+            val configData = yaml.load<MutableMap<String, Any>>(file.readText()) ?: return@withLock
+            val go2rtc = (configData.getOrPut("go2rtc") { mutableMapOf<String, Any>() }) as MutableMap<String, Any>
+            val streams = (go2rtc.getOrPut("streams") { mutableMapOf<String, Any>() }) as MutableMap<String, Any>
+
+            var changed = false
+            for ((slug, chId) in cameraMap) {
+                if (!streams.containsKey(slug)) continue
+                if (!streams.containsKey("${chId}_main")) {
+                    streams["${chId}_main"] = listOf("rtsp://127.0.0.1:8554/$slug")
+                    changed = true
+                }
+                if (streams.containsKey("${slug}_sub") && !streams.containsKey("${chId}_sub")) {
+                    streams["${chId}_sub"] = listOf("rtsp://127.0.0.1:8554/${slug}_sub")
+                    changed = true
+                }
+            }
+
+            if (changed) {
+                val options = DumperOptions().apply { defaultFlowStyle = DumperOptions.FlowStyle.BLOCK }
+                FileWriter(file).use { Yaml(options).dump(configData, it) }
+                AppLogger.info(AppLogger.Module.CAMERA, "STARTUP", "ALIASES_ADDED",
+                    "Added channelId stream aliases for live view")
+            }
+        }
+    }
+
+    private fun detectLanIp(): String = try {
+        java.net.NetworkInterface.getNetworkInterfaces()
+            .toList().asSequence()
+            .filter { it.isUp && !it.isLoopback && !it.isVirtual }
+            .filterNot { val n = it.name.lowercase(); n.startsWith("docker") || n.startsWith("br-") || n.startsWith("veth") }
+            .flatMap { it.inetAddresses.toList().asSequence() }
+            .filterIsInstance<java.net.Inet4Address>()
+            .map { it.hostAddress }
+            .firstOrNull { ip -> ip.startsWith("192.168.") || ip.startsWith("10.") || ip.matches(Regex("^172\\.(1[6-9]|2\\d|3[01])\\..*")) }
+            ?: ""
+    } catch (_: Exception) { "" }
+
+    private fun parseIpFromRtsp(rtsp: String): String? {
+        if (rtsp.isBlank()) return null
+        return try {
+            val hostPart = rtsp.substringAfter("//").substringBefore("/")
+            val hostWithPort = hostPart.substringAfterLast("@")
+            hostWithPort.substringBefore(":")
+        } catch (_: Exception) { null }
     }
 
     private fun triggerFrigateRestart(): Boolean = try {

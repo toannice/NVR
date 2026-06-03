@@ -300,6 +300,12 @@ object SignalingManager {
                 contentType(ContentType("application", "sdp"))
                 setBody(sdpText)
             }
+            if (!response.status.isSuccess()) {
+                AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "LIVE_GO2RTC_ERROR",
+                    "go2rtc ${response.status.value} for stream=$streamId offerId=$offerId")
+                publishLiveErrorAnswer(json, sessionPubTopic, offerId, profileToken)
+                return
+            }
             val answerSdp = response.bodyAsText()
 
             val answerJson = buildJsonObject {

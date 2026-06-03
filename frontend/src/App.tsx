@@ -93,6 +93,23 @@ const PtzControls = ({ cameraId, ptzEnabled }: { cameraId: string; ptzEnabled: b
   const [isPtzOpen, setIsPtzOpen] = useState(false);
   const [isMoving, setIsMoving] = useState(false);
   const moveIntervalRef = useRef<number | null>(null);
+  // Real PTZ capabilities from the camera's ONVIF GetNodes. Default to full controls
+  // so a slow/failed probe never hides a d-pad that actually works; we only ever
+  // narrow the controls once the camera tells us it lacks PanTilt or Zoom
+  // (e.g. the Bkav P200 field camera is zoom-only).
+  const [caps, setCaps] = useState<{ hasPanTilt: boolean; hasZoom: boolean }>({ hasPanTilt: true, hasZoom: true });
+
+  // Probe capabilities lazily — only when the user opens the panel — to avoid
+  // firing an ONVIF GetNodes at every camera (and through the socat proxy) on page load.
+  useEffect(() => {
+    if (!ptzEnabled || !isPtzOpen) return;
+    let cancelled = false;
+    fetch(`/api/cameras/${cameraId}/ptz/capabilities`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (!cancelled && d) setCaps({ hasPanTilt: !!d.hasPanTilt, hasZoom: !!d.hasZoom }); })
+      .catch(() => { /* keep defaults */ });
+    return () => { cancelled = true; };
+  }, [cameraId, ptzEnabled, isPtzOpen]);
 
   // Don't render anything if camera doesn't have PTZ enabled
   if (!ptzEnabled) return null;
@@ -147,7 +164,8 @@ const PtzControls = ({ cameraId, ptzEnabled }: { cameraId: string; ptzEnabled: b
       {/* ── D-pad panel: shown above the toggle button ─────────────────── */}
       {isPtzOpen && (
         <div className="absolute bottom-10 left-0 bg-black/80 backdrop-blur-sm rounded-lg p-2 shadow-2xl border border-gray-600 z-40 select-none">
-          {/* Direction grid 3×3 */}
+          {/* Direction grid 3×3 — only for cameras that actually advertise PanTilt */}
+          {caps.hasPanTilt && (
           <div className="grid grid-cols-3 gap-1 mb-1.5 touch-none">
             <button onPointerDown={(e) => startContinuousMove(e, -0.5,  0.5)} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onContextMenu={e => e.preventDefault()} className={diagBase} title="↖">↖</button>
             <button onPointerDown={(e) => startContinuousMove(e,  0,    0.5)} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onContextMenu={e => e.preventDefault()} className={btnBase}  title="Lên"><Icon name="arrow_upward"   className="text-sm" /></button>
@@ -161,8 +179,10 @@ const PtzControls = ({ cameraId, ptzEnabled }: { cameraId: string; ptzEnabled: b
             <button onPointerDown={(e) => startContinuousMove(e,  0,   -0.5)} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onContextMenu={e => e.preventDefault()} className={btnBase}  title="Xuống"><Icon name="arrow_downward" className="text-sm" /></button>
             <button onPointerDown={(e) => startContinuousMove(e,  0.5, -0.5)} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onContextMenu={e => e.preventDefault()} className={diagBase} title="↘">↘</button>
           </div>
+          )}
 
-          {/* Zoom row */}
+          {/* Zoom row — only if the camera supports Zoom. Includes its own Stop when there's no d-pad. */}
+          {caps.hasZoom && (
           <div className="flex gap-1 touch-none">
             <button onPointerDown={(e) => startContinuousMove(e, 0, 0,  0.3)} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onContextMenu={e => e.preventDefault()}
               className="flex-1 h-6 bg-gray-700 hover:bg-gray-600 rounded text-white text-xs flex items-center justify-center gap-0.5 transition-colors touch-none">
@@ -172,7 +192,15 @@ const PtzControls = ({ cameraId, ptzEnabled }: { cameraId: string; ptzEnabled: b
               className="flex-1 h-6 bg-gray-700 hover:bg-gray-600 rounded text-white text-xs flex items-center justify-center gap-0.5 transition-colors touch-none">
               <Icon name="remove" className="text-xs" />Zoom
             </button>
+            {!caps.hasPanTilt && (
+              <button onClick={() => stopPtz()} className="w-8 h-6 bg-red-600 hover:bg-red-500 rounded text-white flex items-center justify-center transition-colors touch-none" title="Dừng"><Icon name="stop" className="text-xs" /></button>
+            )}
           </div>
+          )}
+
+          {!caps.hasPanTilt && !caps.hasZoom && (
+            <div className="text-[10px] text-gray-300 px-1 py-1 whitespace-nowrap">Camera không hỗ trợ điều khiển PTZ</div>
+          )}
 
           {isMoving && <div className="mt-1 text-center text-[10px] text-green-400">Đang di chuyển…</div>}
         </div>
@@ -2596,12 +2624,19 @@ const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDeleteCam
             setShowEditModal(false);
             setEditingCamera(null);
           }}
-          onSubmit={async (newName: string) => {
+          onSubmit={async (payload: { name: string; onvifPort: number; onvifUsername?: string; onvifPassword?: string; ptzMode?: string }) => {
             try {
               const res = await fetch('/api/edit-camera', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: editingCamera.original_slug || editingCamera.id, name: newName })
+                body: JSON.stringify({
+                  id: editingCamera.original_slug || editingCamera.id,
+                  name: payload.name,
+                  onvifPort: payload.onvifPort,
+                  onvifUsername: payload.onvifUsername,
+                  onvifPassword: payload.onvifPassword,
+                  ptzMode: payload.ptzMode,
+                })
               });
               const data = await res.json();
               if (!res.ok) throw new Error(data.error || 'Failed to rename');
@@ -2755,9 +2790,15 @@ function ConfirmDeleteModal({ name, isOpen, onClose, onConfirm }: any) {
   );
 }
 
-// Edit Camera Name Modal Component (No ONVIF credentials required)
+// Edit Camera Modal — name + ONVIF port (no ONVIF credentials required).
+// The ONVIF port matters for PTZ over a socat proxy: set it to the proxy's port
+// (e.g. 8080) so the backend's ONVIF/PTZ requests reach the camera through the proxy.
 function EditCameraModal({ device, onClose, onSubmit, isLoading }: any) {
   const [cameraName, setCameraName] = useState(device.name || '');
+  const [onvifPort, setOnvifPort] = useState<string>(String(device.onvifPort ?? 80));
+  const [onvifUser, setOnvifUser] = useState('');
+  const [onvifPass, setOnvifPass] = useState('');
+  const [ptzMode, setPtzMode] = useState<string>(device.ptzMode ?? 'auto');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -2765,7 +2806,19 @@ function EditCameraModal({ device, onClose, onSubmit, isLoading }: any) {
       alert('Vui lòng nhập tên camera');
       return;
     }
-    onSubmit(cameraName);
+    const port = parseInt(onvifPort, 10);
+    if (!port || port < 1 || port > 65535) {
+      alert('Cổng ONVIF không hợp lệ (1–65535)');
+      return;
+    }
+    onSubmit({
+      name: cameraName,
+      onvifPort: port,
+      // Only sent when filled — leaving these blank keeps the saved credentials untouched.
+      onvifUsername: onvifUser.trim() || undefined,
+      onvifPassword: onvifPass || undefined,
+      ptzMode,
+    });
   };
 
   return (
@@ -2774,7 +2827,7 @@ function EditCameraModal({ device, onClose, onSubmit, isLoading }: any) {
         <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-white dark:bg-[#333]">
           <h2 className="text-lg font-bold text-indigo-600 dark:text-indigo-400 flex items-center">
             <Icon name="edit" className="mr-2" />
-            Đổi tên Camera
+            Sửa Camera
           </h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" disabled={isLoading}>
             <Icon name="close" />
@@ -2803,6 +2856,88 @@ function EditCameraModal({ device, onClose, onSubmit, isLoading }: any) {
               </div>
             </div>
 
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Cổng ONVIF
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <Icon name="settings_ethernet" className="text-gray-400 text-lg" />
+                </div>
+                <input
+                  className="w-full pl-10 rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white focus:ring-indigo-500 focus:border-indigo-500 shadow-sm"
+                  placeholder="80"
+                  type="number"
+                  min={1}
+                  max={65535}
+                  value={onvifPort}
+                  onChange={e => setOnvifPort(e.target.value)}
+                  disabled={isLoading}
+                />
+              </div>
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                Mặc định 80. Camera qua proxy socat: đặt bằng cổng proxy (vd 8080) để điều khiển PTZ.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                ONVIF Username / Password
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <Icon name="person" className="text-gray-400 text-lg" />
+                  </div>
+                  <input
+                    className="w-full pl-10 rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white focus:ring-indigo-500 focus:border-indigo-500 shadow-sm"
+                    placeholder="admin"
+                    type="text"
+                    autoComplete="off"
+                    value={onvifUser}
+                    onChange={e => setOnvifUser(e.target.value)}
+                    disabled={isLoading}
+                  />
+                </div>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <Icon name="lock" className="text-gray-400 text-lg" />
+                  </div>
+                  <input
+                    className="w-full pl-10 rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white focus:ring-indigo-500 focus:border-indigo-500 shadow-sm"
+                    placeholder="••••••••"
+                    type="password"
+                    autoComplete="new-password"
+                    value={onvifPass}
+                    onChange={e => setOnvifPass(e.target.value)}
+                    disabled={isLoading}
+                  />
+                </div>
+              </div>
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                Chỉ cần cho camera qua proxy (URL RTSP không kèm mật khẩu). Để trống = giữ nguyên creds đã lưu.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Kiểu điều khiển PTZ
+              </label>
+              <select
+                className="w-full rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white focus:ring-indigo-500 focus:border-indigo-500 shadow-sm"
+                value={ptzMode}
+                onChange={e => setPtzMode(e.target.value)}
+                disabled={isLoading}
+              >
+                <option value="auto">Tự động phát hiện (ONVIF GetNodes)</option>
+                <option value="full">Toàn phần — Pan / Tilt / Zoom</option>
+                <option value="zoom">Chỉ Zoom</option>
+              </select>
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                Chọn <b>Toàn phần</b> nếu camera có pan/tilt thật nhưng ONVIF báo thiếu (ép hiện d-pad).
+              </p>
+            </div>
+
             <div className="flex justify-end gap-3 mt-6">
               <button
                 type="button"
@@ -2818,7 +2953,7 @@ function EditCameraModal({ device, onClose, onSubmit, isLoading }: any) {
                 disabled={isLoading}
               >
                 {isLoading ? <Icon name="refresh" className="animate-spin mr-2" /> : <Icon name="save" className="mr-2 text-sm" />}
-                Lưu tên mới
+                Lưu
               </button>
             </div>
           </form>
@@ -3022,7 +3157,7 @@ function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
     path: '/stream1',
     addToLiveView: true
   });
-  const [rtspData, setRtspData] = useState({ name: '', rtsp: '', ip: '' });
+  const [rtspData, setRtspData] = useState({ name: '', rtsp: '', subRtsp: '', ip: '' });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isProbing, setIsProbing] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -3085,6 +3220,7 @@ function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
       let finalPath = formData.path;
       let finalName = formData.name;
       let finalRtspPort = formData.rtspPort;
+      let finalSubStreamUri: string | undefined;
 
       // If user hasn't explicitly opened Advanced settings or path is default/empty, try to probe first
       // Or we can just always probe if we don't have a custom path
@@ -3116,13 +3252,12 @@ function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
             if (probeData.streamUri) {
               const match = probeData.streamUri.match(/rtsp:\/\/[^/]+:(\d+)\//);
               if (match && match[1]) {
-                // Update the state for consistency (optional but good)
                 setFormData(prev => ({ ...prev, rtspPort: match[1] }));
                 finalRtspPort = match[1];
-                // IMPORTANT: Update local var if we were using one, but we use formData.rtspPort below. 
-                // Since setState is async, we must use a local variable for the immediate submit logic.
-                // Let's create `finalRtspPort`.
               }
+            }
+            if (probeData.subStreamUri) {
+              finalSubStreamUri = probeData.subStreamUri;
             }
           } else {
             console.warn("Probe failed, using fallback/manual path", probeData.error);
@@ -3146,8 +3281,9 @@ function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
       // Use RTSP Port for the stream URL
       const rtspUrl = `rtsp://${formData.username}:${formData.password}@${formData.ip}:${finalRtspPort}${normalizedPath}`;
 
-      // We wrap this in a promise because onAdd (handleAddCamera) might be async but typed loosely here
-      await Promise.resolve(onAdd({ name: finalName, rtspUrl: rtspUrl, record: true, onvifPort: parseInt(formData.port) || 80 }));
+      const onvifPayload: any = { name: finalName, rtspUrl: rtspUrl, record: true, onvifPort: parseInt(formData.port) || 80 };
+      if (finalSubStreamUri) onvifPayload.subRtspUrl = finalSubStreamUri;
+      await Promise.resolve(onAdd(onvifPayload));
 
       // If successful (no error thrown), close modal
       onClose();
@@ -3165,10 +3301,13 @@ function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
     if (!rtspData.name.trim()) { setError('Vui lòng nhập tên camera'); return; }
     if (!rtspData.rtsp.trim()) { setError('Vui lòng nhập đường dẫn RTSP'); return; }
     if (!rtspData.rtsp.startsWith('rtsp://')) { setError('Đường dẫn RTSP phải bắt đầu bằng rtsp://'); return; }
+    if (rtspData.subRtsp.trim() && !rtspData.subRtsp.startsWith('rtsp://')) { setError('Sub stream phải bắt đầu bằng rtsp://'); return; }
     setIsSubmitting(true);
     setError('');
     try {
-      await Promise.resolve(onAdd({ name: rtspData.name.trim(), rtspUrl: rtspData.rtsp.trim(), ip: rtspData.ip.trim() || undefined, record: true }));
+      const payload: any = { name: rtspData.name.trim(), rtspUrl: rtspData.rtsp.trim(), ip: rtspData.ip.trim() || undefined, record: true };
+      if (rtspData.subRtsp.trim()) payload.subRtspUrl = rtspData.subRtsp.trim();
+      await Promise.resolve(onAdd(payload));
       onClose();
     } catch (e: any) {
       const msg = e.message || 'Không thể kết nối RTSP. Kiểm tra lại đường dẫn và đảm bảo camera đang hoạt động.';
@@ -3259,6 +3398,26 @@ function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
                     disabled={isSubmitting}
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Sub stream RTSP <span className="text-gray-400 font-normal">(tuỳ chọn — dùng cho AI detect)</span>
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <Icon name="linked_camera" className="text-gray-400 text-lg" />
+                  </div>
+                  <input
+                    className="w-full pl-10 rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white focus:ring-[#F04E30] focus:border-[#F04E30] shadow-sm font-mono text-sm"
+                    placeholder="rtsp://user:pass@192.168.1.xxx:554/stream2"
+                    type="text"
+                    value={rtspData.subRtsp}
+                    onChange={e => setRtspData({ ...rtspData, subRtsp: e.target.value })}
+                    disabled={isSubmitting}
+                  />
+                </div>
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Nếu để trống, main stream sẽ được dùng cho cả record lẫn detect.</p>
               </div>
 
               <div>
@@ -3538,6 +3697,14 @@ function App() {
     (window as any).logout = handleLogout;
   }, [handleLogout]);
 
+  // On mount: restore unlocked state if a valid session cookie already exists
+  // Fixes page-refresh and codegen/test scenarios where isSessionUnlocked resets to false
+  useEffect(() => {
+    fetch('/api/camera-status')
+      .then(r => { if (r.ok) setIsSessionUnlocked(true); })
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Simple global check for 401
   useEffect(() => {
     const originalFetch = (window as any).fetch;
@@ -3746,9 +3913,11 @@ function App() {
           isOnline: statusMap[c.id]?.isOnline ?? false,
           fps: statusMap[c.id]?.fps ?? 0,
           ip: c.ip, // ONVIF metadata
+          onvifPort: c.onvifPort ?? 80, // ONVIF port (set to socat proxy port for proxied cameras)
           manufacturer: c.manufacturer, // ONVIF metadata
           model: c.model, // ONVIF metadata
-          ptzEnabled: c.ptzEnabled // Manually toggled PTZ flag
+          ptzEnabled: c.ptzEnabled, // Manually toggled PTZ flag
+          ptzMode: c.ptzMode ?? 'auto' // PTZ capability override: auto | full | zoom
         }));
         setCameras(list);
         setVisibleCamIds(list.map((c: any) => c.id));

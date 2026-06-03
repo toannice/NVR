@@ -16,7 +16,8 @@ data class OnvifDeviceInfo(
     val manufacturer: String,
     val model: String,
     val rtspUrl: String,
-    val profileToken: String = ""
+    val profileToken: String = "",
+    val subRtspUrl: String? = null,
 )
 
 object OnvifSoapClient {
@@ -96,6 +97,11 @@ $authHeader
         return regex.find(xml)?.groupValues?.get(1)?.trim()
     }
 
+    private fun extractAllAttributes(xml: String, tag: String, attr: String): List<String> {
+        val regex = Regex("<(?:[a-zA-Z0-9]+:)?$tag[^>]*$attr=\"([^\"]+)\"")
+        return regex.findAll(xml).map { it.groupValues[1].trim() }.toList()
+    }
+
     // ── Existing: Device info + stream URI ────────────────────────────────────
 
     suspend fun getDeviceInfoAndStream(ip: String, port: Int = 80, username: String, password: String?): OnvifDeviceInfo {
@@ -120,12 +126,13 @@ $authHeader
         val rawMediaUrl = extractValue(capRes, "XAddr") ?: throw Exception("Media service not found on device")
         val mediaUrl = rawMediaUrl.replace(Regex("http://[0-9\\.]+(:[0-9]+)?"), "http://$ip:$port")
 
-        // 3. Get Profiles
+        // 3. Get Profiles (all tokens for main + sub stream)
         val getProfilesReq = buildSoapRequest(authHeader, "<trt:GetProfiles/>")
         val profilesRes = sendSoapPost(mediaUrl, getProfilesReq)
-        val firstProfileToken = extractAttribute(profilesRes, "Profiles", "token") ?: throw Exception("No media profiles found")
+        val allTokens = extractAllAttributes(profilesRes, "Profiles", "token")
+        val firstProfileToken = allTokens.firstOrNull() ?: throw Exception("No media profiles found")
 
-        // 4. Get Stream URI
+        // 4. Get Main Stream URI
         val getStreamUriReq = buildSoapRequest(authHeader, """
             <trt:GetStreamUri>
                 <trt:StreamSetup>
@@ -143,7 +150,33 @@ $authHeader
             streamUri = streamUri.replace("rtsp://", "rtsp://$username:$password@")
         }
 
-        return OnvifDeviceInfo(manufacturer, model, streamUri, firstProfileToken)
+        // 5. Get Sub Stream URI from 2nd profile (non-fatal if missing)
+        var subRtspUrl: String? = null
+        val secondToken = allTokens.getOrNull(1)
+        if (secondToken != null) {
+            try {
+                val subAuthHeader = getOnvifAuthHeader(username, password)
+                val subUriReq = buildSoapRequest(subAuthHeader, """
+                    <trt:GetStreamUri>
+                        <trt:StreamSetup>
+                            <tt:Stream>RTP-Unicast</tt:Stream>
+                            <tt:Transport><tt:Protocol>RTSP</tt:Protocol></tt:Transport>
+                        </trt:StreamSetup>
+                        <trt:ProfileToken>$secondToken</trt:ProfileToken>
+                    </trt:GetStreamUri>
+                """.trimIndent())
+                val subUriRes = sendSoapPost(mediaUrl, subUriReq)
+                var subUri = extractValue(subUriRes, "Uri")
+                if (subUri != null) {
+                    if (password != null && !subUri.contains("@")) {
+                        subUri = subUri.replace("rtsp://", "rtsp://$username:$password@")
+                    }
+                    subRtspUrl = subUri
+                }
+            } catch (_: Exception) {}
+        }
+
+        return OnvifDeviceInfo(manufacturer, model, streamUri, firstProfileToken, subRtspUrl)
     }
 
     // ── NEW: PTZ helpers ──────────────────────────────────────────────────────

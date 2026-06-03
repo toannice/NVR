@@ -25,6 +25,10 @@ object Cameras : Table("cameras") {
     val subRtspUrl = text("sub_rtsp_url").nullable()
     val macAddress = varchar("mac_address", 50).nullable()
     val hasPtz = bool("has_ptz").default(false)
+    // Manual PTZ capability override for cameras whose ONVIF GetNodes under-reports
+    // (e.g. a real pan/tilt cam that only advertises a Zoom velocity space):
+    // null/"auto" = trust GetNodes probe, "full" = force Pan+Tilt+Zoom, "zoom" = zoom only.
+    val ptzMode = varchar("ptz_mode", 20).nullable()
 
     override val primaryKey = PrimaryKey(slug)
     init { uniqueIndex("cameras_channel_id_uq", channelId) }

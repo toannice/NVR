@@ -23,12 +23,13 @@ import kotlinx.serialization.Serializable
 import kotlinx.coroutines.sync.withLock
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import vn.aiview.nvr.utils.HwaccelDetector
+import vn.aiview.nvr.utils.CryptoUtils
 import vn.aiview.nvr.services.CameraConfigMutex
 
 private val configMutex = CameraConfigMutex.mutex
 
 @Serializable
-data class CameraStatus(val id: String, val name: String, val rtsp: String, val ip: String?, val manufacturer: String, val model: String, val onvifPort: Int = 80, val ptzEnabled: Boolean = false)
+data class CameraStatus(val id: String, val name: String, val rtsp: String, val ip: String?, val manufacturer: String, val model: String, val onvifPort: Int = 80, val ptzEnabled: Boolean = false, val ptzMode: String? = null)
 
 @Serializable
 data class CameraStats(val isOnline: Boolean, val fps: Double)
@@ -38,54 +39,68 @@ fun Route.cameraRouting() {
         try {
             val configPath = System.getenv("CONFIG_PATH") ?: "config/config.yml"
             val configFile = File(configPath)
-            if (!configFile.exists()) {
-                call.respond(emptyList<CameraStatus>())
-                return@get
+
+            // Read go2rtc streams from config.yml for RTSP URL fallback
+            @Suppress("UNCHECKED_CAST")
+            val go2rtcStreams: Map<String, Any>? = if (configFile.exists()) {
+                val yaml = Yaml()
+                val configData = yaml.load<Map<String, Any>>(configFile.readText())
+                configData?.get("go2rtc").let { it as? Map<String, Any> }?.get("streams") as? Map<String, Any>
+            } else null
+
+            fun rtspFromStreams(slug: String): String {
+                val streamList = go2rtcStreams?.get(slug) as? List<*> ?: return ""
+                val raw = streamList.firstOrNull()?.toString() ?: return ""
+                // Skip loopback aliases (those are channelId aliases, not real URLs)
+                if (raw.contains("127.0.0.1")) return ""
+                return if (raw.contains("#")) raw.substringBefore("#") else raw
             }
-            
-            val yaml = Yaml()
-            val configData = yaml.load<Map<String, Any>>(configFile.readText())
-            val cameraConfigs = configData["cameras"] as? Map<String, Any> ?: emptyMap()
-            
-            val go2rtc = configData["go2rtc"] as? Map<String, Any>
-            val streams = go2rtc?.get("streams") as? Map<String, Any>
-            
-            val dbCamerasRow = transaction {
-                Cameras.selectAll().associateBy({ it[Cameras.slug] }, { it })
-            }
-            
-            val cameras = cameraConfigs.keys.map { slug ->
-                val camConfig = cameraConfigs[slug] as? Map<String, Any>
-                val ffmpeg = camConfig?.get("ffmpeg") as? Map<String, Any>
-                val inputs = ffmpeg?.get("inputs") as? List<Map<String, Any>>
-                val rtspPath = inputs?.firstOrNull()?.get("path")?.toString() ?: ""
-                
-                val streamList = streams?.get(slug) as? List<*>
-                val streamUrl = streamList?.firstOrNull()?.toString() ?: ""
-                val originalRtspUrl = if (streamUrl.endsWith("#tcp") || streamUrl.endsWith("#udp")) {
-                    streamUrl.substringBeforeLast("#")
-                } else {
-                    streamUrl
-                }.ifEmpty { rtspPath }
-                
-                val dbRecord = dbCamerasRow[slug]
-                var ip = dbRecord?.get(Cameras.ip)
-                if (ip.isNullOrBlank() || ip == "127.0.0.1") {
-                    ip = parseIpFromRtsp(originalRtspUrl)
-                }
-                
-                CameraStatus(
+
+            // DB rows are the primary source — they include all cameras (both Web UI added and cloud added).
+            val dbRows = transaction { Cameras.selectAll().toList() }
+            val dbSlugs = dbRows.map { it[Cameras.slug] }.toSet()
+
+            val cameras = mutableListOf<CameraStatus>()
+
+            // 1. DB rows (includes cameras added from any source)
+            for (row in dbRows) {
+                val slug = row[Cameras.slug]
+                val rtsp = row[Cameras.rtspUrl].ifBlank { rtspFromStreams(slug) }
+                var ip = row[Cameras.ip]
+                if (ip.isNullOrBlank() || ip == "127.0.0.1") ip = parseIpFromRtsp(rtsp)
+                cameras.add(CameraStatus(
                     id = slug,
-                    name = dbRecord?.get(Cameras.displayName) ?: slug,
-                    rtsp = originalRtspUrl,
+                    name = row[Cameras.displayName].ifBlank { slug },
+                    rtsp = rtsp,
                     ip = ip,
-                    manufacturer = dbRecord?.get(Cameras.manufacturer) ?: "Unknown",
-                    model = dbRecord?.get(Cameras.model) ?: "Unknown",
-                    onvifPort = dbRecord?.get(Cameras.onvifPort) ?: 80,
-                    ptzEnabled = dbRecord?.get(Cameras.ptzEnabled) ?: false
-                )
+                    manufacturer = row[Cameras.manufacturer],
+                    model = row[Cameras.model],
+                    onvifPort = row[Cameras.onvifPort],
+                    ptzEnabled = row[Cameras.ptzEnabled],
+                    ptzMode = row[Cameras.ptzMode]
+                ))
             }
-            
+
+            // 2. config.yml-only cameras (edge case: manually added or startup sync not yet run)
+            if (configFile.exists()) {
+                val yaml = Yaml()
+                @Suppress("UNCHECKED_CAST")
+                val yamlCameras = (yaml.load<Map<String, Any>>(configFile.readText())
+                    ?.get("cameras") as? Map<String, Any>)?.keys ?: emptySet()
+                for (slug in yamlCameras) {
+                    if (slug in dbSlugs) continue
+                    val rtsp = rtspFromStreams(slug)
+                    cameras.add(CameraStatus(
+                        id = slug,
+                        name = slug,
+                        rtsp = rtsp,
+                        ip = parseIpFromRtsp(rtsp),
+                        manufacturer = "Unknown",
+                        model = "Unknown"
+                    ))
+                }
+            }
+
             call.respond(cameras)
         } catch (e: Exception) {
             call.application.environment.log.error("Error listing cameras", e)
@@ -110,10 +125,19 @@ fun Route.cameraRouting() {
             val onvifPort = json["onvifPort"]?.jsonPrimitive?.content?.toIntOrNull() ?: 80
             val ptzEnabled = json["ptzEnabled"]?.jsonPrimitive?.content?.toBoolean() ?: false
             
+            val subRtspUrl = json["subRtspUrl"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+
             val urlError = validateRtspUrl(rtspUrl)
             if (urlError != null) {
                 call.respondText("""{"error":"$urlError"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.BadRequest)
                 return@post
+            }
+            if (subRtspUrl != null) {
+                val subUrlError = validateRtspUrl(subRtspUrl)
+                if (subUrlError != null) {
+                    call.respondText("""{"error":"Sub stream: $subUrlError"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.BadRequest)
+                    return@post
+                }
             }
 
             val ipAddr = parseIpFromRtsp(rtspUrl) ?: ""
@@ -140,6 +164,7 @@ fun Route.cameraRouting() {
                 slug = slug,
                 displayName = name,
                 rtspUrl = rtspUrl,
+                subRtspUrl = subRtspUrl,
                 ip = ipAddr,
                 onvifPort = onvifPort,
                 ptzEnabled = ptzEnabled,
@@ -156,6 +181,65 @@ fun Route.cameraRouting() {
             )
         } catch (e: Exception) {
             call.application.environment.log.error("Error adding camera", e)
+            call.respondText("""{"error":"${e.message}"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.InternalServerError)
+        }
+    }
+
+    post("/api/edit-camera") {
+        try {
+            val jsonStr = call.receiveText()
+            val json = Json.parseToJsonElement(jsonStr).jsonObject
+            val id = json["id"]?.jsonPrimitive?.content
+                ?: run {
+                    call.respondText("""{"error":"Camera ID is required"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.BadRequest)
+                    return@post
+                }
+            val newName = json["name"]?.jsonPrimitive?.content?.trim()
+                ?: run {
+                    call.respondText("""{"error":"Name is required"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.BadRequest)
+                    return@post
+                }
+            if (newName.isBlank()) {
+                call.respondText("""{"error":"Name cannot be blank"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.BadRequest)
+                return@post
+            }
+            // Optional: ONVIF port (e.g. set to the socat proxy port so PTZ reaches a proxied camera).
+            val onvifPort = json["onvifPort"]?.jsonPrimitive?.content?.toIntOrNull()
+            if (onvifPort != null && (onvifPort < 1 || onvifPort > 65535)) {
+                call.respondText("""{"error":"Invalid ONVIF port"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.BadRequest)
+                return@post
+            }
+            // Optional: ONVIF credentials — needed for PTZ on proxy/cloud cameras whose RTSP URL
+            // carries no embedded user:pass. Stored as plaintext username + encrypted password.
+            val onvifUser = json["onvifUsername"]?.jsonPrimitive?.content?.trim()
+            val onvifPass = json["onvifPassword"]?.jsonPrimitive?.content
+            // PTZ capability override: "auto" (null) | "full" | "zoom". Lets the user force the
+            // pan/tilt d-pad for a real PTZ camera whose ONVIF GetNodes only advertises Zoom.
+            val ptzModeRaw = json["ptzMode"]?.jsonPrimitive?.content?.trim()?.lowercase()
+            val ptzMode: String? = when (ptzModeRaw) {
+                "full", "zoom" -> ptzModeRaw
+                "auto", "" -> null
+                else -> ptzModeRaw  // null stays null; unknown values are ignored below
+            }
+            val updated = transaction {
+                Cameras.update({ Cameras.slug eq id }) {
+                    it[Cameras.displayName] = newName
+                    if (onvifPort != null) it[Cameras.onvifPort] = onvifPort
+                    if (!onvifUser.isNullOrBlank()) it[Cameras.username] = onvifUser
+                    // Only overwrite the password when a non-blank one is supplied, so editing
+                    // name/port alone never wipes saved credentials.
+                    if (!onvifPass.isNullOrBlank()) it[Cameras.passwordEncrypted] = CryptoUtils.encrypt(onvifPass)
+                    // Persist the override whenever the client sent the field (incl. "auto" -> null).
+                    if (ptzModeRaw != null) it[Cameras.ptzMode] = ptzMode
+                }
+            }
+            if (updated > 0) {
+                call.respondText("""{"success":true,"message":"Đã cập nhật camera"}""", io.ktor.http.ContentType.Application.Json)
+            } else {
+                call.respondText("""{"error":"Camera not found"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.NotFound)
+            }
+        } catch (e: Exception) {
+            call.application.environment.log.error("Error renaming camera", e)
             call.respondText("""{"error":"${e.message}"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.InternalServerError)
         }
     }
@@ -349,22 +433,33 @@ fun Route.cameraRouting() {
                 val inputsRaw = ffmpeg["inputs"] as? List<*>
                 if (inputsRaw != null && inputsRaw.isNotEmpty()) {
                     val inputs = inputsRaw.toMutableList()
-                    val firstInputRaw = inputs[0] as? Map<*, *>
-                    if (firstInputRaw != null) {
-                        val firstInput = (firstInputRaw as Map<String, Any>).toMutableMap()
-                        val rolesRaw = firstInput["roles"] as? List<*>
-                        val roles = rolesRaw?.map { it.toString() }?.toMutableList() ?: mutableListOf()
-
-                        if (finalEnabled) {
+                    if (finalEnabled) {
+                        // Add detect to sub-stream input if present, otherwise to first input
+                        val targetIdx = inputs.indexOfFirst {
+                            (it as? Map<*, *>)?.get("path")?.toString()?.contains("_sub") == true
+                        }.let { if (it >= 0) it else 0 }
+                        val targetRaw = inputs[targetIdx] as? Map<*, *>
+                        if (targetRaw != null) {
+                            val input = (targetRaw as Map<String, Any>).toMutableMap()
+                            val roles = ((input["roles"] as? List<*>)?.map { it.toString() } ?: emptyList()).toMutableList()
                             if (!roles.contains("detect")) roles.add("detect")
-                        } else {
-                            roles.remove("detect")
+                            input["roles"] = roles
+                            inputs[targetIdx] = input
                         }
-
-                        firstInput["roles"] = roles
-                        inputs[0] = firstInput
-                        ffmpeg["inputs"] = inputs
+                    } else {
+                        // Remove detect from all inputs
+                        inputs.forEachIndexed { idx, inputRaw ->
+                            val inputMap = (inputRaw as? Map<*, *>) ?: return@forEachIndexed
+                            @Suppress("UNCHECKED_CAST")
+                            val input = (inputMap as Map<String, Any>).toMutableMap()
+                            val roles = ((input["roles"] as? List<*>)?.map { it.toString() } ?: emptyList()).toMutableList()
+                            if (roles.remove("detect")) {
+                                input["roles"] = roles
+                                inputs[idx] = input
+                            }
+                        }
                     }
+                    ffmpeg["inputs"] = inputs
                 }
                 camConfig["ffmpeg"] = ffmpeg
 

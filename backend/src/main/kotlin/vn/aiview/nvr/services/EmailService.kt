@@ -50,13 +50,16 @@ object EmailService {
             }
         }
 
-        withContext(Dispatchers.IO) {
-            val message = MimeMessage(getSession())
-            message.setFrom(InternetAddress(System.getenv("GMAIL_USER") ?: "nvr@aiview.vn"))
-            message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(toEmail))
-            message.subject = "NVR AI View - Mã xác thực bảo mật"
-            message.setText("Mã xác thực của bạn là: $code\n\nMã này sẽ hết hạn sau 5 phút.")
-            Transport.send(message)
+        // Skip SMTP in E2E test mode — OTP is already in DB, test reads it directly
+        if (System.getenv("E2E_TEST_MODE") != "true") {
+            withContext(Dispatchers.IO) {
+                val message = MimeMessage(getSession())
+                message.setFrom(InternetAddress(System.getenv("GMAIL_USER") ?: "nvr@aiview.vn"))
+                message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(toEmail))
+                message.subject = "NVR AI View - Mã xác thực bảo mật"
+                message.setText("Mã xác thực của bạn là: $code\n\nMã này sẽ hết hạn sau 5 phút.")
+                Transport.send(message)
+            }
         }
         return code
     }
