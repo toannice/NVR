@@ -281,6 +281,35 @@ $authHeader
     }
 
     /**
+     * Empirical pan/tilt probe (4-6 Plan A auto-PTZ). Sends a tiny PanTilt ContinuousMove and Stop,
+     * returning true iff the camera accepted it (no SOAP fault). Note: ONVIF cameras return faults as
+     * HTTP 200 with a <Fault> body, so we must inspect the body — not just rely on the HTTP status.
+     */
+    suspend fun probePanTiltSupported(
+        ptzUrl: String, profileToken: String,
+        username: String, password: String?
+    ): Boolean {
+        val authHeader = getOnvifAuthHeader(username, password)
+        val body = """
+            <tptz:ContinuousMove>
+                <tptz:ProfileToken>$profileToken</tptz:ProfileToken>
+                <tptz:Velocity><tt:PanTilt x="0.05" y="0.0"/></tptz:Velocity>
+            </tptz:ContinuousMove>
+        """.trimIndent()
+        val resp = try {
+            sendSoapPost(ptzUrl, buildSoapRequest(authHeader, body))
+        } catch (e: Exception) {
+            return false // non-2xx (often an auth/space fault) ⇒ treat as no pan/tilt
+        } finally {
+            runCatching { stopMove(ptzUrl, profileToken, username, password) }
+        }
+        val faulted = resp.contains("Fault", ignoreCase = true) ||
+            resp.contains("out of bounds", ignoreCase = true) ||
+            resp.contains("NotSupported", ignoreCase = true)
+        return !faulted
+    }
+
+    /**
      * Sends Stop to halt any ongoing PTZ movement.
      */
     suspend fun stopMove(

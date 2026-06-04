@@ -82,6 +82,7 @@ services:
         condition: service_healthy
     secrets:
       - gmail_app_password
+      - edge_agent_token                       # Shared fleet token for edge gateways (4-6 Plan A)
     environment:
       - FRIGATE_URL=http://localhost:5000
       - MQTT_URL=tcp://localhost:1883
@@ -93,6 +94,10 @@ services:
       - GMAIL_USER=${GMAIL_USER}               # Username is not sensitive, stays as env var
       - DC_BRIDGE_PATH=${DC_BRIDGE_PATH:-}    # Optional: path to dc-bridge binary (default: ~/.aiview/dc-bridge)
       - E2E_TEST_MODE=${E2E_TEST_MODE:-false} # Set true in .env to enable /api/dev/* endpoints for E2E tests
+      # ─── Edge gateway auto-provisioning (4-6 Plan A) ───
+      - ZT_SCAN_SUBNET=${ZT_SCAN_SUBNET:-}    # ZeroTier subnet to auto-scan for gateways, e.g. 10.34.24.0/24 (empty = disabled)
+      - EDGE_AGENT_PORT=${EDGE_AGENT_PORT:-9797}
+      - GATEWAY_SCAN_INTERVAL_SEC=${GATEWAY_SCAN_INTERVAL_SEC:-30}
     healthcheck:
       test: [ "CMD-SHELL", "curl -f http://127.0.0.1:3000/api/health || exit 1" ]
       interval: 20s
@@ -145,6 +150,8 @@ services:
 secrets:
   gmail_app_password:
     file: ./secrets/gmail_app_password
+  edge_agent_token:
+    file: ./secrets/edge_agent_token
 
 # ─── Networks ──────────────────────────────────────────────
 networks:

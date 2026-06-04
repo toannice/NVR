@@ -34,5 +34,6 @@ fun Application.module() {
     
     vn.aiview.nvr.services.MqttService.start()
     vn.aiview.nvr.services.RecordingScheduler.start()
+    vn.aiview.nvr.services.GatewayScanner.start()
     CloudService.start()
 }

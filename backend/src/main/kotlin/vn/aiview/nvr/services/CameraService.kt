@@ -55,11 +55,20 @@ object CameraService {
         manufacturer: String = "Unknown",
         model: String = "Unknown",
         onvifTimeoutMs: Long = 10_000,
+        // Gateway provisioning (4-6 Plan A): when the camera lives behind an edge gateway, ONVIF
+        // GetStreamUri returns the camera's field-LAN RTSP host (e.g. 192.168.2.64:554) which the
+        // NVR cannot reach. Rewrite the RTSP authority to the gateway's proxy (zerotierIp:rtspPort)
+        // while keeping creds + path. gatewayId/localIp/assignedRtspPort are stored as metadata.
+        rtspProxyHostPort: String? = null,
+        gatewayId: String? = null,
+        localIp: String? = null,
+        assignedRtspPort: Int? = null,
     ): Result<AppliedCamera> = runCatching {
         val info = withTimeout(onvifTimeoutMs) {
             OnvifSoapClient.getDeviceInfoAndStream(host, port, user, pass)
         }
-        val rtspUrl = info.rtspUrl
+        val rtspUrl = if (rtspProxyHostPort != null) rewriteRtspHost(info.rtspUrl, rtspProxyHostPort) else info.rtspUrl
+        val subRtspUrl = if (rtspProxyHostPort != null) info.subRtspUrl?.let { rewriteRtspHost(it, rtspProxyHostPort) } else info.subRtspUrl
         val mainToken = info.profileToken.ifBlank { "MediaProfile${channelId.padStart(3, '0')}01" }
         val subToken = buildSubToken(channelId)
         val slug = "cam_$channelId"
@@ -77,8 +86,11 @@ object CameraService {
             mainToken = mainToken,
             subToken = subToken,
             rtspUrl = rtspUrl,
-            subRtspUrl = info.subRtspUrl,
+            subRtspUrl = subRtspUrl,
             record = true,
+            gatewayId = gatewayId,
+            localIp = localIp,
+            assignedRtspPort = assignedRtspPort,
         )
     }
 
@@ -180,6 +192,9 @@ object CameraService {
         subRtspUrl: String? = null,
         record: Boolean,
         ptzEnabled: Boolean = false,
+        gatewayId: String? = null,
+        localIp: String? = null,
+        assignedRtspPort: Int? = null,
     ): AppliedCamera {
         val encryptedPass = if (password.isNullOrBlank()) null else CryptoUtils.encrypt(password)
         // Resolve effective slug: a row may already exist for this channel_id under a different
@@ -209,6 +224,9 @@ object CameraService {
                         it[Cameras.rtspUrl] = rtspUrl
                         it[Cameras.subRtspUrl] = subRtspUrl
                         it[Cameras.hasPtz] = ptzEnabled
+                        if (gatewayId != null) it[Cameras.gatewayId] = gatewayId
+                        if (localIp != null) it[Cameras.localIp] = localIp
+                        if (assignedRtspPort != null) it[Cameras.assignedRtspPort] = assignedRtspPort
                     }
                 } else {
                     Cameras.update({ Cameras.slug eq targetSlug }) {
@@ -224,6 +242,9 @@ object CameraService {
                         it[Cameras.subToken] = subToken
                         it[Cameras.rtspUrl] = rtspUrl
                         it[Cameras.subRtspUrl] = subRtspUrl
+                        if (gatewayId != null) it[Cameras.gatewayId] = gatewayId
+                        if (localIp != null) it[Cameras.localIp] = localIp
+                        if (assignedRtspPort != null) it[Cameras.assignedRtspPort] = assignedRtspPort
                     }
                 }
                 targetSlug
@@ -445,6 +466,56 @@ object CameraService {
             val hostWithPort = hostPart.substringAfterLast("@")
             hostWithPort.substringBefore(":")
         } catch (_: Exception) { null }
+    }
+
+    /**
+     * Rewrites the authority (host:port) of an RTSP URL, preserving scheme, embedded creds and path.
+     * Used for gateway cameras: rtsp://user:pass@192.168.2.64:554/path → rtsp://user:pass@10.34.24.12:8081/path
+     */
+    fun rewriteRtspHost(url: String, hostPort: String): String {
+        val scheme = "rtsp://"
+        if (url.isBlank() || !url.startsWith(scheme)) return url
+        val rest = url.removePrefix(scheme)
+        val atIdx = rest.lastIndexOf('@')
+        val creds = if (atIdx >= 0) rest.substring(0, atIdx + 1) else "" // keeps trailing '@'
+        val afterCreds = if (atIdx >= 0) rest.substring(atIdx + 1) else rest
+        val slashIdx = afterCreds.indexOf('/')
+        val path = if (slashIdx >= 0) afterCreds.substring(slashIdx) else ""
+        return "$scheme$creds$hostPort$path"
+    }
+
+    /**
+     * Best-effort empirical PTZ detection (4-6 Plan A). Sends one tiny PanTilt ContinuousMove + Stop
+     * through the (proxied) ONVIF endpoint and inspects the SOAP response: a clean response ⇒ the
+     * camera accepts ONVIF pan/tilt → ptz_mode="full"; a fault (e.g. "speed out of bounds") ⇒ "zoom".
+     * NEVER overrides a manual ptz_mode the user already set. Caveat documented in 4-6-to-do-jobs.md:
+     * some hardware-PTZ cameras (e.g. OSSD2MPVF33XPTZAI) reject ONVIF ContinuousMove and get classified
+     * zoom-only here — that is a known false-negative; the manual override remains the escape hatch.
+     */
+    suspend fun autoDetectPtz(slug: String, ip: String, onvifPort: Int, user: String, pass: String) {
+        try {
+            val existingMode = transaction {
+                Cameras.selectAll().where { Cameras.slug eq slug }.firstOrNull()?.get(Cameras.ptzMode)
+            }
+            if (!existingMode.isNullOrBlank() && existingMode.lowercase() != "auto") {
+                AppLogger.info(AppLogger.Module.CAMERA, "PTZ", "AUTO_PTZ_SKIP", "slug=$slug manual=$existingMode")
+                return
+            }
+            val (ptzUrl, profileToken) = OnvifSoapClient.getPtzServiceUrlAndToken(ip, onvifPort, user, pass)
+            val panTiltOk = OnvifSoapClient.probePanTiltSupported(ptzUrl, profileToken, user, pass)
+            val mode = if (panTiltOk) "full" else "zoom"
+            transaction {
+                Cameras.update({ Cameras.slug eq slug }) {
+                    it[Cameras.ptzMode] = mode
+                    it[Cameras.ptzEnabled] = true
+                    it[Cameras.hasPtz] = true
+                }
+            }
+            AppLogger.info(AppLogger.Module.CAMERA, "PTZ", "AUTO_PTZ_DETECT", "slug=$slug mode=$mode panTilt=$panTiltOk")
+        } catch (e: Exception) {
+            // No PTZ service / unreachable → leave ptz_mode null (UI hides d-pad). Non-fatal.
+            AppLogger.info(AppLogger.Module.CAMERA, "PTZ", "AUTO_PTZ_NONE", "slug=$slug: ${e.message}")
+        }
     }
 
     private fun triggerFrigateRestart(): Boolean = try {

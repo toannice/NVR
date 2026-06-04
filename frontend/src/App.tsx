@@ -4,6 +4,7 @@ import AIConfigView from './components/AIConfigView'
 import PatternLockScreen from './components/PatternLockScreen'
 import BoundingBoxCanvas from './components/BoundingBoxCanvas'
 import LiveCamera from './components/LiveCamera'
+import GatewaysPanel from './components/GatewaysPanel'
 import { useMqttEvents } from './hooks/useMqttEvents'
 import './App.css'
 import customLogo from './assets/aicam-logo-white1.png'
@@ -53,7 +54,7 @@ const Header = ({ activeTab, setActiveTab, currentTime }: {
     </div>
 
     <nav className="flex items-center space-x-1 flex-1 overflow-x-auto justify-center px-4 no-scrollbar">
-      {['Live View', 'Playback', 'Downloads', 'Sự kiện AI', 'Setup'].map(id => (
+      {['Live View', 'Playback', 'Downloads', 'Sự kiện AI', 'Gateways', 'Setup'].map(id => (
         <button
           key={id}
           onClick={() => setActiveTab(id)}
@@ -62,7 +63,7 @@ const Header = ({ activeTab, setActiveTab, currentTime }: {
             : 'text-white hover:bg-white/20'
             } `}
         >
-          {id === 'Live View' ? 'Trực tiếp' : id === 'Playback' ? 'Xem lại' : id === 'Downloads' ? 'Tải xuống' : id === 'Sự kiện AI' ? 'Sự kiện AI' : 'Cấu hình'}
+          {id === 'Live View' ? 'Trực tiếp' : id === 'Playback' ? 'Xem lại' : id === 'Downloads' ? 'Tải xuống' : id === 'Sự kiện AI' ? 'Sự kiện AI' : id === 'Gateways' ? 'Gateway' : 'Cấu hình'}
         </button>
       ))}
     </nav>
@@ -4176,6 +4177,7 @@ function App() {
         {activeTab === 'Sự kiện AI' && (
           <AIConfigView cameras={cameras} addToast={addToast} />
         )}
+        {activeTab === 'Gateways' && <GatewaysPanel addToast={addToast} onCamerasChanged={fetchCameras} />}
         {activeTab === 'Setup' && (
           <SetupView
             setupTab={setupTab}

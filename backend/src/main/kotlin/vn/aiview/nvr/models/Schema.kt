@@ -30,8 +30,35 @@ object Cameras : Table("cameras") {
     // null/"auto" = trust GetNodes probe, "full" = force Pan+Tilt+Zoom, "zoom" = zoom only.
     val ptzMode = varchar("ptz_mode", 20).nullable()
 
+    // Gateway provisioning (4-6 Plan A) — management metadata only; live ONVIF/RTSP path still
+    // reads ip/onvifPort. For a gateway camera: ip = gateway.zerotierIp, onvif_port = assigned ONVIF
+    // proxy port, assigned_rtsp_port = assigned RTSP proxy port, local_ip = camera IP on field LAN.
+    val gatewayId = varchar("gateway_id", 50).nullable().index()
+    val localIp = varchar("local_ip", 50).nullable()
+    val assignedRtspPort = integer("assigned_rtsp_port").nullable()
+
     override val primaryKey = PrimaryKey(slug)
     init { uniqueIndex("cameras_channel_id_uq", channelId) }
+}
+
+/**
+ * Edge gateways (Raspberry Pi, 4-6 Plan A). Passive L4 proxies on the ZeroTier mesh —
+ * the gateway never connects to the NVR; the NVR discovers it (auto-scan ZT subnet) and drives it.
+ * No agent token stored here (fleet token is a shared Docker secret); ZeroTier member authorize
+ * is done out-of-band in ZeroTier Central.
+ */
+object Gateways : Table("gateways") {
+    val id = varchar("id", 50)
+    val name = varchar("name", 255).default("")
+    val zerotierIp = varchar("zerotier_ip", 50).nullable()
+    val agentPort = integer("agent_port").default(9797)
+    val status = varchar("status", 20).default("discovered") // discovered | approved | online | offline
+    val fieldSubnet = varchar("field_subnet", 50).nullable()
+    val lastSeen = datetime("last_seen").nullable()
+    val createdAt = datetime("created_at").defaultExpression(CurrentDateTime)
+    val updatedAt = datetime("updated_at").defaultExpression(CurrentDateTime)
+
+    override val primaryKey = PrimaryKey(id)
 }
 
 object Schedules : Table("schedules") {

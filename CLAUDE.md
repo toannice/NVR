@@ -91,6 +91,14 @@ Stage 3: eclipse-temurin:21-jre-alpine → runtime image
 | `backend/src/main/kotlin/vn/aiview/nvr/routes/CloudRouting.kt` | `POST /internal/dc/command` — dc-bridge callback into CommandDispatcher |
 | `data/dc-bridge` | Go Pion WebRTC sidecar binary (linux/amd64), required for device_service DATA queries |
 | `connection_to_server.md` | Full guide: how a Linux device connects to AIView cloud + dc-bridge build steps |
+| `edge-agent/` | **Gateway (4-6 Plan A):** Go agent on Raspberry Pi — passive L4 proxy (nginx stream), WS-Discovery, field web page. HTTP server only; never calls NVR. |
+| `backend/.../gateway/EdgeAgentClient.kt` | NVR→agent HTTP client (bearer fleet token, timeout+retry) |
+| `backend/.../gateway/GatewayConfig.kt` | NVR gateway settings: scan subnet, agent port, fleet token (`/run/secrets/edge_agent_token`) |
+| `backend/.../services/GatewayScanner.kt` | Auto-scans `ZT_SCAN_SUBNET` /health to discover gateways (the "auto connect"; gateway never registers) |
+| `backend/.../services/GatewayService.kt` | Gateway approve + adopt camera (admin types creds; reuses `CameraService.applyAndPersistFromOnvif`) |
+| `backend/.../routes/GatewayRouting.kt` | `/api/gateways*` — list/scan/approve/discover/adoptable/adopt. No register/push endpoint. |
+| `frontend/src/components/GatewaysPanel.tsx` | Web UI "Gateway" tab: discover → approve → adopt |
+| `gateway_setup.md` | Full gateway setup guide (Pi agent install, ZeroTier authorize, NVR flow, troubleshooting) |
 | `backend/src/main/kotlin/vn/aiview/nvr/routes/LockRouting.kt` | Pattern lock API, OTP verify endpoint |
 | `backend/src/main/kotlin/vn/aiview/nvr/routes/OnvifRouting.kt` | Scan ONVIF, thêm camera qua ONVIF |
 | `backend/src/main/kotlin/vn/aiview/nvr/services/EmailService.kt` | Gmail SMTP, OTP send/peek/verify với SQLite |
@@ -234,13 +242,31 @@ Web UI điều khiển PTZ qua `/api/cameras/{slug}/ptz/{capabilities,move,stop}
 - **Kiểu PTZ**: `Tự động` (theo ONVIF `GetNodes`) | `Toàn phần` (ép Pan/Tilt/Zoom) | `Chỉ Zoom`. Lưu ở cột `cameras.ptz_mode`.
 - Bật toggle PTZ.
 
-**Vì sao có override "Kiểu PTZ":** nhiều camera PTZ rẻ (kể cả `OSSD2MPVF33XPTZAI`) **chỉ quảng cáo `ContinuousZoomVelocitySpace` trong `GetNodes`** (không có PanTilt space) dù phần cứng có pan/tilt → auto-detect ẩn d-pad. Chọn **Toàn phần** để ép hiện d-pad. `/ptz/capabilities` ưu tiên override → trả ngay, không cần probe camera (chạy cả khi proxy/link tạm down).
+**Vì sao có override "Kiểu PTZ":** một số camera PTZ rẻ **chỉ quảng cáo `ContinuousZoomVelocitySpace` trong `GetNodes`** (không có PanTilt space) dù phần cứng *có thể* pan/tilt qua API riêng → auto-detect ẩn d-pad. Nếu camera thật sự nhận ONVIF PanTilt thì chọn **Toàn phần** để ép hiện d-pad. `/ptz/capabilities` ưu tiên override → trả ngay, không cần probe camera (chạy cả khi proxy/link tạm down). ⚠️ Có camera phần cứng PTZ thật nhưng **không lái pan/tilt bằng ONVIF `ContinuousMove`/GenericSpace** (vd `OSSD2MPVF33XPTZAI`, xem dưới) → ép `full` thì d-pad hiện nhưng lệnh PanTilt vẫn fault "speed out of bounds". Cần tìm đúng phương thức (AbsoluteMove/RelativeMove/space riêng/API riêng).
 
 `PtzControls` (frontend) fetch `/ptz/capabilities` khi mở panel, ẩn d-pad khi `hasPanTilt=false`, ẩn zoom khi `hasZoom=false`.
 
 > Camera zoom-only thật (Bkav P200-0802N): để `Tự động` hoặc `Chỉ Zoom`. Gửi PanTilt cho nó → fault "speed out of bounds".
 
 Chi tiết: **[connection_to_server.md](./connection_to_server.md)** § "ONVIF / PTZ camera field qua socat proxy".
+
+### Gateway Camera Provisioning (Plan A) — ✅ DONE 2026-06-04
+
+> Kế hoạch đầy đủ + verify steps: **[4-6-to-do-jobs.md](./4-6-to-do-jobs.md)**. Hướng dẫn vận hành: **[gateway_setup.md](./gateway_setup.md)**.
+
+**Đã hoàn thành & verify end-to-end trên Pi thật** (gateway-nha-A @ ZT `10.34.24.12`, RAM agent ~4MB): NVR auto-scan subnet ZeroTier → phát hiện gateway (passive, **không push**) → admin approve → adopt camera (`192.168.2.64` → slug `cam_6`): agent cấp cổng nginx-stream onvif 8080 / rtsp 8081, NVR probe ONVIF qua proxy, rewrite RTSP host → `10.34.24.12:8081`, ghi Frigate/go2rtc, **live view lên hình OK**. Multi-NVR ready; Pi không giữ creds (admin gõ lúc approve); fleet token dùng chung (`secrets/edge_agent_token`).
+
+Code: `edge-agent/` (Go), `backend/.../gateway/*`, `services/{GatewayScanner,GatewayService}.kt`, `routes/GatewayRouting.kt`, `CameraService.rewriteRtspHost`+`autoDetectPtz`, `frontend/.../GatewaysPanel.tsx` (tab "Gateway").
+
+**Auto-PTZ (đã hiện thực):** sau adopt, gửi 1 `ContinuousMove` PanTilt nhỏ (x=0.05) + `Stop`, xem SOAP fault → set `cameras.ptz_mode` = `full` (no fault) hoặc `zoom` (fault). KHÔNG đè lựa chọn thủ công. (`OnvifSoapClient.probePanTiltSupported`, `CameraService.autoDetectPtz`.)
+
+**TODO ưu tiên — App mobile "Thêm Gateway vào NVR" (zero hand-touch trên Pi):**
+> Mục tiêu user (04/06): **KHÔNG bao giờ phải cấu hình Pi bằng tay**. App mobile chỉ làm **đúng 1 việc**: onboard/đăng ký một gateway vào NVR. Pi nướng image sẵn (agent + ZT network id + fleet token có sẵn) → cắm điện + mạng → app mobile lo phần "thêm vào NVR" (và nếu cần: authorize ZeroTier member, đặt tên gateway). Không quản lý camera trong app này — chỉ thêm gateway. Tái dùng API agent (`/health`, `/discovery`, `/camera`, `/cameras`) + endpoint NVR (`/api/gateways*`). Cần nghĩ: cách app authorize Pi vào ZeroTier (ZT Central API qua NVR?) để bỏ luôn bước thủ công duy nhất còn lại.
+
+**Còn lại / known limitations:**
+- ⚠️ **Camera under-report (verified):** `OSSD2MPVF33XPTZAI` (`.64`) là PTZ thật nhưng **không nhận pan/tilt qua ONVIF `ContinuousMove`** (`GetNodes` chỉ có Zoom; PanTilt → fault "speed out of bounds"; Zoom → OK). → auto-PTZ phân loại nó `zoom` (false-negative đã biết). Cần tìm phương thức pan thật (`AbsoluteMove`/`RelativeMove`/space riêng/API vendor) — **chưa làm**.
+- **Chưa làm (nice-to-have):** auto-dò `onvifPort` (thử nhiều cổng), tái dùng creds giữa camera cùng gateway, classifier PTZ thử thêm move-type.
+- Link ZeroTier chập chờn → mọi call agent đã có timeout ngắn + retry 1 lần.
 
 ---
 
@@ -251,6 +277,8 @@ Chi tiết: **[connection_to_server.md](./connection_to_server.md)** § "ONVIF /
 | Camera offline ngay sau khi thêm RTSP | Global `hwaccel_args: preset-intel-qsv-h264` không tương thích GPU NVIDIA | Thêm `hwaccel_args: []` vào camera-level config |
 | Site unreachable sau deploy nvr-wrapper | nginx không phụ thuộc nvr-wrapper, không tự start | `docker compose up -d nginx` |
 | Container dùng image cũ | `docker-compose.override.yml` override image + Docker cache | `docker compose build --no-cache nvr-wrapper` |
+| Adopt camera qua tab Gateway nhưng KHÔNG thấy trên NVR | List camera của App chỉ fetch lúc tải trang; adopt ở tab Gateway không tự kích hoạt fetch lại | Đã fix: `GatewaysPanel` gọi `onCamerasChanged` (=`fetchCameras`) sau adopt. Camera vẫn được lưu đúng (DB+config.yml); F5 cũng thấy ngay |
+| Gateway không hiện trong tab Gateway dù Pi chạy | `ZT_SCAN_SUBNET` chưa set / sai; Pi chưa authorize ở ZeroTier Central; fleet token Pi ≠ `secrets/edge_agent_token` | Xem `docker logs nvr-wrapper \| grep GATEWAY`; chi tiết ở `gateway_setup.md` |
 | Build không lấy code mới | Docker layer cache | `docker compose build --no-cache nvr-wrapper` |
 | GHCR pull fail | GitHub token hết hạn | `echo <token> \| docker login ghcr.io -u toannice --password-stdin` |
 | OTP input bị browser validate như email | `renderInput()` dùng `title.includes('Mã')` — fragile | Dùng `isOtp?: boolean` param tường minh |
@@ -323,6 +351,7 @@ curl -s -X POST "http://localhost:1984/api/webrtc?src=1_main" \
 | 6 | Gmail OTP persistence (SQLite) | ✅ Done |
 | 7 | Docker secrets for GMAIL_APP_PASSWORD | ✅ Done |
 | 8 | Unified Cameras source of truth (drop CloudCameras drift) | ✅ Done (003) |
+| 9 | Passive edge gateway (multi-NVR, no creds on Pi, fleet token) | ✅ Done (4-6 Plan A) |
 
 ---
 

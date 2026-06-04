@@ -254,7 +254,11 @@ class OnvifCameraClient(
         .replace("\"", "&quot;").replace("'", "&apos;")
 
     companion object {
-        const val DEFAULT_ENDPOINT = "http://10.34.24.12:8080/onvif/device_service"
+        // Legacy standalone /api/onvif/{ptz,test-connection} default endpoint. The production path
+        // (/api/cameras/{slug}/ptz/*) resolves ip:port dynamically and ignores this. Made overridable
+        // via ONVIF_PROXY_ENDPOINT so nothing is hardcoded to one gateway (4-6 Plan A cleanup).
+        val DEFAULT_ENDPOINT: String =
+            System.getenv("ONVIF_PROXY_ENDPOINT") ?: "http://10.34.24.12:8080/onvif/device_service"
     }
 }
 

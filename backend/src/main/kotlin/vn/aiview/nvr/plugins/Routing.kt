@@ -21,6 +21,7 @@ fun Application.configureRouting() {
             scheduleRouting()
             configRouting()
             onvifRouting()
+            gatewayRouting()
         }
         
         // Dev/test helpers (active only when E2E_TEST_MODE=true)

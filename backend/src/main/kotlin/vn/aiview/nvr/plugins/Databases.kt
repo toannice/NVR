@@ -36,7 +36,8 @@ fun Application.configureDatabases() {
             OtpTokens,
             AIEvents,
             CloudConfig,
-            CloudCameras
+            CloudCameras,
+            Gateways
         )
 
         migrateCloudCamerasIntoCameras()
