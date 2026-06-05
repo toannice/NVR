@@ -6,11 +6,26 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
+# -n : chế độ không tương tác -> tự trả lời "n" cho Factory Reset & Tailscale
+NON_INTERACTIVE=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -n|--non-interactive) NON_INTERACTIVE=1 ;;
+        *) echo "[!] Tham số không hợp lệ: $1"; echo "    Dùng: sudo ./run.sh [-n]"; exit 1 ;;
+    esac
+    shift
+done
+
 echo "===================================================="
 echo "   Hệ thống Setup NVR Tự động (PHIÊN BẢN 4.0 - CI/CD) "
 echo "===================================================="
 
-read -p "[?] Bạn có muốn DỌN SẠCH dữ liệu/cấu hình cũ (Factory Reset) trước khi cài đặt không? Chỉ dùng cho cấu hình máy mới tinh. (y/n): " DO_RESET
+if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    DO_RESET="n"
+    echo "[?] Factory Reset? (y/n): n  (tự động do -n)"
+else
+    read -p "[?] Bạn có muốn DỌN SẠCH dữ liệu/cấu hình cũ (Factory Reset) trước khi cài đặt không? Chỉ dùng cho cấu hình máy mới tinh. (y/n): " DO_RESET
+fi
 if [[ "$DO_RESET" =~ ^[Yy]$ ]]; then
     echo "[*] 0. Khởi tạo lại hệ thống (Factory Reset)..."
     docker compose down -v --remove-orphans >/dev/null 2>&1 || true
@@ -151,7 +166,10 @@ if ! command -v sshd >/dev/null; then
 fi
 
 TS_KEY_FROM_ENV=$(grep "^TAILSCALE_AUTH_KEY=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '\r')
-if [ -n "$TS_KEY_FROM_ENV" ]; then
+if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    INSTALL_TS="n"
+    echo "[?] Cài Tailscale? (y/n): n  (tự động do -n)"
+elif [ -n "$TS_KEY_FROM_ENV" ]; then
     read -p "[?] Đã có Key Tailscale trong .env, bạn có muốn kết nối tự động? (y/n): " INSTALL_TS
     TS_KEY=$TS_KEY_FROM_ENV
 else

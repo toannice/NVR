@@ -1,0 +1,7 @@
+[Unit]
+Description=Backup ZeroTier self-host controller (identity + controller.d + ztncui)
+After=zerotier-one.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/zt-controller-backup.sh

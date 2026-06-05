@@ -35,6 +35,27 @@ fi
 # Start with an empty (valid) managed file so `nginx -t` passes before any camera is added.
 [[ -f /etc/nginx/stream.d/cameras.conf ]] || echo "# Managed by nvr-edge-agent" > /etc/nginx/stream.d/cameras.conf
 
+echo "==> nginx boot-race fix (proxy binds the ZeroTier IP, which may not exist yet at boot)"
+# The managed stream{} blocks listen on <ztIP>:port. At boot nginx can start BEFORE zerotier-one
+# brings that IP up -> "cannot assign requested address" -> nginx fails -> proxies dead until a
+# manual start. Two defences:
+#   1) ip_nonlocal_bind=1 — let nginx bind an address that isn't on any interface yet.
+#   2) systemd drop-in — order nginx after zerotier-one and auto-restart if it still loses the race.
+echo 'net.ipv4.ip_nonlocal_bind = 1' > /etc/sysctl.d/99-nvr-edge-nginx.conf
+sysctl -q -w net.ipv4.ip_nonlocal_bind=1 || true
+
+mkdir -p /etc/systemd/system/nginx.service.d
+cat > /etc/systemd/system/nginx.service.d/override.conf <<'EOF'
+# Added by nvr-edge-agent — nginx stream proxies bind the ZeroTier IP; wait for it + retry.
+[Unit]
+After=network-online.target zerotier-one.service
+Wants=network-online.target
+
+[Service]
+Restart=on-failure
+RestartSec=3
+EOF
+
 echo "==> Installing binary -> /usr/local/bin/nvr-edge-agent"
 install -m 0755 "$BIN" /usr/local/bin/nvr-edge-agent
 

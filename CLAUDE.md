@@ -268,6 +268,18 @@ Code: `edge-agent/` (Go), `backend/.../gateway/*`, `services/{GatewayScanner,Gat
 - **Chưa làm (nice-to-have):** auto-dò `onvifPort` (thử nhiều cổng), tái dùng creds giữa camera cùng gateway, classifier PTZ thử thêm move-type.
 - Link ZeroTier chập chờn → mọi call agent đã có timeout ngắn + retry 1 lần.
 
+### Golden image gateway (A1) — ⏳ PENDING (chưa có Pi spare, 2026-06-05)
+
+> Thuộc 004 (self-host ZeroTier — fleet `nvr-fleet` ID `efb242bde2f3e856`, pool `10.147.20.0/24`). Cutover Pi3 (`gateway-nha-A`) sang controller HQ tự host **đã xong** (xem `specs/004-gateway-onboarding/plan.md`). **Việc còn nợ:** chụp 1 image gateway nhân bản — **đang kẹt vì không có Pi rảnh** (KHÔNG dùng Pi3, nó là gateway thật đang chạy camera).
+
+**Cách hoàn tất A1 khi có Pi spare:**
+1. Trên Pi spare: copy thư mục `edge-agent/` sang, `sudo ./install.sh` (đã có sẵn fix nginx boot-race: `ip_nonlocal_bind=1` + systemd drop-in `After=zerotier-one`).
+2. Sửa `/etc/nvr-edge-agent/agent.env`: đặt `EDGE_AGENT_TOKEN` = fleet token (khớp `secrets/edge_agent_token` trên NVR). `ZT_NETWORK_ID` đã được `bake-prep.sh` bake = `efb242bde2f3e856`.
+3. `sudo ./bake-prep.sh` — xoá ZT identity/peers/state + machine-id + ssh host keys + log để mỗi Pi clone **tự sinh node-id riêng** ở boot đầu; giữ `agent.env`; reset nginx cams về rỗng.
+4. `sudo poweroff` → tháo thẻ SD → Pi Imager/dd chụp image. Mỗi Pi flash ra: boot đầu tự sinh identity → agent tự `zerotier join efb242bde2f3e856` → hiện member CHỜ trên ztncui → admin authorize → NVR scanner tự thấy.
+
+Code liên quan: `edge-agent/bake-prep.sh` (prep golden image), `edge-agent/install.sh` (đã bake nginx boot-race fix).
+
 ---
 
 ## Known Issues & Fixes
