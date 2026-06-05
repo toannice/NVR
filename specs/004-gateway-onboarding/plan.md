@@ -98,18 +98,24 @@ Plan A đã chạy end-to-end (NVR auto-scan ZeroTier → approve → adopt came
 - [x] **Cutover gateway-nha-A (Pi3)** 2026-06-05: Pi `join efb242bde2f3e856` + `leave 3b19...`; authorize trên ztncui → IP `10.147.20.12`; `agent.env` đã sẵn network ID mới. Sửa `config/config.yml` cam_6 `10.34.24.12→10.147.20.12` (cả main+sub); restart Frigate → go2rtc kéo video OK. **Gotcha:** nginx proxy bind `<ztIP>:8081`, sau đổi IP nginx chết (boot-race: nginx start trước khi ZT có IP). Fix: `systemctl start nginx` ngay; lâu dài đã bake vào `edge-agent/install.sh` (`ip_nonlocal_bind=1` + nginx systemd drop-in `After=zerotier-one`+`Restart=on-failure`).
 - [ ] (Quan trọng) Re-bake image gateway với `efb242bde2f3e856` (+ fix nginx boot-race ở `install.sh`) **trước khi deploy hàng loạt** Pi mới. Pi3 hiện tại đã đúng.
 
-### Phase 1 — Edge Agent (Go, sửa nhẹ)
-- [ ] `GET /identity` (no-auth, bind LAN) + field `ztJoined/ztAddress` (đọc `zerotier-cli info`).
-- [ ] Thêm `ztAddress` vào `/health`.
-- [ ] `POST /label` lưu `name/installer/location` vào `state.json`.
-- [ ] Build arm/arm64; verify `/identity` từ máy cùng LAN, `/camera` vẫn cần fleet token.
+### Phase 1 — Edge Agent (Go, sửa nhẹ) — ✅ DONE 2026-06-05
+- [x] `GET /identity` (no-auth, allowlist trong middleware) + `ztJoined/ztAddress/ztOnline` (đọc `zerotier-cli info`+`listnetworks`, cache 3s ở `zerotier.go`).
+- [x] Thêm `ztAddress/ztJoined/ztOnline` + `installer/location` vào `/health`.
+- [x] `POST /label` (no-auth) lưu `name/installer/location` vào `state.json` (partial update, không xoá field cũ); label đè `EDGE_AGENT_NAME`.
+- [x] Build arm/arm64 OK (`go vet` sạch); smoke-test native: `/identity`+`/label` no-auth 200, `/camera` vẫn sau fleet token, label persist + 400 khi rỗng.
+- [x] **Bind 0.0.0.0 (2026-06-05):** API listener đổi từ `127.0.0.1 + ztIP` sang **một** `0.0.0.0:PORT` → app field tự với tới được qua **field LAN** trên image nướng-sẵn mà KHÔNG cần `EDGE_AGENT_EXTRA_BIND` (IP LAN là DHCP per-site, không bake được). Bỏ luôn `EDGE_AGENT_EXTRA_BIND` (thừa: wildcard đã phủ loopback+ZT+LAN; bind cả `127.0.0.1`+`0.0.0.0` cùng cổng → EADDRINUSE trên Linux). An toàn không đổi: `/identity`+`/label` vốn no-auth/read-only, mọi mutation camera vẫn sau fleet token trên mọi interface. Verify native: `/identity` qua LAN IP (no token) 200, `/cameras` qua LAN IP 401, qua loopback 200.
 
-### Phase 2 — Android App (mới)
-- [ ] Chốt stack (đề xuất: Kotlin + Jetpack Compose native, hoặc Flutter nếu nhắm iOS sau).
-- [ ] Màn 1: quét subnet LAN → list gateway (`/identity`); xử lý quyền local-network.
-- [ ] Màn 2: chi tiết gateway (alive, ztJoined, ztAddress, `/discovery` camera count).
-- [ ] Màn 3: form Add (tên/người lắp/vị trí) → `POST /label`; hiện ztAddress + hướng dẫn báo admin.
-- [ ] (tùy chọn) copy ztAddress / chia sẻ để FW nhắn admin out-of-band.
+### Phase 2 — Android App (mới) — 🟡 SCAFFOLD DONE, build OK 2026-06-05 (chưa test trên thiết bị thật)
+> Code ở `android-app/` (Kotlin + Jetpack Compose). Build: `cd android-app && ./gradlew :app:assembleDebug` → `app-debug.apk` (~9.9MB). Tái dùng gradle 8.10.2 wrapper của backend (gradle hệ thống 4.4.1 quá cũ). SDK ở `~/Android/Sdk` (compileSdk 35, minSdk 26).
+- [x] **Chốt stack: Kotlin + Jetpack Compose** (Material3, OkHttp, kotlinx.serialization, coroutines). SDK đã cài sẵn, không Flutter. (D6)
+- [x] Màn 1 `ScanScreen`: quét /24 của LAN (NetworkInterface site-local IPv4) trên cổng agent 9797, gọi `GET /identity` song song (Semaphore 48, timeout 700ms/host), list incremental. Android không cần quyền local-network như iOS (chỉ INTERNET).
+- [x] Màn 2 `DetailScreen`: alive/ztJoined/ztOnline, ztAddress, zerotierIp, **cameraCount lấy từ `/identity`** (KHÔNG gọi `/discovery` — endpoint đó token-gated, app không có fleet token theo D4).
+- [x] Màn 3 `AddScreen`: form tên/người lắp/vị trí → `POST /label`; thành công → hiện **ztAddress** to + nút **Sao chép** + hướng dẫn "báo admin duyệt member trên ztncui". Cảnh báo nếu gateway chưa join ZeroTier (ztAddress rỗng).
+- [x] Copy ztAddress qua clipboard (LocalClipboardManager) để FW nhắn admin out-of-band.
+- [ ] **Chưa làm:** test trên điện thoại thật trong cùng LAN với 1 gateway (scan → thấy → label → admin approve trên ztncui). Cần APK cài lên máy field.
+- [ ] (nice-to-have) auto-scan khi mở app; xử lý nhiều /24 (hiện chỉ quét /24 của IP site-local đầu tiên); pull-to-refresh; build release ký APK.
+
+> ⚠️ **Lệch nhẹ so với plan gốc:** plan ghi Màn 2 lấy camera count qua `/discovery` — nhưng `/discovery` nằm sau fleet token (chỉ `/identity`+`/label` no-auth), app Tier 0 không có token → dùng `cameraCount` của `/identity`. Nếu muốn "đếm camera dò được trên LAN", phải thêm `/discovery` vào allowlist no-auth của agent (quyết định riêng, chưa làm).
 
 ### Phase 3 — NVR (Kotlin, delta nhỏ)
 - [ ] `DELETE /api/gateways/{id}` + cascade xóa camera (đã chốt: xóa luôn camera, có xác nhận).

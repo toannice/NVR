@@ -22,7 +22,10 @@ type Camera struct {
 
 // State is persisted to disk so proxies survive reboots (rebuilt into nginx on start).
 type State struct {
-	GatewayID string   `json:"gatewayId"` // stable id generated once, helps NVR keep identity across IP changes
+	GatewayID string   `json:"gatewayId"`           // stable id generated once, helps NVR keep identity across IP changes
+	Name      string   `json:"name,omitempty"`      // label set via app /label (overrides EDGE_AGENT_NAME)
+	Installer string   `json:"installer,omitempty"` // who installed it (field worker), set via app
+	Location  string   `json:"location,omitempty"`  // site/location label, set via app
 	Cameras   []Camera `json:"cameras"`
 
 	mu   sync.Mutex `json:"-"`
@@ -103,6 +106,29 @@ func (s *State) upsert(localIP, name string, poolStart int) (Camera, bool) {
 	cam := Camera{LocalIP: localIP, Name: name, OnvifPort: onvif, RtspPort: rtsp}
 	s.Cameras = append(s.Cameras, cam)
 	return cam, true
+}
+
+// setLabel updates the human labels set by the Android onboarding app. Empty values are ignored
+// so a partial update never wipes an existing field.
+func (s *State) setLabel(name, installer, location string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if name != "" {
+		s.Name = name
+	}
+	if installer != "" {
+		s.Installer = installer
+	}
+	if location != "" {
+		s.Location = location
+	}
+}
+
+// labels returns the current label triple under lock.
+func (s *State) labels() (name, installer, location string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Name, s.Installer, s.Location
 }
 
 func (s *State) remove(localIP string) bool {

@@ -51,6 +51,8 @@ func main() {
 	s := &server{cfg: cfg, state: st}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/identity", s.handleIdentity)
+	mux.HandleFunc("/label", s.handleLabel)
 	mux.HandleFunc("/discovery", s.handleDiscovery)
 	mux.HandleFunc("/camera", s.handleCamera)
 	mux.HandleFunc("/cameras", s.handleCameras)
@@ -75,11 +77,17 @@ func main() {
 	wg.Wait()
 }
 
-// auth enforces the bearer token for non-loopback callers. Loopback (the local field page) is
-// exempt so the page works without embedding the secret.
+// publicPaths are reachable without the fleet token from any caller (LAN, not just loopback).
+// They are read-only or cosmetic and are what the Android onboarding app uses over the field LAN
+// (it has no fleet token): /identity to find+identify a gateway, /label to name it (Tier 0, D4).
+// All camera/proxy mutation stays behind the fleet token (NVR-only).
+var publicPaths = map[string]bool{"/identity": true, "/label": true}
+
+// auth enforces the bearer token for non-loopback callers. Loopback (the local field page) and
+// publicPaths (the field app) are exempt so they work without embedding the secret.
 func (s *server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopback(r.RemoteAddr) {
+		if !isLoopback(r.RemoteAddr) && !publicPaths[r.URL.Path] {
 			tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 			if s.cfg.Token == "" || tok != s.cfg.Token {
 				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
@@ -91,11 +99,21 @@ func (s *server) auth(next http.Handler) http.Handler {
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	zt := ztStatus(s.cfg.ZtNetworkID)
+	name, installer, location := s.state.labels()
+	if name == "" {
+		name = s.cfg.GatewayName
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":      "ok",
 		"gatewayId":   s.state.GatewayID,
-		"gatewayName": s.cfg.GatewayName,
+		"gatewayName": name,
+		"installer":   installer,
+		"location":    location,
 		"zerotierIp":  s.cfg.resolveZtIP(),
+		"ztAddress":   zt.address,
+		"ztJoined":    zt.joined,
+		"ztOnline":    zt.online,
 		"fieldSubnet": s.cfg.FieldSubnet,
 		"agentPort":   s.cfg.Port,
 		"ramMb":       processRSSMb(),
@@ -103,6 +121,61 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"nginxOk":     nginxOk(),
 		"cameras":     sortedCameras(s.state.snapshot()),
 	})
+}
+
+// handleIdentity (no-auth, LAN) lets the Android onboarding app discover + identify a gateway on
+// the field LAN without the fleet token. Read-only; reports who/where + ZeroTier join status so
+// the field worker can name it and tell the admin which member to approve on ztncui.
+func (s *server) handleIdentity(w http.ResponseWriter, r *http.Request) {
+	zt := ztStatus(s.cfg.ZtNetworkID)
+	name, installer, location := s.state.labels()
+	if name == "" {
+		name = s.cfg.GatewayName
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"gatewayId":   s.state.GatewayID,
+		"name":        name,
+		"installer":   installer,
+		"location":    location,
+		"ztAddress":   zt.address,
+		"ztJoined":    zt.joined,
+		"ztOnline":    zt.online,
+		"zerotierIp":  s.cfg.resolveZtIP(),
+		"fieldSubnet": s.cfg.FieldSubnet,
+		"agentPort":   s.cfg.Port,
+		"alive":       true,
+		"cameraCount": len(s.state.snapshot()),
+	})
+}
+
+// handleLabel (no-auth, LAN) sets the human labels (name/installer/location) from the field app.
+// Low-impact + cosmetic (Tier 0 design): no camera/proxy effect, persisted to state.json.
+func (s *server) handleLabel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Name      string `json:"name"`
+		Installer string `json:"installer"`
+		Location  string `json:"location"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid body"})
+		return
+	}
+	if req.Name == "" && req.Installer == "" && req.Location == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "name, installer or location required"})
+		return
+	}
+	s.state.setLabel(req.Name, req.Installer, req.Location)
+	if err := s.state.save(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	name, installer, location := s.state.labels()
+	log.Printf("label set: name=%q installer=%q location=%q", name, installer, location)
+	writeJSON(w, http.StatusOK, map[string]any{"name": name, "installer": installer, "location": location})
 }
 
 func (s *server) handleDiscovery(w http.ResponseWriter, r *http.Request) {

@@ -77,5 +77,6 @@ systemctl enable --now nvr-edge-agent.service
 echo
 echo "Done. Next:"
 echo "  1) edit /etc/nvr-edge-agent/agent.env  (token + ZT_NETWORK_ID),  then: systemctl restart nvr-edge-agent"
-echo "  2) authorize this Pi in ZeroTier Central"
+echo "  2) authorize this Pi as a member on the self-host controller (ztncui)"
 echo "  3) check:  systemctl status nvr-edge-agent ;  curl -s localhost:9797/health | head"
+echo "  4) field app reaches /identity + /label over the field LAN (set EDGE_AGENT_EXTRA_BIND)"

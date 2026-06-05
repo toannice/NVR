@@ -17,7 +17,6 @@ type Config struct {
 	ZtIP           string // EDGE_AGENT_ZT_IP — override autodetected ZeroTier IP
 	ZtNetworkID    string // ZT_NETWORK_ID — best-effort `zerotier-cli join` on boot
 	FieldSubnet    string // EDGE_AGENT_FIELD_SUBNET — informational + WS-Discovery hint (e.g. 192.168.2.0/24)
-	ExtraBinds     string // EDGE_AGENT_EXTRA_BIND — comma list of extra IPs to also serve the API on (e.g. field LAN IP for phone UX)
 	NginxStreamCfg string // EDGE_AGENT_NGINX_CONF (default /etc/nginx/stream.d/cameras.conf)
 	StateFile      string // EDGE_AGENT_STATE (default /var/lib/nvr-edge-agent/state.json)
 	PortPoolStart  int    // EDGE_AGENT_POOL_START (default 8080)
@@ -31,7 +30,6 @@ func loadConfig() Config {
 		ZtIP:           os.Getenv("EDGE_AGENT_ZT_IP"),
 		ZtNetworkID:    os.Getenv("ZT_NETWORK_ID"),
 		FieldSubnet:    os.Getenv("EDGE_AGENT_FIELD_SUBNET"),
-		ExtraBinds:     os.Getenv("EDGE_AGENT_EXTRA_BIND"),
 		NginxStreamCfg: envOr("EDGE_AGENT_NGINX_CONF", "/etc/nginx/stream.d/cameras.conf"),
 		StateFile:      envOr("EDGE_AGENT_STATE", "/var/lib/nvr-edge-agent/state.json"),
 		PortPoolStart:  envInt("EDGE_AGENT_POOL_START", 8080),
@@ -42,23 +40,15 @@ func loadConfig() Config {
 	return c
 }
 
-// listenAddrs returns every host:port the API should bind. Always 127.0.0.1 (local field page,
-// auth-exempt) + the ZeroTier IP (so NVRs can reach it). Optionally extra binds (field LAN IP).
+// listenAddrs returns the host:port(s) the API binds. We bind the wildcard 0.0.0.0 unconditionally:
+// it covers loopback (local field page), the ZeroTier IP (NVRs), AND the field LAN — the last is
+// what the Android onboarding app needs, and on a zero-config baked image the field LAN IP is a
+// per-site DHCP address we can't know at bake time. Security is unchanged: /identity + /label are
+// read-only/cosmetic by design, and every camera/proxy mutation stays behind the fleet token
+// regardless of interface. (Binding 0.0.0.0 + 127.0.0.1 on the same port would EADDRINUSE on Linux
+// since the wildcard already includes loopback, so we return the single wildcard bind.)
 func (c Config) listenAddrs() []string {
-	addrs := []string{joinHostPort("127.0.0.1", c.Port)}
-	if zt := c.resolveZtIP(); zt != "" {
-		addrs = append(addrs, joinHostPort(zt, c.Port))
-	} else {
-		// ZeroTier not up yet — fall back to all interfaces so we are still reachable once it is.
-		log.Println("WARN: no ZeroTier IP found yet; binding 0.0.0.0 as fallback (token still enforced)")
-		addrs = append(addrs, joinHostPort("0.0.0.0", c.Port))
-	}
-	for _, b := range strings.Split(c.ExtraBinds, ",") {
-		if b = strings.TrimSpace(b); b != "" {
-			addrs = append(addrs, joinHostPort(b, c.Port))
-		}
-	}
-	return dedup(addrs)
+	return []string{joinHostPort("0.0.0.0", c.Port)}
 }
 
 // resolveZtIP returns the configured ZT IP or autodetects the ZeroTier interface (named zt*).
@@ -115,16 +105,4 @@ func hostnameOr(def string) string {
 
 func joinHostPort(host string, port int) string {
 	return net.JoinHostPort(host, strconv.Itoa(port))
-}
-
-func dedup(in []string) []string {
-	seen := map[string]bool{}
-	out := in[:0]
-	for _, s := range in {
-		if !seen[s] {
-			seen[s] = true
-			out = append(out, s)
-		}
-	}
-	return out
 }

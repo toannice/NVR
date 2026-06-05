@@ -14,17 +14,25 @@ Part of the gateway plan — see [`../4-6-to-do-jobs.md`](../4-6-to-do-jobs.md) 
 
 ## HTTP API
 
-Auth: `Authorization: Bearer <EDGE_AGENT_TOKEN>` for non-loopback callers; loopback (the local field
-page) is exempt.
+Auth: `Authorization: Bearer <EDGE_AGENT_TOKEN>` for non-loopback callers; **exempt:** loopback (the
+local field page) and the two app endpoints `/identity` + `/label` (the Android onboarding app reaches
+them over the field LAN with no fleet token — read-only / cosmetic, Tier 0 design). All camera/proxy
+mutation stays behind the fleet token (NVR-only).
 
-| Method | Path | Body / query | Returns |
-|---|---|---|---|
-| GET | `/health` | — | `{status, gatewayId, gatewayName, zerotierIp, fieldSubnet, ramMb, uptimeSec, nginxOk, cameras[]}` |
-| POST | `/discovery` | `{}` | `{devices:[{ip,name,hardware,xaddrs}]}` (WS-Discovery on field LAN) |
-| POST | `/camera` | `{localIp, name}` | `{localIp,name,onvifPort,rtspPort}` (idempotent by localIp; no creds) |
-| GET | `/cameras` | — | `{cameras:[...]}` |
-| DELETE | `/camera` | `?localIp=…` | `{deleted:bool}` |
-| GET | `/` | — | field web page (scan + add, no credential input) |
+| Method | Path | Auth | Body / query | Returns |
+|---|---|---|---|---|
+| GET | `/health` | token | — | `{status, gatewayId, gatewayName, installer, location, zerotierIp, ztAddress, ztJoined, ztOnline, fieldSubnet, ramMb, uptimeSec, nginxOk, cameras[]}` |
+| GET | `/identity` | **none** | — | `{gatewayId, name, installer, location, ztAddress, ztJoined, ztOnline, zerotierIp, fieldSubnet, agentPort, alive, cameraCount}` — app scan + identify |
+| POST | `/label` | **none** | `{name?, installer?, location?}` | `{name, installer, location}` — app names the gateway (partial update; persisted) |
+| POST | `/discovery` | token | `{}` | `{devices:[{ip,name,hardware,xaddrs}]}` (WS-Discovery on field LAN) |
+| POST | `/camera` | token | `{localIp, name}` | `{localIp,name,onvifPort,rtspPort}` (idempotent by localIp; no creds) |
+| GET | `/cameras` | token | — | `{cameras:[...]}` |
+| DELETE | `/camera` | token | `?localIp=…` | `{deleted:bool}` |
+| GET | `/` | loopback | — | field web page (scan + add, no credential input) |
+
+`ztAddress` = this node's 10-hex ZeroTier address (from `zerotier-cli info`) — what the admin approves
+on ztncui. `ztJoined` = joined the fleet network with an OK config; `ztOnline` = reached planet roots.
+A label set via `POST /label` (app) overrides `EDGE_AGENT_NAME` in both `/identity` and `/health`.
 
 The NVR builds endpoints from the response: ONVIF `http://<zerotierIp>:<onvifPort>/onvif/device_service`,
 RTSP `rtsp://<creds typed at NVR>@<zerotierIp>:<rtspPort>/<path>`.
@@ -39,7 +47,7 @@ scp -r ../edge-agent pi@<pi>:~/                 # copy dir incl. the built binar
 sudo ./install.sh
 sudo nano /etc/nvr-edge-agent/agent.env         # set EDGE_AGENT_TOKEN + ZT_NETWORK_ID
 sudo systemctl restart nvr-edge-agent
-# then authorize the Pi as a member in ZeroTier Central (manual, out-of-band)
+# then authorize the Pi as a member on the self-host controller (ztncui), out-of-band
 curl -s localhost:9797/health | head
 ```
 

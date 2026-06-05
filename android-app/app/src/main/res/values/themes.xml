@@ -1,0 +1,4 @@
+<resources>
+    <!-- Framework theme (no AppCompat/Material XML dep needed); Compose draws the real UI. -->
+    <style name="Theme.GatewayOnboard" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>
