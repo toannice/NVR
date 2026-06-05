@@ -8,10 +8,13 @@ type Gateway = {
   id: string
   name: string
   zerotierIp: string | null
+  ztAddress: string | null
   agentPort: number
   status: string        // discovered | approved
   online: boolean
   fieldSubnet: string | null
+  installer: string | null
+  location: string | null
   lastSeenEpoch: number | null
   cameraCount: number
 }
@@ -81,6 +84,25 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
       if (r.ok) { toast('Đã phê duyệt gateway', 'success'); await fetchGateways() }
       else toast('Phê duyệt thất bại', 'error')
     } finally { setBusyAction('') }
+  }
+
+  const deleteGateway = async (g: Gateway) => {
+    const msg = g.cameraCount > 0
+      ? `Xóa gateway "${g.name}" và ${g.cameraCount} camera đã thêm qua nó? Không thể hoàn tác.`
+      : `Xóa gateway "${g.name}"?`
+    if (!window.confirm(msg)) return
+    setBusyAction('delete:' + g.id)
+    try {
+      const r = await fetch(`/api/gateways/${g.id}`, { method: 'DELETE' })
+      const d = await r.json().catch(() => ({}))
+      if (r.ok && d.success) {
+        toast(`Đã xóa gateway${d.camerasRemoved ? ` + ${d.camerasRemoved} camera` : ''}`, 'success')
+        if (openId === g.id) setOpenId(null)
+        await fetchGateways()
+        onCamerasChanged?.()
+      } else toast(d.error || 'Xóa gateway thất bại', 'error')
+    } catch { toast('Lỗi mạng khi xóa gateway', 'error') }
+    finally { setBusyAction('') }
   }
 
   const mergeAddable = (id: string, rows: Addable[]) => {
@@ -188,8 +210,14 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
                   </div>
                   <div className="text-xs text-gray-500 mt-0.5">
                     {g.zerotierIp || '(chưa có IP)'} :{g.agentPort}
+                    {g.ztAddress ? ` · ZT ${g.ztAddress}` : ''}
                     {g.fieldSubnet ? ` · LAN ${g.fieldSubnet}` : ''} · {g.cameraCount} camera
                   </div>
+                  {(g.installer || g.location) && (
+                    <div className="text-xs text-gray-400 mt-0.5 truncate">
+                      {g.location ? `📍 ${g.location}` : ''}{g.location && g.installer ? ' · ' : ''}{g.installer ? `👤 ${g.installer}` : ''}
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   {g.status === 'discovered' ? (
@@ -201,6 +229,11 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
                       <Icon name={openId === g.id ? 'expand_less' : 'add_a_photo'} className="text-base" /> Thêm camera
                     </button>
                   )}
+                  <button onClick={() => deleteGateway(g)} disabled={busyAction === 'delete:' + g.id}
+                    title="Xóa gateway" aria-label="Xóa gateway"
+                    className="flex items-center text-gray-400 hover:text-red-600 px-2 py-1.5 rounded-lg disabled:opacity-50">
+                    <Icon name="delete_outline" className="text-base" />
+                  </button>
                 </div>
               </div>
 

@@ -2,6 +2,7 @@ package vn.aiview.nvr.services
 
 import kotlinx.serialization.Serializable
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.deleteWhere
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
@@ -21,10 +22,13 @@ data class GatewayDto(
     val id: String,
     val name: String,
     val zerotierIp: String?,
+    val ztAddress: String?,      // 10-char ZeroTier node address (what the admin approves on ztncui)
     val agentPort: Int,
     val status: String,         // discovered | approved
     val online: Boolean,        // derived from lastSeen
     val fieldSubnet: String?,
+    val installer: String?,      // field-worker label from the Android app
+    val location: String?,       // site label from the Android app
     val lastSeenEpoch: Long?,    // epoch seconds, null if never
     val cameraCount: Int,
 )
@@ -57,6 +61,9 @@ object GatewayService {
                     it[Gateways.agentPort] = if (h.agentPort > 0) h.agentPort else GatewayConfig.agentPort
                     it[Gateways.status] = "discovered"
                     it[Gateways.fieldSubnet] = h.fieldSubnet.ifBlank { null }
+                    it[Gateways.ztAddress] = h.ztAddress.ifBlank { null }
+                    it[Gateways.installer] = h.installer.ifBlank { null }
+                    it[Gateways.location] = h.location.ifBlank { null }
                     it[Gateways.lastSeen] = LocalDateTime.now()
                 }
                 AppLogger.info(AppLogger.Module.SYSTEM, "GATEWAY", "DISCOVERED", "id=${h.gatewayId} ip=$ip name=${h.gatewayName}")
@@ -66,6 +73,9 @@ object GatewayService {
                     it[Gateways.zerotierIp] = ip
                     if (h.agentPort > 0) it[Gateways.agentPort] = h.agentPort
                     if (h.fieldSubnet.isNotBlank()) it[Gateways.fieldSubnet] = h.fieldSubnet
+                    if (h.ztAddress.isNotBlank()) it[Gateways.ztAddress] = h.ztAddress
+                    if (h.installer.isNotBlank()) it[Gateways.installer] = h.installer
+                    if (h.location.isNotBlank()) it[Gateways.location] = h.location
                     it[Gateways.lastSeen] = LocalDateTime.now()
                     it[Gateways.updatedAt] = LocalDateTime.now()
                 }
@@ -85,10 +95,13 @@ object GatewayService {
                 id = id,
                 name = row[Gateways.name],
                 zerotierIp = row[Gateways.zerotierIp],
+                ztAddress = row[Gateways.ztAddress],
                 agentPort = row[Gateways.agentPort],
                 status = row[Gateways.status],
                 online = lastSeen != null && Duration.between(lastSeen, LocalDateTime.now()) < ONLINE_WINDOW,
                 fieldSubnet = row[Gateways.fieldSubnet],
+                installer = row[Gateways.installer],
+                location = row[Gateways.location],
                 lastSeenEpoch = lastSeen?.atZone(java.time.ZoneId.systemDefault())?.toEpochSecond(),
                 cameraCount = counts[id] ?: 0,
             )
@@ -157,5 +170,40 @@ object GatewayService {
         AppLogger.info(AppLogger.Module.CAMERA, "GATEWAY", "ADOPT_CAMERA",
             "gateway=$gatewayId local=$localIp onvif=${proxy.onvifPort} rtsp=${proxy.rtspPort} slug=${applied.slug}")
         return Result.success(applied)
+    }
+
+    @Serializable
+    data class DeleteResult(val deleted: Boolean, val camerasRemoved: Int)
+
+    /**
+     * Delete a gateway and CASCADE-remove every camera adopted through it (DB + YAML + go2rtc + Frigate
+     * restart, via [CameraService.removeAndPersist]). Best-effort frees the agent's nginx proxy ports
+     * (`DELETE /camera`) — the gateway may be offline, which must not block deletion. Returns null if the
+     * gateway id is unknown.
+     */
+    suspend fun deleteGateway(id: String): DeleteResult? {
+        val exists = transaction { Gateways.selectAll().where { Gateways.id eq id }.firstOrNull() != null }
+        if (!exists) return null
+
+        // Snapshot the gateway's cameras (slug + localIp) before we start mutating.
+        val cams = transaction {
+            Cameras.selectAll().where { Cameras.gatewayId eq id }
+                .map { it[Cameras.slug] to it[Cameras.localIp] }
+        }
+        val c = conn(id)
+
+        var removed = 0
+        for ((slug, localIp) in cams) {
+            // Free the proxy port on the agent first (best-effort; ignored if the gateway is unreachable).
+            if (c != null && !localIp.isNullOrBlank()) {
+                runCatching { EdgeAgentClient.deleteProxy(c.ip, c.port, c.token, localIp) }
+            }
+            CameraService.removeAndPersist(slug).onSuccess { removed++ }
+                .onFailure { AppLogger.warn(AppLogger.Module.CAMERA, "GATEWAY", "DELETE_CAM_FAIL", "slug=$slug: ${it.message}") }
+        }
+
+        transaction { Gateways.deleteWhere { Gateways.id eq id } }
+        AppLogger.info(AppLogger.Module.SYSTEM, "GATEWAY", "DELETED", "id=$id camerasRemoved=$removed/${cams.size}")
+        return DeleteResult(true, removed)
     }
 }

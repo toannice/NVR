@@ -117,11 +117,19 @@ Plan A đã chạy end-to-end (NVR auto-scan ZeroTier → approve → adopt came
 
 > ⚠️ **Lệch nhẹ so với plan gốc:** plan ghi Màn 2 lấy camera count qua `/discovery` — nhưng `/discovery` nằm sau fleet token (chỉ `/identity`+`/label` no-auth), app Tier 0 không có token → dùng `cameraCount` của `/identity`. Nếu muốn "đếm camera dò được trên LAN", phải thêm `/discovery` vào allowlist no-auth của agent (quyết định riêng, chưa làm).
 
-### Phase 3 — NVR (Kotlin, delta nhỏ)
-- [ ] `DELETE /api/gateways/{id}` + cascade xóa camera (đã chốt: xóa luôn camera, có xác nhận).
-- [ ] `listGateways` enrich `name/installer/location/ztAddress`.
-- [ ] UI `GatewaysPanel`: nút "Xóa gateway" + xác nhận; hiển thị tên/người lắp/ztAddress.
-- [ ] Verify scan subnet mới của controller HQ.
+### Phase 3 — NVR (Kotlin, delta nhỏ) — ✅ DONE 2026-06-05 (build + runtime test PASS trên gateway thật)
+- [x] `DELETE /api/gateways/{id}` + cascade xóa camera: `GatewayService.deleteGateway` snapshot camera của gateway (slug+localIp) → best-effort `EdgeAgentClient.deleteProxy` giải phóng cổng nginx (bỏ qua nếu gateway offline) → `CameraService.removeAndPersist` mỗi cam (DB+YAML+go2rtc+Frigate restart) → xóa row gateway. Trả `{success, camerasRemoved}`. Route `delete("/{id}")` ở `GatewayRouting.kt`.
+- [x] `listGateways` enrich `ztAddress/installer/location`: thêm 3 cột nullable vào `Gateways` (migrate qua `createMissingTablesAndColumns`); `EdgeHealth` DTO + `upsertFromHealth` đọc `ztAddress/ztJoined/ztOnline/installer/location` từ agent `/health`; `GatewayDto` expose `ztAddress/installer/location`.
+- [x] UI `GatewaysPanel`: nút xóa (icon `delete_outline`) + `window.confirm` (đếm số camera sẽ bị xóa); hiển thị `ZT <ztAddress>` ở dòng phụ + dòng `📍 location · 👤 installer`. Sau xóa gọi `onCamerasChanged` để App refresh list.
+- [x] Build verify: `./gradlew compileKotlin` sạch; `tsc --noEmit` sạch.
+- [x] **Runtime test PASS (gateway-nha-A `gw-0e184160fdef` thật, 2026-06-05):**
+  - Enrich: `GET /api/gateways` trả `ztAddress=712389ba3a, installer=tn, location=hh1, cameraCount=1` (xác nhận luôn POST /label app Phase 2 ĐÃ chạy: installer/location set qua app).
+  - DELETE id lạ → 404 `gateway not found`.
+  - DELETE cascade thật: log `CAMERA_REMOVE slug=cam_6` + `GATEWAY DELETED camerasRemoved=1/1`; verify cam_6 mất khỏi DB + config.yml (0 match) + **cổng proxy agent giải phóng** (`/cameras` → `[]`). Frigate restart OK. Gateway tự re-discover lại (`discovered`) sau scan — đúng hành vi passive.
+  - **Bug fix:** response đầu trả 500 vì `mapOf("success" to Bool, "camerasRemoved" to Int)` = `Map<String,Any>` → kotlinx JSON không serialize được. Fix: DTO `@Serializable DeleteGatewayResponse(success, camerasRemoved)` (GatewayRouting.kt). Rebuild → DELETE trả clean `200 {"success":true,"camerasRemoved":N}`.
+  - Khôi phục: re-approve + re-adopt camera `192.168.2.64` (creds `admin/Bkav@2020`) → slug `cam_4`, frigateRestarted=true, proxy 8080/8081 trở lại.
+  - Verify scan subnet `10.147.20.0/24` PASS (`SCAN_DONE found=1`).
+  > ⚠️ Note auth khi test bằng curl: gateway routes sau `authenticate("auth-session")`; Ktor 3.0.1 session cookie dùng **KotlinxSessionSerializer (JSON)**, KHÔNG phải reflection. Cookie hợp lệ = URI-encode của `{"id":"admin"}` → `NVR_SESSION=%7B%22id%22%3A%22admin%22%7D`.
 
 ### Phase 4 — Image & docs
 - [ ] Script đóng image từ Pi mẫu (xoá ZT identity, dọn log, set first-boot self-gen).

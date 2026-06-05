@@ -54,6 +54,9 @@ object Gateways : Table("gateways") {
     val agentPort = integer("agent_port").default(9797)
     val status = varchar("status", 20).default("discovered") // discovered | approved | online | offline
     val fieldSubnet = varchar("field_subnet", 50).nullable()
+    val ztAddress = varchar("zt_address", 16).nullable()   // 10-char ZeroTier node address (reported by agent /health)
+    val installer = varchar("installer", 255).nullable()   // field-worker label set via the Android onboarding app
+    val location = varchar("location", 255).nullable()     // site/location label set via the Android onboarding app
     val lastSeen = datetime("last_seen").nullable()
     val createdAt = datetime("created_at").defaultExpression(CurrentDateTime)
     val updatedAt = datetime("updated_at").defaultExpression(CurrentDateTime)

@@ -20,6 +20,12 @@ private data class AdoptResponse(
     val frigateRestarted: Boolean,
 )
 
+@Serializable
+private data class DeleteGatewayResponse(
+    val success: Boolean,
+    val camerasRemoved: Int,
+)
+
 /**
  * Admin-facing gateway endpoints (4-6 Plan A). All NVR-initiated; there is intentionally NO
  * /register or /pending-cameras endpoint — the gateway never pushes to us.
@@ -35,6 +41,14 @@ fun Route.gatewayRouting() {
         post("/scan") {
             val found = GatewayScanner.scanNow()
             call.respond(mapOf("found" to found))
+        }
+
+        // Delete a gateway + cascade-remove its adopted cameras (DB+YAML+go2rtc+Frigate restart).
+        delete("/{id}") {
+            val id = call.parameters["id"] ?: return@delete call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing id"))
+            val res = GatewayService.deleteGateway(id)
+                ?: return@delete call.respond(HttpStatusCode.NotFound, mapOf("error" to "gateway not found"))
+            call.respond(DeleteGatewayResponse(res.deleted, res.camerasRemoved))
         }
 
         post("/{id}/approve") {
