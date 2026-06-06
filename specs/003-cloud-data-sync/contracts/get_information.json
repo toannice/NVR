@@ -1,0 +1,15 @@
+{
+  "_comment": "component=device, func=get_information. Placeholder model/firmware/web_version; real serial.",
+  "status": true,
+  "message": "get.base_info.success",
+  "error_code": "I3000",
+  "data": {
+    "firmware_version": "1.0.3.2",
+    "manufacturer": "Bkav",
+    "model": "E120-FCWP",
+    "number_of_channel": 16,
+    "product_number": "E120-FCWP-001",
+    "serial_number": "VMSAV005134",
+    "web_version": "1.0.0"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "_comment": "component=channel_service, func=get_channels. Reads unified Cameras table; channel_id assigned on first read if missing.",
+  "status": true,
+  "message": "get.channels.success",
+  "error_code": "",
+  "data": {
+    "maxChannelNum": 16,
+    "channels": [
+      {
+        "channelID": "1",
+        "status": "online",
+        "isConnected": true,
+        "xAdrr": { "host": "192.168.2.50", "port": 80, "https": 0, "rtspPort": 554 },
+        "scopes": {
+          "location": "",
+          "name": "Front Door",
+          "hardware": "",
+          "type": "video_encoder",
+          "mac": "",
+          "manufacture": "Hikvision",
+          "model": "DS-2CD2143G0",
+          "firmwareVersion": "",
+          "serialNumber": ""
+        },
+        "mediaProfile": {
+          "tokenVS": "V_SRC_00011",
+          "listTokenMP": [
+            { "name": "MediaProfile_Channel1_MainStream", "token": "PROFILE_177...", "nodeToken": "", "isPtz": false, "isZoom": false, "videoEncodingSupport": "H264", "isLive": true },
+            { "name": "MediaProfile_Channel1_SubStream",  "token": "MediaProfile00102", "nodeToken": "", "isPtz": false, "isZoom": false, "videoEncodingSupport": "H264", "isLive": true }
+          ]
+        },
+        "peerID": "",
+        "snapShotUrl": "",
+        "snapShotUrl_Private": "",
+        "isPtz": false,
+        "isPlayback": true,
+        "channelStatus": 0
+      }
+    ]
+  }
+}

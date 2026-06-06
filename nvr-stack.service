@@ -1,0 +1,18 @@
+[Unit]
+Description=NVR Stack (Docker Compose)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/toan/my-nvr
+# Đợi network ổn định 10 giây trước khi cho Docker bật các container
+ExecStartPre=/bin/sleep 10
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose down
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

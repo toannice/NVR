@@ -15,7 +15,17 @@ import io.ktor.utils.io.copyTo
 val proxyClient = HttpClient(CIO) {
     expectSuccess = false
     engine {
-        requestTimeout = 0 // Disable timeout for long-lived streams
+        requestTimeout = 0  // 0 = disabled (CIO documented sentinel); long-lived streams never time out
+        endpoint {
+            connectTimeout = 10_000  // fail fast if go2rtc is down
+            // CRITICAL: must be Long.MAX_VALUE, NOT 0, for "no read timeout".
+            // Ktor 3.0.1's io.ktor.network.util.Timeout treats ONLY Long.MAX_VALUE as
+            // "infinite"; a value of 0 makes the timeout coroutine busy-spin (runnable)
+            // forever. With one such job per long-lived live stream, the 64-thread
+            // DefaultDispatcher pool saturates and ALL body-writing responses (static
+            // files + stream proxy) hang -> black live view + nginx 502.
+            socketTimeout = Long.MAX_VALUE
+        }
     }
 }
 
@@ -74,23 +84,77 @@ fun Route.frigateProxyRouting() {
                         }
                     }
 
-                    // For the streams status endpoint, sanitize RTSP credentials before returning
-                    // to the browser so that camera passwords are never exposed in network logs.
                     if (path == "streams") {
                         val raw = response.bodyAsText()
                         val sanitized = sanitizeRtspCredentials(raw)
                         call.respondText(sanitized, ContentType.Application.Json, response.status)
-                    } else {
+                    } else if (response.status.isSuccess()) {
                         call.respondBytesWriter(response.contentType(), response.status) {
                             response.bodyAsChannel().copyTo(this)
                         }
+                    } else {
+                        // Fast-fail: don't stream error bodies; one bad camera can't hold pool connections
+                        val src = call.request.queryParameters["src"] ?: path
+                        call.application.environment.log.warn("go2rtc error ${response.status.value} src=$src")
+                        call.respond(response.status)
                     }
                 }
             } catch (e: Exception) {
-                call.application.environment.log.error("Error proxying to go2rtc", e)
+                val src = call.request.queryParameters["src"] ?: path
+                call.application.environment.log.error("Error proxying to go2rtc src=$src: ${e.message}")
                 call.respond(HttpStatusCode.BadGateway, mapOf("error" to "Failed to connect to go2rtc"))
             }
         }
+    }
+
+    get("/api/frigate/api/recordings/summary") {
+        val camera = call.request.queryParameters["camera"] ?: call.request.queryParameters["cameras"]
+        val recordingsDir = java.io.File("/app/media/recordings")
+        val summaryMap = mutableMapOf<String, Boolean>()
+        
+        if (recordingsDir.exists() && recordingsDir.isDirectory) {
+            val zoneId = java.time.ZoneId.systemDefault()
+            val formatter = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH")
+            
+            recordingsDir.listFiles()?.filter { it.isDirectory }?.forEach { dateDir ->
+                val dateStr = dateDir.name // e.g. "2026-03-25"
+                if (dateStr.matches(Regex("\\d{4}-\\d{2}-\\d{2}"))) {
+                    dateDir.listFiles()?.filter { it.isDirectory }?.forEach { hourDir ->
+                        val hourStr = hourDir.name // e.g. "00", "07"
+                        
+                        var hasVideo = false
+                        if (!camera.isNullOrBlank()) {
+                            val camList = camera.split(",")
+                            for (cam in camList) {
+                                val camDir = java.io.File(hourDir, cam)
+                                if (camDir.exists() && camDir.isDirectory && (camDir.list()?.isNotEmpty() == true)) {
+                                    hasVideo = true
+                                    break
+                                }
+                            }
+                        } else {
+                            val cams = hourDir.listFiles()?.filter { it.isDirectory } ?: emptyList()
+                            hasVideo = cams.any { it.list()?.isNotEmpty() == true }
+                        }
+                        
+                        if (hasVideo) {
+                            try {
+                                val utcStr = "$dateStr $hourStr"
+                                val utcDate = java.time.LocalDateTime.parse(utcStr, formatter)
+                                val zonedDateTimeUtc = utcDate.atZone(java.time.ZoneId.of("UTC"))
+                                val localDateTime = zonedDateTimeUtc.withZoneSameInstant(zoneId).toLocalDate()
+                                
+                                val localDateStr = localDateTime.toString()
+                                summaryMap[localDateStr] = true
+                            } catch (e: Exception) {
+                                call.application.environment.log.warn("Error parsing date: \$dateStr \$hourStr", e)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        call.respond(summaryMap)
     }
 
     route("/api/frigate/{path...}") {

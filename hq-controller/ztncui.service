@@ -1,0 +1,22 @@
+[Unit]
+Description=ztncui - ZeroTier self-host controller web UI
+Documentation=https://github.com/key-networks/ztncui
+After=network-online.target zerotier-one.service
+Wants=network-online.target
+Requires=zerotier-one.service
+
+[Service]
+Type=simple
+User=ztncui
+WorkingDirectory=/opt/ztncui/src
+EnvironmentFile=/opt/ztncui/src/.env
+ExecStart=/usr/bin/node /opt/ztncui/src/bin/www
+Restart=always
+RestartSec=5
+# ztncui cần đọc authtoken qua .env (đã nhúng token), không cần quyền root.
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

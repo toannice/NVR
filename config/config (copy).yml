@@ -1,61 +1,61 @@
 version: 0.16-0
-
 mqtt:
   enabled: true
-  host: mosquitto # Đảm bảo container mosquitto nằm cùng network với Frigate
-  port: 1883
-
-# Tạm tắt QSV do xung đột với driver NVIDIA trên card đồ họa rời
-# ffmpeg:
-#   hwaccel_args: preset-intel-qsv-h264 
-
-go2rtc:
-  streams:
-    ai_view_64:
-      - rtsp://admin:Bkav@2020@192.168.2.64:554/profile1/live
-    ai_view_65:
-      - rtsp://admin:Bkav@2020@192.168.2.65:554/profile1/live
-  webrtc:
-    candidates:
-      - '{FRIGATE_HOST_IP}:8555' # Dùng biến môi trường từ docker-compose
-      - stun:8555
-
-cameras:
-  ai_view_64:
-    ffmpeg:
-      inputs:
-        - path: rtsp://127.0.0.1:8554/ai_view_64 # Lấy luồng từ go2rtc (tên phải khớp)
-          input_args: preset-rtsp-restream
-          roles:
-            - detect
-            - record
-    detect:
-      enabled: true # Phải bật detect để màn hình Overview có hình ảnh
-    record:
-      enabled: true
-      retain:
-        days: 7
-        mode: all
-
-  ai_view_65:
-    ffmpeg:
-      inputs:
-        - path: rtsp://127.0.0.1:8554/ai_view_65 # Lấy luồng từ go2rtc (tên phải khớp)
-          input_args: preset-rtsp-restream
-          roles:
-            - detect
-            - record
-    detect:
-      enabled: true
-    record:
-      enabled: true
-      retain:
-        days: 7
-        mode: all
-
-# Giữ nguyên cấu hình record tổng quát
+  host: mosquitto
+detect:
+  enabled: true
 record:
   enabled: true
   retain:
     days: 7
     mode: all
+cameras:
+  ai_view_ossd2mpvf33xptzai_192_168_2_64:
+    ffmpeg:
+      inputs:
+      - path: rtsp://127.0.0.1:8554/ai_view_ossd2mpvf33xptzai_192_168_2_64
+        roles:
+        - record
+        - detect
+    detect:
+      enabled: true
+    record:
+      enabled: true
+      retain:
+        days: 7
+        mode: all
+    zones:
+      f:
+        coordinates: 0.033,0.071,0.067,0.816,0.854,0.893
+        objects:
+        - car
+        - motorcycle
+        - bus
+        - truck
+    objects:
+      track:
+      - car
+      - motorcycle
+      - bus
+      - truck
+  ai_view_p200_0802n_192_168_2_65:
+    ffmpeg:
+      inputs:
+      - path: rtsp://127.0.0.1:8554/ai_view_p200_0802n_192_168_2_65
+        input_args: preset-rtsp-restream
+        roles:
+        - detect
+        - record
+    detect:
+      enabled: false
+    record:
+      enabled: true
+      retain:
+        days: 7
+        mode: all
+go2rtc:
+  streams:
+    ai_view_ossd2mpvf33xptzai_192_168_2_64:
+    - rtsp://admin:Bkav@2020@192.168.2.64:554/profile1/live
+    ai_view_p200_0802n_192_168_2_65:
+    - rtsp://admin:Bkav@2020@192.168.2.65:554/profile1/live#tcp

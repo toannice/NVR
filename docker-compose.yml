@@ -33,6 +33,7 @@ services:
       - "5000:5000" # Frigate Web UI & API (dev/admin access)
       - "8554:8554" # RTSP re-stream feeds
       - "1984:1984" # go2rtc API & video streams
+      - "8555:8555/udp" # go2rtc WebRTC UDP (cloud live view ICE candidates)
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - ./config:/config
@@ -59,12 +60,10 @@ services:
   # ─── NVR Wrapper (Our App) ─────────────────────────────────
   nvr-wrapper:
     container_name: nvr-wrapper
-    image: ghcr.io/toannice/nvr:latest # Sử dụng bản build từ GitHub CI/CD
+    image: ghcr.io/toannice/nvr:${WRAPPER_TAG:-staging} # Sử dụng GHCR image để OTA hoạt động
+    # build: .
     restart: unless-stopped
     network_mode: "host" # Required for ONVIF multicast (WS-Discovery) to work
-    labels:
-      - "com.centurylinklabs.watchtower.scope=nvr-auto-update" # Cho phép Watchtower cập nhật container này
-      - "com.centurylinklabs.watchtower.enable=true"
     # ports:
     #   - "3000:3000" # Expose via Nginx (443) instead for security
     volumes:
@@ -75,18 +74,30 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock # Allows `docker restart frigate`
       - /run/systemd/resolve/resolv.conf:/app/dns_config:ro
       - /etc/localtime:/etc/localtime:ro
+      - /sys/class/drm:/sys/class/drm:ro  # GPU vendor detection for hwaccel config
     depends_on:
       frigate:
         condition: service_healthy
       mosquitto:
         condition: service_healthy
+    secrets:
+      - gmail_app_password
+      - edge_agent_token                       # Shared fleet token for edge gateways (4-6 Plan A)
     environment:
       - FRIGATE_URL=http://localhost:5000
       - MQTT_URL=tcp://localhost:1883
       - PORT=3000
       - CONFIG_PATH=config/config.yml
-      - APP_VERSION=1.2.0-kotlin
+      - APP_VERSION=${APP_VERSION:-1.2.0}
+      - DEPLOY_VERSION=${DEPLOY_VERSION:-dev}   # Injected by GitHub Actions — shows on Web UI
       - TZ=${TZ:-Asia/Ho_Chi_Minh}
+      - GMAIL_USER=${GMAIL_USER}               # Username is not sensitive, stays as env var
+      - DC_BRIDGE_PATH=${DC_BRIDGE_PATH:-}    # Optional: path to dc-bridge binary (default: ~/.aiview/dc-bridge)
+      - E2E_TEST_MODE=${E2E_TEST_MODE:-false} # Set true in .env to enable /api/dev/* endpoints for E2E tests
+      # ─── Edge gateway auto-provisioning (4-6 Plan A) ───
+      - ZT_SCAN_SUBNET=${ZT_SCAN_SUBNET:-}    # ZeroTier subnet to auto-scan for gateways, e.g. 10.34.24.0/24 (empty = disabled)
+      - EDGE_AGENT_PORT=${EDGE_AGENT_PORT:-9797}
+      - GATEWAY_SCAN_INTERVAL_SEC=${GATEWAY_SCAN_INTERVAL_SEC:-30}
     healthcheck:
       test: [ "CMD-SHELL", "curl -f http://127.0.0.1:3000/api/health || exit 1" ]
       interval: 20s
@@ -109,45 +120,46 @@ services:
     depends_on:
       - nvr-wrapper
 
-
-  # ─── Watchtower (OTA Auto-Update) ─────────────────────────
-  # Monitors Docker Hub / Registry for new image versions and auto-updates.
-  # Respects the NVR_WRAPPER_VERSION and FRIGATE_VERSION pins in .env.
-  watchtower:
-    container_name: watchtower
-    image: containrrr/watchtower:latest
-    restart: unless-stopped
-    networks:
-      - nvr-backend
-    ports:
-      - "127.0.0.1:8080:8080" # Exposed locally for manual HTTP API trigger
+  # ─── NVR Watchdog ─────────────────────────────────────────────────────────
+  # Replaces Watchtower. Monitors system health, self-heals, and handles OTA
+  # with rollback support. Runs independently — restart: always.
+  nvr-watchdog:
+    container_name: nvr-watchdog
+    #image: ghcr.io/toannice/nvr-watchdog:latest
+    build: ./watchdog
+    restart: always             # Always restarts — must survive crashes
+    hostname: ${HOSTNAME:-nvr-edge-node}
+    network_mode: "host"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /root/.docker/config.json:/config.json # Cho phép Watchtower dùng login của host (GHCR)
+      - /var/run/docker.sock:/var/run/docker.sock  # Read container states & Execute Compose
+      - ${PWD:-/home/toan/my-nvr}:${PWD:-/home/toan/my-nvr} # Allow Watchdog to run docker-compose
+      - ./config/watchdog.yml:/config/watchdog.yml:ro  # Config (read-only)
+      - ./media/recordings:/recordings                # Measure disk & cleanup via path
+      - /root/.docker/config.json:/root/.docker/config.json:ro  # Pull private GHCR images
+      - watchdog-data:/data    # events.db, reports/, version_state.json
     environment:
-      - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-0 0 3 * * *}
-      - WATCHTOWER_CLEANUP=${WATCHTOWER_CLEANUP:-true}
-      - WATCHTOWER_HTTP_API_UPDATE=true
-      - WATCHTOWER_HTTP_API_TOKEN=${WATCHTOWER_TOKEN:-default_token_update_in_env}
-      - WATCHTOWER_INCLUDE_STOPPED=false
-      - WATCHTOWER_MONITOR_ONLY=false
-      - DOCKER_API_VERSION=1.44 # Force modern API version to solve mismatch
-      # Only watch specific containers (nvr-wrapper). Frigate is pinned by version tag - safer.
-      - WATCHTOWER_SCOPE=nvr-auto-update
-    labels:
-      - "com.centurylinklabs.watchtower.scope=nvr-control"
-    command: --label-enable --http-api-update # Allow manual trigger via API
-  cloudflare-tunnel:
-    container_name: cloudflared
-    image: cloudflare/cloudflared:latest
-    restart: unless-stopped
-    network_mode: "host" 
-    environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
-    command: tunnel --no-autoupdate run
+      - PROJECT_DIR=${PWD:-/home/toan/my-nvr}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - HOSTNAME=${HOSTNAME:-nvr-edge-node}
+      - TZ=${TZ:-Asia/Ho_Chi_Minh}
+    depends_on:
+      - nvr-wrapper
 
-  # ─── Networks ──────────────────────────────────────────────
+  # ─── Secrets ───────────────────────────────────────────────
+secrets:
+  gmail_app_password:
+    file: ./secrets/gmail_app_password
+  edge_agent_token:
+    file: ./secrets/edge_agent_token
+
+# ─── Networks ──────────────────────────────────────────────
 networks:
   nvr-backend:
     name: nvr-backend
     driver: bridge
+
+# ─── Volumes ───────────────────────────────────────────────
+volumes:
+  watchdog-data:
+    name: nvr-watchdog-data

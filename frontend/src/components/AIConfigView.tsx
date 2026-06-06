@@ -1,5 +1,5 @@
-
 import { useState, useEffect, useRef } from 'react';
+import LiveCamera from './LiveCamera';
 
 const Icon = ({ name, className = "" }: { name: string, className?: string }) => (
     <span className={`material-icons ${className} `}>{name}</span>
@@ -19,7 +19,7 @@ const AIConfigView = ({ cameras, addToast }: AIConfigViewProps) => {
     const [isLoading, setIsLoading] = useState(false);
     const [isApplying, setIsApplying] = useState(false);
     const [applyStatus, setApplyStatus] = useState<string | null>(null);
-    const [refreshTrigger, setRefreshTrigger] = useState(0);
+
 
     // List of multiple zones. Key = name.
     const [zones, setZones] = useState<{ [key: string]: { coordinates: string, objects: string[] } }>({});
@@ -33,7 +33,7 @@ const AIConfigView = ({ cameras, addToast }: AIConfigViewProps) => {
     const [showNameModal, setShowNameModal] = useState(false);
     const [newZoneName, setNewZoneName] = useState('');
 
-    const imageRef = useRef<HTMLImageElement>(null);
+    const mediaRef = useRef<HTMLDivElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
 
     // Initial load
@@ -55,10 +55,9 @@ const AIConfigView = ({ cameras, addToast }: AIConfigViewProps) => {
     useEffect(() => {
         if (selectedCamera) {
             fetchConfig();
-            // Force refresh image on camera change
-            setRefreshTrigger(Date.now());
         }
     }, [selectedCamera]);
+
 
     const fetchConfig = async () => {
         setIsLoading(true);
@@ -90,8 +89,8 @@ const AIConfigView = ({ cameras, addToast }: AIConfigViewProps) => {
     };
 
     const handleImageClick = (e: React.MouseEvent) => {
-        if (!imageRef.current) return;
-        const rect = imageRef.current.getBoundingClientRect();
+        if (!mediaRef.current) return;
+        const rect = mediaRef.current.getBoundingClientRect();
         const x = (e.clientX - rect.left) / rect.width; // 0..1
         const y = (e.clientY - rect.top) / rect.height; // 0..1
 
@@ -333,14 +332,16 @@ const AIConfigView = ({ cameras, addToast }: AIConfigViewProps) => {
                 <div className="flex-1 relative flex items-center justify-center bg-gray-900 overflow-hidden" ref={containerRef}>
                     {selectedCamera ? (
                         <div className="relative inline-block shadow-2xl border border-gray-800 w-full h-full flex items-center justify-center bg-black">
-                            <div className="relative max-w-full max-h-[85vh]">
-                                <img
-                                    ref={imageRef}
-                                    src={`/api/frigate/api/${selectedCamera}/latest.jpg?h=1080&bbox=0&timestamp=${refreshTrigger}`}
-                                    className="max-w-full max-h-[85vh] object-contain cursor-crosshair select-none"
-                                    alt="Snapshot"
-                                    onClick={handleImageClick}
-                                    draggable={false}
+                            <div 
+                                className="relative flex justify-center items-center w-full h-full max-h-[85vh] cursor-crosshair select-none aspect-video"
+                                ref={mediaRef}
+                                onClick={handleImageClick}
+                            >
+                                <LiveCamera
+                                    name={selectedCamera}
+                                    className="w-full h-full object-contain pointer-events-none"
+                                    isFullscreen={false}
+                                    isGrid={false}
                                 />
                                 {/* SVG Overlay */}
                                 <svg
@@ -353,15 +354,6 @@ const AIConfigView = ({ cameras, addToast }: AIConfigViewProps) => {
                                     {renderZones()}
                                     {renderDrawing()}
                                 </svg>
-
-                                {/* Refresh button for snapshot */}
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); setRefreshTrigger(Date.now()); }}
-                                    className="absolute bottom-4 right-4 bg-black/60 text-white p-2 rounded-full hover:bg-[#EF4444] transition-colors border border-white/20 shadow-lg"
-                                    title="Chụp lại ảnh mới"
-                                >
-                                    <Icon name="camera_alt" className="text-lg" />
-                                </button>
                             </div>
 
                             {/* Closing Hint */}

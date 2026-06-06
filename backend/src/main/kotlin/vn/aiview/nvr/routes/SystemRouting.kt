@@ -10,10 +10,10 @@ import org.jetbrains.exposed.sql.transactions.transaction
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class VersionInfo(val version: String, val uptime: Long)
+data class VersionInfo(val version: String, val uptime: Long, val deployVersion: String)
 
 @Serializable
-data class HealthInfo(val status: String, val db: String, val version: String, val msg: String? = null)
+data class HealthInfo(val status: String, val db: String, val version: String, val deployVersion: String, val msg: String? = null)
 
 @Serializable
 data class StorageInfo(
@@ -27,13 +27,14 @@ data class StorageInfo(
 @Serializable
 data class GeneralResponse(val success: Boolean, val error: String? = null, val filename: String? = null, val size: Long? = null)
 
-val appVersion = System.getenv("APP_VERSION") ?: "1.1.0"
+val appVersion = System.getenv("APP_VERSION") ?: "1.2.0"
+val deployVersion = System.getenv("DEPLOY_VERSION") ?: "dev"
 val startTime = System.currentTimeMillis()
 
 fun Route.systemRouting() {
     get("/api/version") {
         val uptimeSec = (System.currentTimeMillis() - startTime) / 1000
-        call.respond(VersionInfo(appVersion, uptimeSec))
+        call.respond(VersionInfo(appVersion, uptimeSec, deployVersion))
     }
 
     get("/api/health") {
@@ -43,9 +44,9 @@ fun Route.systemRouting() {
                 val stmt = connection.prepareStatement("SELECT 1", false)
                 stmt.executeQuery()
             }
-            call.respond(HealthInfo("ok", "healthy", appVersion))
+            call.respond(HealthInfo("ok", "healthy", appVersion, deployVersion))
         } catch (e: Exception) {
-            call.respond(io.ktor.http.HttpStatusCode.InternalServerError, HealthInfo("error", "unhealthy", appVersion, e.message))
+            call.respond(io.ktor.http.HttpStatusCode.InternalServerError, HealthInfo("error", "unhealthy", appVersion, deployVersion, e.message))
         }
     }
 

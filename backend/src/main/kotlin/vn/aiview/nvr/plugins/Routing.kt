@@ -21,8 +21,15 @@ fun Application.configureRouting() {
             scheduleRouting()
             configRouting()
             onvifRouting()
+            gatewayRouting()
         }
         
+        // Dev/test helpers (active only when E2E_TEST_MODE=true)
+        devRouting()
+
+        // Cloud connection (public — internal dc-bridge callback + config endpoints)
+        cloudRouting()
+
         // Static files (for frontend)
         staticFilesRouting()
     }

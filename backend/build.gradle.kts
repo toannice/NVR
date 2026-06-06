@@ -66,6 +66,9 @@ dependencies {
     
     // Email
     implementation("com.sun.mail:jakarta.mail:$jakarta_mail_version")
+
+    // Password hashing
+    implementation("at.favre.lib:bcrypt:0.10.2")
     
     // Testing
     testImplementation("io.ktor:ktor-server-tests-jvm:$ktor_version")

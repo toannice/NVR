@@ -6,4 +6,112 @@ detect:
   enabled: true
 record:
   enabled: true
-cameras: {}
+cameras:
+  ipcamera_192_168_2_3:
+    ffmpeg:
+      hwaccel_args: []
+      inputs:
+      - path: rtsp://127.0.0.1:8554/ipcamera_192_168_2_3
+        input_args: preset-rtsp-restream
+        roles:
+        - detect
+        - record
+    detect:
+      enabled: false
+    record:
+      enabled: true
+      retain:
+        days: 7
+        mode: all
+  ai_view_ossd2mpvf33xptzai_192_168_2_64:
+    ffmpeg:
+      hwaccel_args: []
+      inputs:
+      - path: rtsp://127.0.0.1:8554/ai_view_ossd2mpvf33xptzai_192_168_2_64
+        input_args: preset-rtsp-restream
+        roles:
+        - record
+        - detect
+    detect:
+      enabled: true
+    record:
+      enabled: true
+      retain:
+        days: 7
+        mode: all
+  ai_view_p200_0802n_192_168_2_65:
+    ffmpeg:
+      hwaccel_args: []
+      inputs:
+      - path: rtsp://127.0.0.1:8554/ai_view_p200_0802n_192_168_2_65
+        input_args: preset-rtsp-restream
+        roles:
+        - record
+      - path: rtsp://127.0.0.1:8554/ai_view_p200_0802n_192_168_2_65_sub
+        input_args: preset-rtsp-restream
+        roles:
+        - detect
+    detect:
+      enabled: true
+    record:
+      enabled: true
+      retain:
+        days: 7
+        mode: all
+  cam_6:
+    ffmpeg:
+      hwaccel_args: []
+      inputs:
+      - path: rtsp://127.0.0.1:8554/cam_6
+        input_args: preset-rtsp-restream
+        roles:
+        - record
+      - path: rtsp://127.0.0.1:8554/cam_6_sub
+        input_args: preset-rtsp-restream
+        roles:
+        - detect
+    detect:
+      enabled: true
+    record:
+      enabled: true
+      retain:
+        days: 7
+        mode: all
+ffmpeg:
+  hwaccel_args: []
+go2rtc:
+  streams:
+    ipcamera_192_168_2_3:
+    - rtsp://admin:123456@192.168.2.3:554/live/main#tcp
+    ai_view_ossd2mpvf33xptzai_192_168_2_64:
+    - rtsp://admin:Bkav@2020@192.168.2.65:554/profile1/live#tcp
+    ai_view_p200_0802n_192_168_2_65:
+    - rtsp://admin:Bkav@2020@192.168.2.64:554/profile1/live#tcp
+    ai_view_p200_0802n_192_168_2_65_sub:
+    - rtsp://admin:Bkav@2020@192.168.2.64:554/profile2/live#tcp
+    1_main:
+    - rtsp://127.0.0.1:8554/ai_view_ossd2mpvf33xptzai_192_168_2_64
+    2_main:
+    - rtsp://127.0.0.1:8554/ai_view_p200_0802n_192_168_2_65
+    2_sub:
+    - rtsp://127.0.0.1:8554/ai_view_p200_0802n_192_168_2_65_sub
+    3_main:
+    - rtsp://127.0.0.1:8554/ipcamera_192_168_2_3
+    cam_6:
+    - rtsp://admin:Bkav@2020@10.147.20.12:8081/profile1/live#tcp
+    6_main:
+    - rtsp://127.0.0.1:8554/cam_6
+    cam_6_sub:
+    - rtsp://admin:Bkav@2020@10.147.20.12:8081/profile2/live#tcp
+    6_sub:
+    - rtsp://127.0.0.1:8554/cam_6_sub
+  webrtc:
+    candidates:
+    - 192.168.2.107:8555
+    - stun:8555
+    ice_servers:
+    - urls:
+      - turn:103.149.87.79:3478?transport=tcp
+      - turn:103.149.87.79:3478?transport=udp
+      username: '1780329703'
+      credential: SXDxJiDpN/TpFfogZ5BudePO60Y=

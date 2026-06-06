@@ -6,6 +6,7 @@ import io.ktor.server.auth.*
 import io.ktor.server.response.*
 import io.ktor.server.sessions.*
 import kotlinx.serialization.Serializable
+import at.favre.lib.crypto.bcrypt.BCrypt
 import java.security.MessageDigest
 
 @Serializable
@@ -35,9 +36,7 @@ fun Application.configureSecurity() {
     }
 }
 
-/**
- * Basic SHA-256 hashing for strings (pattern, email).
- */
+// SHA-256 with fixed salt — used for non-secret values (email lookup) and legacy migration
 fun hashString(input: String): String {
     val salt = "NVR_SECRET_2026_AIVIEW"
     val digest = MessageDigest.getInstance("SHA-256")
@@ -45,4 +44,16 @@ fun hashString(input: String): String {
     return hashBytes.joinToString("") { "%02x".format(it) }
 }
 
-fun hashPattern(pattern: String) = hashString(pattern)
+// bcrypt for pattern (secret). Cost 12 ≈ 300 ms — acceptable for a lock screen.
+fun hashPattern(pattern: String): String = BCrypt.withDefaults().hashToString(12, pattern.toCharArray())
+
+// Verify pattern against stored hash. Handles bcrypt (new) and SHA-256 (legacy migration).
+// Returns (verified, needsRehash).
+fun verifyPattern(input: String, stored: String): Pair<Boolean, Boolean> {
+    return if (stored.startsWith("\$2")) {
+        Pair(BCrypt.verifyer().verify(input.toCharArray(), stored).verified, false)
+    } else {
+        val legacyMatch = hashString(input) == stored
+        Pair(legacyMatch, legacyMatch) // needsRehash=true when legacy matches
+    }
+}
