@@ -100,14 +100,15 @@ Stage 3: eclipse-temurin:21-jre-alpine → runtime image
 | `backend/src/main/kotlin/vn/aiview/nvr/routes/CloudRouting.kt` | `POST /internal/dc/command` — dc-bridge callback into CommandDispatcher |
 | `data/dc-bridge` | Go Pion WebRTC sidecar binary (linux/amd64), required for device_service DATA queries |
 | `connection_to_server.md` | Full guide: how a Linux device connects to AIView cloud + dc-bridge build steps |
-| `edge-agent/` | **Gateway (4-6 Plan A):** Go agent on Raspberry Pi — passive L4 proxy (nginx stream), WS-Discovery, field web page. HTTP server only; never calls NVR. |
+| `gateway/` | **All gateway-side artifacts** (Pi agent, enroll app, ZeroTier controller, docs). See `gateway/README.md`. The NVR-side integration (below) stays in `backend/`/`frontend/` because it compiles into nvr-wrapper. |
+| `gateway/edge-agent/` | **Gateway (4-6 Plan A):** Go agent on Raspberry Pi — passive L4 proxy (nginx stream), WS-Discovery, field web page. HTTP server only; never calls NVR. |
 | `backend/.../gateway/EdgeAgentClient.kt` | NVR→agent HTTP client (bearer fleet token, timeout+retry) |
 | `backend/.../gateway/GatewayConfig.kt` | NVR gateway settings: scan subnet, agent port, fleet token (`/run/secrets/edge_agent_token`) |
 | `backend/.../services/GatewayScanner.kt` | Auto-scans `ZT_SCAN_SUBNET` /health to discover gateways (the "auto connect"; gateway never registers) |
 | `backend/.../services/GatewayService.kt` | Gateway approve + adopt camera (admin types creds; reuses `CameraService.applyAndPersistFromOnvif`) |
 | `backend/.../routes/GatewayRouting.kt` | `/api/gateways*` — list/scan/approve/discover/adoptable/adopt. No register/push endpoint. |
 | `frontend/src/components/GatewaysPanel.tsx` | Web UI "Gateway" tab: discover → approve → adopt |
-| `gateway_setup.md` | Full gateway setup guide (Pi agent install, ZeroTier authorize, NVR flow, troubleshooting) |
+| `gateway/gateway_setup.md` | Full gateway setup guide (Pi agent install, ZeroTier authorize, NVR flow, troubleshooting) |
 | `backend/src/main/kotlin/vn/aiview/nvr/routes/LockRouting.kt` | Pattern lock API, OTP verify endpoint |
 | `backend/src/main/kotlin/vn/aiview/nvr/routes/OnvifRouting.kt` | Scan ONVIF, thêm camera qua ONVIF |
 | `backend/src/main/kotlin/vn/aiview/nvr/services/EmailService.kt` | Gmail SMTP, OTP send/peek/verify với SQLite |
@@ -261,16 +262,16 @@ Chi tiết: **[connection_to_server.md](./connection_to_server.md)** § "ONVIF /
 
 ### Gateway Camera Provisioning (Plan A) — ✅ DONE 2026-06-04
 
-> Kế hoạch đầy đủ + verify steps: **[4-6-to-do-jobs.md](./4-6-to-do-jobs.md)**. Hướng dẫn vận hành: **[gateway_setup.md](./gateway_setup.md)**.
+> Kế hoạch đầy đủ + verify steps: **[gateway/4-6-to-do-jobs.md](./gateway/4-6-to-do-jobs.md)**. Hướng dẫn vận hành: **[gateway/gateway_setup.md](./gateway/gateway_setup.md)**.
 
 **Đã hoàn thành & verify end-to-end trên Pi thật** (gateway-nha-A @ ZT `10.34.24.12`, RAM agent ~4MB): NVR auto-scan subnet ZeroTier → phát hiện gateway (passive, **không push**) → admin approve → adopt camera (`192.168.2.64` → slug `cam_6`): agent cấp cổng nginx-stream onvif 8080 / rtsp 8081, NVR probe ONVIF qua proxy, rewrite RTSP host → `10.34.24.12:8081`, ghi Frigate/go2rtc, **live view lên hình OK**. Multi-NVR ready; Pi không giữ creds (admin gõ lúc approve); fleet token dùng chung (`secrets/edge_agent_token`).
 
-Code: `edge-agent/` (Go), `backend/.../gateway/*`, `services/{GatewayScanner,GatewayService}.kt`, `routes/GatewayRouting.kt`, `CameraService.rewriteRtspHost`+`autoDetectPtz`, `frontend/.../GatewaysPanel.tsx` (tab "Gateway").
+Code: `gateway/edge-agent/` (Go), `backend/.../gateway/*`, `services/{GatewayScanner,GatewayService}.kt`, `routes/GatewayRouting.kt`, `CameraService.rewriteRtspHost`+`autoDetectPtz`, `frontend/.../GatewaysPanel.tsx` (tab "Gateway").
 
 **Auto-PTZ (đã hiện thực):** sau adopt, gửi 1 `ContinuousMove` PanTilt nhỏ (x=0.05) + `Stop`, xem SOAP fault → set `cameras.ptz_mode` = `full` (no fault) hoặc `zoom` (fault). KHÔNG đè lựa chọn thủ công. (`OnvifSoapClient.probePanTiltSupported`, `CameraService.autoDetectPtz`.)
 
 **App mobile "Thêm Gateway" + multi-region enroll — ✅ DONE (code, chưa test trên Pi thật):**
-> **Cách A (1 controller, nhiều ZeroTier network/khu vực, 1 image dùng chung):** image Pi KHÔNG bake network id. App điện thoại (`android-app/`) quét gateway qua `/identity` → FW nhập **Network ID 16-hex** của khu vực → `POST /enroll` → agent `zerotier join` đúng mạng đó + persist vào `state.json` (reboot tự join lại). Sau đó admin "Cấp phép" trên NVR như Plan A. Mỗi NVR khu vực: cùng `ZT_CONTROLLER_URL`, khác `ZT_NETWORK_ID` + `ZT_SCAN_SUBNET`. Network id KHÔNG phải secret (node vẫn cần admin cấp phép). Code: `edge-agent/{main.go (handleEnroll, ztJoinLoop, currentNetworkID), state.go (NetworkID), zerotier.go (ztJoin/ztLeave/validNetworkID)}`, app `net/{AgentClient.enroll, Models}`, `ui/AddScreen.kt (EnrollSection)`, `OnboardViewModel.submitEnroll`. `install.sh` giờ cài cả ZeroTier. **Van an toàn:** `/enroll` no-auth (Tier 0) nhưng từ chối đổi network nếu gateway đã có camera (tránh hijack + orphan proxy). **TODO test:** cài mới Pi .71 + cài lại app → enroll → cấp phép → adopt camera.
+> **Cách A (1 controller, nhiều ZeroTier network/khu vực, 1 image dùng chung):** image Pi KHÔNG bake network id. App điện thoại (`gateway/android-app/`) quét gateway qua `/identity` → FW nhập **Network ID 16-hex** của khu vực → `POST /enroll` → agent `zerotier join` đúng mạng đó + persist vào `state.json` (reboot tự join lại). Sau đó admin "Cấp phép" trên NVR như Plan A. Mỗi NVR khu vực: cùng `ZT_CONTROLLER_URL`, khác `ZT_NETWORK_ID` + `ZT_SCAN_SUBNET`. Network id KHÔNG phải secret (node vẫn cần admin cấp phép). Code: `gateway/edge-agent/{main.go (handleEnroll, ztJoinLoop, currentNetworkID), state.go (NetworkID), zerotier.go (ztJoin/ztLeave/validNetworkID)}`, app `net/{AgentClient.enroll, Models}`, `ui/AddScreen.kt (EnrollSection)`, `OnboardViewModel.submitEnroll`. `install.sh` giờ cài cả ZeroTier. **Van an toàn:** `/enroll` no-auth (Tier 0) nhưng từ chối đổi network nếu gateway đã có camera (tránh hijack + orphan proxy). **TODO test:** cài mới Pi .71 + cài lại app → enroll → cấp phép → adopt camera.
 
 **Còn lại / known limitations:**
 - ⚠️ **Camera under-report (verified):** `OSSD2MPVF33XPTZAI` (`.64`) là PTZ thật nhưng **không nhận pan/tilt qua ONVIF `ContinuousMove`** (`GetNodes` chỉ có Zoom; PanTilt → fault "speed out of bounds"; Zoom → OK). → auto-PTZ phân loại nó `zoom` (false-negative đã biết). Cần tìm phương thức pan thật (`AbsoluteMove`/`RelativeMove`/space riêng/API vendor) — **chưa làm**.
@@ -289,12 +290,12 @@ Code: `edge-agent/` (Go), `backend/.../gateway/*`, `services/{GatewayScanner,Gat
 > **Dọn sau bake:** xoá member test `15df2d5dc5` khỏi ztncui; entry gateway test trên NVR đã xoá bằng nút DELETE (Phase 3).
 
 **Cách hoàn tất A1 khi có Pi spare (đã làm, giữ làm tham chiếu):**
-1. Trên Pi spare: copy thư mục `edge-agent/` sang, `sudo ./install.sh` (đã có sẵn fix nginx boot-race: `ip_nonlocal_bind=1` + systemd drop-in `After=zerotier-one`).
+1. Trên Pi spare: copy thư mục `gateway/edge-agent/` sang, `sudo ./install.sh` (đã có sẵn fix nginx boot-race: `ip_nonlocal_bind=1` + systemd drop-in `After=zerotier-one`).
 2. Sửa `/etc/nvr-edge-agent/agent.env`: đặt `EDGE_AGENT_TOKEN` = fleet token (khớp `secrets/edge_agent_token` trên NVR). `ZT_NETWORK_ID` đã được `bake-prep.sh` bake = `efb242bde2f3e856`.
 3. `sudo ./bake-prep.sh` — xoá ZT identity/peers/state + machine-id + ssh host keys + log để mỗi Pi clone **tự sinh node-id riêng** ở boot đầu; giữ `agent.env`; reset nginx cams về rỗng.
 4. `sudo poweroff` → tháo thẻ SD → Pi Imager/dd chụp image. Mỗi Pi flash ra: boot đầu tự sinh identity → agent tự `zerotier join efb242bde2f3e856` → hiện member CHỜ trên ztncui → admin authorize → NVR scanner tự thấy.
 
-Code liên quan: `edge-agent/bake-prep.sh` (prep golden image), `edge-agent/install.sh` (đã bake nginx boot-race fix).
+Code liên quan: `gateway/edge-agent/bake-prep.sh` (prep golden image), `gateway/edge-agent/install.sh` (đã bake nginx boot-race fix).
 
 ### Băng thông & sức chứa camera qua gateway (capacity planning)
 
@@ -332,7 +333,7 @@ Bitrate/camera (H.265, 30fps, ước lượng — cảnh động đẩy cao hơn
 | Site unreachable sau deploy nvr-wrapper | nginx không phụ thuộc nvr-wrapper, không tự start | `docker compose up -d nginx` |
 | Container dùng image cũ | `docker-compose.override.yml` override image + Docker cache | `docker compose build --no-cache nvr-wrapper` |
 | Adopt camera qua tab Gateway nhưng KHÔNG thấy trên NVR | List camera của App chỉ fetch lúc tải trang; adopt ở tab Gateway không tự kích hoạt fetch lại | Đã fix: `GatewaysPanel` gọi `onCamerasChanged` (=`fetchCameras`) sau adopt. Camera vẫn được lưu đúng (DB+config.yml); F5 cũng thấy ngay |
-| Gateway không hiện trong tab Gateway dù Pi chạy | `ZT_SCAN_SUBNET` chưa set / sai; Pi chưa authorize ở ZeroTier Central; fleet token Pi ≠ `secrets/edge_agent_token` | Xem `docker logs nvr-wrapper \| grep GATEWAY`; chi tiết ở `gateway_setup.md` |
+| Gateway không hiện trong tab Gateway dù Pi chạy | `ZT_SCAN_SUBNET` chưa set / sai; Pi chưa authorize ở ZeroTier Central; fleet token Pi ≠ `secrets/edge_agent_token` | Xem `docker logs nvr-wrapper \| grep GATEWAY`; chi tiết ở `gateway/gateway_setup.md` |
 | Build không lấy code mới | Docker layer cache | `docker compose build --no-cache nvr-wrapper` |
 | GHCR pull fail | GitHub token hết hạn | `echo <token> \| docker login ghcr.io -u toannice --password-stdin` |
 | OTP input bị browser validate như email | `renderInput()` dùng `title.includes('Mã')` — fragile | Dùng `isOtp?: boolean` param tường minh |
