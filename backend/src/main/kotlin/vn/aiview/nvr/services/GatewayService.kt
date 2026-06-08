@@ -2,6 +2,7 @@ package vn.aiview.nvr.services
 
 import kotlinx.serialization.Serializable
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.deleteWhere
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
@@ -214,6 +215,54 @@ object GatewayService {
 
     @Serializable
     data class DeleteResult(val deleted: Boolean, val camerasRemoved: Int)
+
+    /** A camera adopted through a gateway, as the NVR stores it (for the gateway panel's camera list). */
+    @Serializable
+    data class AdoptedCameraDto(
+        val slug: String,
+        val name: String,
+        val localIp: String?,    // camera IP on the field LAN (what the agent proxies)
+        val channelId: String?,
+    )
+
+    /** Cameras the NVR adopted through this gateway (read from our DB, NOT the agent). Drives the
+     *  "camera đã thêm" list + per-camera delete in the gateway panel. */
+    fun adoptedCameras(id: String): List<AdoptedCameraDto> = transaction {
+        Cameras.selectAll().where { Cameras.gatewayId eq id }.map {
+            AdoptedCameraDto(
+                slug = it[Cameras.slug],
+                name = it[Cameras.displayName],
+                localIp = it[Cameras.localIp],
+                channelId = it[Cameras.channelId],
+            )
+        }
+    }
+
+    /**
+     * Remove a SINGLE camera adopted through a gateway (vs [deleteGateway] which removes all of them).
+     * Frees the agent's nginx proxy port for that camera (best-effort — the gateway may be offline,
+     * which must not block removal) then runs [CameraService.removeAndPersist] (DB + YAML + go2rtc +
+     * Frigate restart). Returns null if the gateway is unknown or the slug isn't a camera of this
+     * gateway (so the caller can answer 404 rather than silently no-op).
+     */
+    suspend fun removeCamera(gatewayId: String, slug: String): DeleteResult? {
+        // Camera must exist AND belong to this gateway — guards against deleting an unrelated camera.
+        val localIp = transaction {
+            Cameras.selectAll()
+                .where { (Cameras.slug eq slug) and (Cameras.gatewayId eq gatewayId) }
+                .firstOrNull()?.get(Cameras.localIp)
+        } ?: return null
+
+        val c = conn(gatewayId)
+        if (c != null && !localIp.isNullOrBlank()) {
+            runCatching { EdgeAgentClient.deleteProxy(c.ip, c.port, c.token, localIp) }
+        }
+
+        val ok = CameraService.removeAndPersist(slug).isSuccess
+        AppLogger.info(AppLogger.Module.CAMERA, "GATEWAY", "DELETE_CAMERA",
+            "gateway=$gatewayId slug=$slug local=$localIp ok=$ok")
+        return DeleteResult(ok, if (ok) 1 else 0)
+    }
 
     /**
      * Delete a gateway and CASCADE-remove every camera adopted through it (DB + YAML + go2rtc + Frigate
