@@ -382,7 +382,7 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
                                 value={!cam.ptzEnabled ? 'none' : (cam.ptzMode === 'zoom' ? 'zoom' : 'full')}
                                 onChange={e => setCamPtz(g.id, cam, e.target.value as 'none' | 'zoom' | 'full')}
                                 title="Phân loại PTZ của camera"
-                                className="text-xs rounded border border-gray-300 bg-white px-1.5 py-1">
+                                className="text-xs rounded border border-gray-300 bg-white text-gray-800 px-1.5 py-1">
                                 <option value="none">Không PTZ</option>
                                 <option value="zoom">Chỉ Zoom</option>
                                 <option value="full">PTZ đầy đủ</option>
