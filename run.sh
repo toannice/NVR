@@ -1,20 +1,80 @@
 #!/bin/bash
 # --- ALL-IN-ONE NVR DEPLOYMENT (PHIÊN BẢN 4.0 - CI/CD READY) ---
 
-if [[ $EUID -ne 0 ]]; then
+# -n : không tương tác -> tự trả lời "n" cho Factory Reset & Tailscale
+# -r/--rebuild/--dev : CHỈ build lại code + nạp bản mới (vòng lặp dev nhanh), bỏ qua toàn bộ setup
+NON_INTERACTIVE=0
+REBUILD_ONLY=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -n|--non-interactive) NON_INTERACTIVE=1 ;;
+        -r|--rebuild|--dev) REBUILD_ONLY=1 ;;
+        *) echo "[!] Tham số không hợp lệ: $1"; echo "    Dùng: sudo ./run.sh [-n]   |   ./run.sh --rebuild"; exit 1 ;;
+    esac
+    shift
+done
+
+# Full setup cần root; chế độ --rebuild chỉ cần quyền chạy docker.
+if [[ "$REBUILD_ONLY" -eq 0 && $EUID -ne 0 ]]; then
    echo "CRITICAL: Vui lòng chạy script này với quyền sudo: sudo ./run.sh"
    exit 1
 fi
 
-# -n : chế độ không tương tác -> tự trả lời "n" cho Factory Reset & Tailscale
-NON_INTERACTIVE=0
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -n|--non-interactive) NON_INTERACTIVE=1 ;;
-        *) echo "[!] Tham số không hợp lệ: $1"; echo "    Dùng: sudo ./run.sh [-n]"; exit 1 ;;
+# ── Hàm dùng chung cho cả full-setup lẫn --rebuild ──────────────────────────────────
+# Sau --force-recreate, nvr-wrapper đôi khi kẹt trạng thái Netty: /api/* trả 200 NHƯNG body
+# file tĩnh (/, /index.html, /assets...) bị treo -> nginx báo 502. (Hay gặp khi có camera
+# offline gây bão lỗi go2rtc lúc khởi động.) Khắc phục đã kiểm chứng: restart SẠCH nvr-wrapper.
+wait_backend_ready() {
+    # 0 = OK (API + file tĩnh đều 200); 1 = backend không lên; 2 = degraded (API sống, file tĩnh treo)
+    local i j api root
+    for i in $(seq 1 30); do
+        api=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/api/health 2>/dev/null)
+        if [ "$api" = "200" ]; then
+            for j in 1 2 3; do
+                root=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/ 2>/dev/null)
+                [ "$root" = "200" ] && return 0
+                sleep 1
+            done
+            return 2
+        fi
+        sleep 2
+    done
+    return 1
+}
+
+# Nạp bản mới của nvr-wrapper (recreate) + tự chữa kẹt file-tĩnh + đảm bảo nginx chạy.
+deploy_wrapper() {
+    docker compose up -d --force-recreate --no-deps nvr-wrapper
+    echo "[*] Kiểm tra nvr-wrapper phục vụ được giao diện web (không chỉ API)..."
+    wait_backend_ready; local RC=$?
+    if [ "$RC" = "2" ]; then
+        echo "[!] nvr-wrapper kẹt (API sống nhưng file tĩnh treo) -> restart sạch..."
+        docker compose restart nvr-wrapper
+        wait_backend_ready; RC=$?
+    fi
+    case "$RC" in
+        0) echo "  -> OK: web phục vụ bình thường." ;;
+        1) echo "  [!] CẢNH BÁO: backend không phản hồi. Xem: docker compose logs nvr-wrapper" ;;
+        2) echo "  [!] CẢNH BÁO: file tĩnh vẫn treo sau restart. Xem: docker compose logs nvr-wrapper" ;;
     esac
-    shift
-done
+    echo "[*] Đảm bảo nginx đang chạy (không tự start khi nvr-wrapper recreate)..."
+    docker compose up -d nginx
+}
+
+# ── Vòng lặp DEV nhanh: dùng sau mỗi lần sửa code ───────────────────────────────────
+#   ./run.sh --rebuild
+# KHÔNG --no-cache (Dockerfile đã tách deps/source + cache mount BuildKit) -> chỉ recompile
+# phần đổi, không tải lại dependency. Bỏ qua factory-reset/đĩa/env/tailscale.
+if [[ "$REBUILD_ONLY" -eq 1 ]]; then
+    echo "===================================================="
+    echo "   NVR — BUILD LẠI NHANH (dev rebuild)"
+    echo "===================================================="
+    echo "[*] Build nvr-wrapper từ source (dùng cache)..."
+    docker compose build nvr-wrapper || { echo "[!] Build thất bại."; exit 1; }
+    deploy_wrapper
+    echo "[*] Xong. Truy cập: https://$(hostname -I | awk '{print $1}')"
+    exit 0
+fi
 
 echo "===================================================="
 echo "   Hệ thống Setup NVR Tự động (PHIÊN BẢN 4.0 - CI/CD) "
@@ -206,59 +266,8 @@ echo "[*] Pull các image còn lại (frigate, mosquitto, nginx...)..."
 docker compose pull --ignore-buildable 2>/dev/null || docker compose pull
 
 echo "[*] Khởi chạy toàn bộ stack..."
-docker compose up -d --force-recreate --no-deps nvr-wrapper
 docker compose up -d
-
-# --- Self-heal sau force-recreate (network_mode: host) ---
-# Sau --force-recreate, nvr-wrapper đôi khi kẹt trạng thái Netty: route /api/* trả
-# 200 NHƯNG body file tĩnh (/, /index.html, /assets...) bị treo -> nginx báo 502.
-# (Hay xảy ra khi có camera offline gây bão lỗi go2rtc lúc khởi động.)
-# Cách khắc phục đã kiểm chứng: restart SẠCH nvr-wrapper (không phải build lại).
-wait_backend_ready() {
-    # 0 = OK (API + file tĩnh đều 200); 1 = backend không lên; 2 = degraded (API sống, file tĩnh treo)
-    local i j api root
-    for i in $(seq 1 30); do
-        api=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/api/health 2>/dev/null)
-        if [ "$api" = "200" ]; then
-            # Backend đã start; xác nhận serve được FILE TĨNH (thử vài lần để loại nhiễu)
-            for j in 1 2 3; do
-                root=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/ 2>/dev/null)
-                [ "$root" = "200" ] && return 0
-                sleep 1
-            done
-            return 2
-        fi
-        sleep 2
-    done
-    return 1
-}
-
-echo "[*] Kiểm tra nvr-wrapper phục vụ được giao diện web (không chỉ API)..."
-wait_backend_ready; RC=$?
-if [ "$RC" = "2" ]; then
-    echo "[!] nvr-wrapper kẹt trạng thái (API sống nhưng file tĩnh treo) -> restart sạch..."
-    docker compose restart nvr-wrapper
-    wait_backend_ready; RC=$?
-fi
-case "$RC" in
-    0) echo "  -> OK: web phục vụ bình thường." ;;
-    1) echo "  [!] CẢNH BÁO: backend nvr-wrapper không phản hồi. Kiểm tra: docker compose logs nvr-wrapper" ;;
-    2) echo "  [!] CẢNH BÁO: file tĩnh vẫn treo sau restart. Kiểm tra: docker compose logs nvr-wrapper" ;;
-esac
-
-echo "[*] Đảm bảo nginx đang chạy..."
-docker compose up -d nginx
-
-# Tạo script trigger update thủ công
-cat << 'EOF' > update-now.sh
-#!/bin/bash
-if [ -f .env ]; then source .env; fi
-echo "[*] Đang gửi lệnh cập nhật tức thì tới Watchtower..."
-curl -H "Authorization: Bearer $WATCHTOWER_TOKEN" http://localhost:8080/v1/update
-echo ""
-echo "[*] Đã gửi lệnh! Kiểm tra quá trình tải tại: docker logs -f watchtower"
-EOF
-chmod +x update-now.sh
+deploy_wrapper   # force-recreate nvr-wrapper + tự chữa kẹt file-tĩnh + đảm bảo nginx chạy
 
 echo "[*] Cấu hình tự khởi động (Auto Boot) khi có mạng hoặc sau kết nối..."
 cp nvr-stack.service /etc/systemd/system/
@@ -270,7 +279,7 @@ echo "===================================================="
 echo "Hệ thống NVR đã sẵn sàng!"
 echo "Truy cập tại: https://$LAN_IP"
 echo "Lưu ý: Bạn MUST dùng HTTPS (vì hệ thống đã cài SSL bảo mật)"
-echo "Để gửi lệnh Cập Nhật Thủ Công ngay, chạy lệnh: ./update-now.sh"
+echo "Sau khi sửa code, build lại nhanh bằng: ./run.sh --rebuild"
 echo "===================================================="
 
 if [ -n "$DISPLAY" ]; then
