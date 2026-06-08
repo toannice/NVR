@@ -2313,15 +2313,16 @@ const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDeleteCam
     }
   };
 
-  const togglePtzSetting = async (id: string, newEnabled: boolean) => {
+  // 3-state PTZ classification: 'none' | 'zoom' | 'full'. Persists both ptzEnabled + ptzMode server-side.
+  const updatePtzMode = async (id: string, mode: 'none' | 'zoom' | 'full') => {
     try {
       const res = await fetch(`/api/cameras/${id}/ptz-enabled`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ptzEnabled: newEnabled })
+        body: JSON.stringify({ mode })
       });
       if (res.ok) {
-        setCameras((prev: any[]) => prev.map(c => c.id === id ? { ...c, ptzEnabled: newEnabled } : c));
+        setCameras((prev: any[]) => prev.map(c => c.id === id ? { ...c, ptzEnabled: mode !== 'none', ptzMode: mode } : c));
         addToast({ type: 'success', title: 'Thành công', message: 'Đã cập nhật cấu hình PTZ' });
       } else {
         const errorData = await res.json().catch(() => ({}));
@@ -2446,16 +2447,16 @@ const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDeleteCam
                         </span>
                       </td>
                       <td className="p-4 text-center">
-                        <button
-                          onClick={() => togglePtzSetting(c.id, !c.ptzEnabled)}
-                          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
-                            c.ptzEnabled ? 'bg-[#F04E30]' : 'bg-gray-300 dark:bg-gray-600'
-                          }`}
+                        <select
+                          value={!c.ptzEnabled ? 'none' : (c.ptzMode === 'zoom' ? 'zoom' : 'full')}
+                          onChange={e => updatePtzMode(c.id, e.target.value as 'none' | 'zoom' | 'full')}
+                          className="text-xs rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white focus:ring-indigo-500 focus:border-indigo-500 py-1"
+                          title="Phân loại PTZ của camera"
                         >
-                          <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-md transition-transform ${
-                            c.ptzEnabled ? 'translate-x-[18px]' : 'translate-x-1'
-                          }`} />
-                        </button>
+                          <option value="none">Không PTZ</option>
+                          <option value="zoom">Chỉ Zoom</option>
+                          <option value="full">PTZ đầy đủ</option>
+                        </select>
                       </td>
                       <td className="p-4">
                         <div className="flex justify-center space-x-2">

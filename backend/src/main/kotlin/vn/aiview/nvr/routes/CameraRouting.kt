@@ -230,7 +230,15 @@ fun Route.cameraRouting() {
                     // name/port alone never wipes saved credentials.
                     if (!onvifPass.isNullOrBlank()) it[Cameras.passwordEncrypted] = CryptoUtils.encrypt(onvifPass)
                     // Persist the override whenever the client sent the field (incl. "auto" -> null).
-                    if (ptzModeRaw != null) it[Cameras.ptzMode] = ptzMode
+                    // Forcing an explicit full/zoom also turns PTZ on, so the canonical 3-state stays
+                    // coherent (mode full/zoom ⇒ enabled). "auto"/null leaves the on/off flag alone.
+                    if (ptzModeRaw != null) {
+                        it[Cameras.ptzMode] = ptzMode
+                        if (ptzMode == "full" || ptzMode == "zoom") {
+                            it[Cameras.ptzEnabled] = true
+                            it[Cameras.hasPtz] = true
+                        }
+                    }
                 }
             }
             if (updated > 0) {
@@ -508,15 +516,30 @@ fun Route.cameraRouting() {
         try {
             val jsonStr = call.receiveText()
             val json = Json.parseToJsonElement(jsonStr).jsonObject
-            val enabled = json["ptzEnabled"]?.jsonPrimitive?.content?.toBoolean() ?: false
+            // Canonical 3-state classification: "none" | "zoom" | "full".
+            // Legacy boolean { ptzEnabled } is still accepted (old on/off toggle): true→full, false→none.
+            val modeRaw = json["mode"]?.jsonPrimitive?.content?.trim()?.lowercase()
+            val (enabled, mode) = when (modeRaw) {
+                "none" -> false to "none"
+                "zoom" -> true to "zoom"
+                "full" -> true to "full"
+                else -> {
+                    val en = json["ptzEnabled"]?.jsonPrimitive?.content?.toBoolean() ?: false
+                    en to (if (en) "full" else "none")
+                }
+            }
             val updated = transaction {
                 Cameras.update({ Cameras.slug eq id }) {
                     it[Cameras.ptzEnabled] = enabled
                     it[Cameras.hasPtz] = enabled
+                    it[Cameras.ptzMode] = mode
                 }
             }
             if (updated > 0) {
-                call.respond(mapOf("success" to true, "ptzEnabled" to enabled))
+                call.respondText(
+                    """{"success":true,"ptzEnabled":$enabled,"mode":"$mode"}""",
+                    io.ktor.http.ContentType.Application.Json
+                )
             } else {
                 call.respond(HttpStatusCode.NotFound, mapOf("error" to "Camera not found"))
             }

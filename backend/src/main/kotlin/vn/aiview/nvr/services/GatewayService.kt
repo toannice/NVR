@@ -223,6 +223,8 @@ object GatewayService {
         val name: String,
         val localIp: String?,    // camera IP on the field LAN (what the agent proxies)
         val channelId: String?,
+        val ptzEnabled: Boolean = false,
+        val ptzMode: String? = null,   // canonical 3-state: null/"none" | "zoom" | "full"
     )
 
     /** Cameras the NVR adopted through this gateway (read from our DB, NOT the agent). Drives the
@@ -234,6 +236,8 @@ object GatewayService {
                 name = it[Cameras.displayName],
                 localIp = it[Cameras.localIp],
                 channelId = it[Cameras.channelId],
+                ptzEnabled = it[Cameras.ptzEnabled],
+                ptzMode = it[Cameras.ptzMode],
             )
         }
     }

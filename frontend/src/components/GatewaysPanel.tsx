@@ -40,6 +40,8 @@ type AdoptedCam = {
   name: string
   localIp: string | null
   channelId: string | null
+  ptzEnabled?: boolean
+  ptzMode?: string | null   // canonical 3-state: null/'none' | 'zoom' | 'full'
 }
 
 const Icon = ({ name, className = '' }: { name: string; className?: string }) => (
@@ -231,6 +233,24 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
     if (openId) fetchAdopted(openId)
   }, [openId, fetchAdopted])
 
+  // Set a camera's PTZ classification (none | zoom | full) straight from the gateway panel,
+  // so the admin can fix an auto-detect mis-classification without opening the Edit modal.
+  const setCamPtz = async (gatewayId: string, cam: AdoptedCam, mode: 'none' | 'zoom' | 'full') => {
+    try {
+      const r = await fetch(`/api/cameras/${encodeURIComponent(cam.slug)}/ptz-enabled`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      })
+      if (r.ok) {
+        setAdopted(prev => ({ ...prev, [gatewayId]: (prev[gatewayId] || []).map(x =>
+          x.slug === cam.slug ? { ...x, ptzEnabled: mode !== 'none', ptzMode: mode } : x) }))
+        toast('Đã cập nhật PTZ', 'success')
+        onCamerasChanged?.()
+      } else toast('Cập nhật PTZ thất bại', 'error')
+    } catch { toast('Lỗi mạng khi cập nhật PTZ', 'error') }
+  }
+
   const deleteCamera = async (id: string, cam: AdoptedCam) => {
     if (!window.confirm(`Xóa camera "${cam.name}" khỏi gateway? Không thể hoàn tác.`)) return
     setBusyAction('delcam:' + cam.slug)
@@ -357,11 +377,22 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
                                 {cam.localIp || '(không rõ IP)'}{cam.channelId ? ` · kênh ${cam.channelId}` : ''}
                               </div>
                             </div>
-                            <button onClick={() => deleteCamera(g.id, cam)} disabled={busyAction === 'delcam:' + cam.slug}
-                              title="Xóa camera" aria-label="Xóa camera"
-                              className="flex items-center text-gray-400 hover:text-red-600 px-2 py-1.5 rounded-lg disabled:opacity-50 shrink-0">
-                              <Icon name="delete_outline" className="text-base" />
-                            </button>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <select
+                                value={!cam.ptzEnabled ? 'none' : (cam.ptzMode === 'zoom' ? 'zoom' : 'full')}
+                                onChange={e => setCamPtz(g.id, cam, e.target.value as 'none' | 'zoom' | 'full')}
+                                title="Phân loại PTZ của camera"
+                                className="text-xs rounded border border-gray-300 bg-white px-1.5 py-1">
+                                <option value="none">Không PTZ</option>
+                                <option value="zoom">Chỉ Zoom</option>
+                                <option value="full">PTZ đầy đủ</option>
+                              </select>
+                              <button onClick={() => deleteCamera(g.id, cam)} disabled={busyAction === 'delcam:' + cam.slug}
+                                title="Xóa camera" aria-label="Xóa camera"
+                                className="flex items-center text-gray-400 hover:text-red-600 px-2 py-1.5 rounded-lg disabled:opacity-50">
+                                <Icon name="delete_outline" className="text-base" />
+                              </button>
+                            </div>
                           </div>
                         ))}
                       </div>
