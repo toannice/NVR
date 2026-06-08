@@ -42,10 +42,15 @@ mosquitto (MQTT) → frigate (NVR engine) → nvr-wrapper (Kotlin/React app)
 ### Build image nvr-wrapper (app chính)
 ```bash
 # Phải chạy từ /home/toan/my-nvr (project root)
-docker compose build --no-cache nvr-wrapper
+# VÒNG LẶP THƯỜNG (nhanh): KHÔNG dùng --no-cache. Dockerfile đã tách copy deps trước,
+# copy source sau → đổi code sẽ tự bust đúng tầng cần; npm install + gradle deps tái dùng.
+# BuildKit cache mount (Dockerfile) giữ cache npm/gradle giữa các lần build → chỉ recompile.
+docker compose build nvr-wrapper
 docker compose up -d --force-recreate --no-deps nvr-wrapper
 docker compose up -d nginx   # nginx không tự start khi nvr-wrapper recreate
 ```
+> Chỉ dùng `--no-cache` khi nghi cache bẩn thật sự: đổi base image, sửa Dockerfile, hoặc build ra
+> code cũ bất thường. Vòng lặp sửa code hằng ngày KHÔNG cần `--no-cache` (đó là đường chậm).
 
 ### Build watchdog
 ```bash
