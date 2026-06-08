@@ -83,6 +83,7 @@ services:
     secrets:
       - gmail_app_password
       - edge_agent_token                       # Shared fleet token for edge gateways (4-6 Plan A)
+      - zt_controller_token                    # ZeroTier controller authtoken — NVR authorizes members itself
     environment:
       - FRIGATE_URL=http://localhost:5000
       - MQTT_URL=tcp://localhost:1883
@@ -98,6 +99,8 @@ services:
       - ZT_SCAN_SUBNET=${ZT_SCAN_SUBNET:-}    # ZeroTier subnet to auto-scan for gateways, e.g. 10.34.24.0/24 (empty = disabled)
       - EDGE_AGENT_PORT=${EDGE_AGENT_PORT:-9797}
       - GATEWAY_SCAN_INTERVAL_SEC=${GATEWAY_SCAN_INTERVAL_SEC:-30}
+      - ZT_CONTROLLER_URL=${ZT_CONTROLLER_URL:-} # Self-hosted ZT controller API, e.g. http://192.168.2.106:9993 (empty = NVR authorize disabled)
+      - ZT_NETWORK_ID=${ZT_NETWORK_ID:-}        # Fleet network id the gateways join (for controller member API)
     healthcheck:
       test: [ "CMD-SHELL", "curl -f http://127.0.0.1:3000/api/health || exit 1" ]
       interval: 20s
@@ -152,6 +155,8 @@ secrets:
     file: ./secrets/gmail_app_password
   edge_agent_token:
     file: ./secrets/edge_agent_token
+  zt_controller_token:
+    file: ./secrets/zt_controller_token
 
 # ─── Networks ──────────────────────────────────────────────
 networks:

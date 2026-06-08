@@ -53,6 +53,7 @@ fun DetailScreen(vm: OnboardViewModel, gw: Gateway) {
             InfoRow("Gateway ID", id.gatewayId.ifBlank { "—" })
             InfoRow("Người lắp", id.installer.ifBlank { "—" })
             InfoRow("Vị trí", id.location.ifBlank { "—" })
+            InfoRow("Khu vực (network)", id.networkId.ifBlank { "(chưa vào khu vực)" })
             InfoRow("ZeroTier addr", id.ztAddress.ifBlank { "—" })
             InfoRow("ZeroTier IP", id.zerotierIp.ifBlank { "—" })
             InfoRow("Camera đang proxy", id.cameraCount.toString())

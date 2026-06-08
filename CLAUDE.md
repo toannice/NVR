@@ -260,25 +260,58 @@ Code: `edge-agent/` (Go), `backend/.../gateway/*`, `services/{GatewayScanner,Gat
 
 **Auto-PTZ (đã hiện thực):** sau adopt, gửi 1 `ContinuousMove` PanTilt nhỏ (x=0.05) + `Stop`, xem SOAP fault → set `cameras.ptz_mode` = `full` (no fault) hoặc `zoom` (fault). KHÔNG đè lựa chọn thủ công. (`OnvifSoapClient.probePanTiltSupported`, `CameraService.autoDetectPtz`.)
 
-**TODO ưu tiên — App mobile "Thêm Gateway vào NVR" (zero hand-touch trên Pi):**
-> Mục tiêu user (04/06): **KHÔNG bao giờ phải cấu hình Pi bằng tay**. App mobile chỉ làm **đúng 1 việc**: onboard/đăng ký một gateway vào NVR. Pi nướng image sẵn (agent + ZT network id + fleet token có sẵn) → cắm điện + mạng → app mobile lo phần "thêm vào NVR" (và nếu cần: authorize ZeroTier member, đặt tên gateway). Không quản lý camera trong app này — chỉ thêm gateway. Tái dùng API agent (`/health`, `/discovery`, `/camera`, `/cameras`) + endpoint NVR (`/api/gateways*`). Cần nghĩ: cách app authorize Pi vào ZeroTier (ZT Central API qua NVR?) để bỏ luôn bước thủ công duy nhất còn lại.
+**App mobile "Thêm Gateway" + multi-region enroll — ✅ DONE (code, chưa test trên Pi thật):**
+> **Cách A (1 controller, nhiều ZeroTier network/khu vực, 1 image dùng chung):** image Pi KHÔNG bake network id. App điện thoại (`android-app/`) quét gateway qua `/identity` → FW nhập **Network ID 16-hex** của khu vực → `POST /enroll` → agent `zerotier join` đúng mạng đó + persist vào `state.json` (reboot tự join lại). Sau đó admin "Cấp phép" trên NVR như Plan A. Mỗi NVR khu vực: cùng `ZT_CONTROLLER_URL`, khác `ZT_NETWORK_ID` + `ZT_SCAN_SUBNET`. Network id KHÔNG phải secret (node vẫn cần admin cấp phép). Code: `edge-agent/{main.go (handleEnroll, ztJoinLoop, currentNetworkID), state.go (NetworkID), zerotier.go (ztJoin/ztLeave/validNetworkID)}`, app `net/{AgentClient.enroll, Models}`, `ui/AddScreen.kt (EnrollSection)`, `OnboardViewModel.submitEnroll`. `install.sh` giờ cài cả ZeroTier. **Van an toàn:** `/enroll` no-auth (Tier 0) nhưng từ chối đổi network nếu gateway đã có camera (tránh hijack + orphan proxy). **TODO test:** cài mới Pi .71 + cài lại app → enroll → cấp phép → adopt camera.
 
 **Còn lại / known limitations:**
 - ⚠️ **Camera under-report (verified):** `OSSD2MPVF33XPTZAI` (`.64`) là PTZ thật nhưng **không nhận pan/tilt qua ONVIF `ContinuousMove`** (`GetNodes` chỉ có Zoom; PanTilt → fault "speed out of bounds"; Zoom → OK). → auto-PTZ phân loại nó `zoom` (false-negative đã biết). Cần tìm phương thức pan thật (`AbsoluteMove`/`RelativeMove`/space riêng/API vendor) — **chưa làm**.
 - **Chưa làm (nice-to-have):** auto-dò `onvifPort` (thử nhiều cổng), tái dùng creds giữa camera cùng gateway, classifier PTZ thử thêm move-type.
 - Link ZeroTier chập chờn → mọi call agent đã có timeout ngắn + retry 1 lần.
 
-### Golden image gateway (A1) — ⏳ PENDING (chưa có Pi spare, 2026-06-05)
+### Golden image gateway (A1) — ✅ DONE (PoC, 2026-06-05)
 
-> Thuộc 004 (self-host ZeroTier — fleet `nvr-fleet` ID `efb242bde2f3e856`, pool `10.147.20.0/24`). Cutover Pi3 (`gateway-nha-A`) sang controller HQ tự host **đã xong** (xem `specs/004-gateway-onboarding/plan.md`). **Việc còn nợ:** chụp 1 image gateway nhân bản — **đang kẹt vì không có Pi rảnh** (KHÔNG dùng Pi3, nó là gateway thật đang chạy camera).
+> **DECISION 2026-06-06 (user): KHÔNG cần baked golden image cho PoC này.** PoC chạy trên phần cứng đang có sẵn. Việc bake image hoãn lại đến khi có phần cứng phù hợp/chính thức — lúc đó mới bake cho đúng phần cứng đó. Hiện tại đừng đầu tư vào image/bake automation. (Phần A1 dưới đây giữ làm tham chiếu cho lần bake sau.)
 
-**Cách hoàn tất A1 khi có Pi spare:**
+> **SCOPE: đây là PoC, chỉ 2 Pi** (1 production `gateway-nha-A` @ `10.147.20.12` + 1 master spare). KHÔNG triển khai fleet lớn — đừng over-engineer phần image/onboarding.
+
+> Thuộc 004 (self-host ZeroTier — fleet `nvr-fleet` ID `efb242bde2f3e856`, pool `10.147.20.0/24`).
+> **Đã dựng golden master end-to-end trên Pi spare (2026-06-05):** flash Pi OS Lite 64-bit (Debian 13 trixie, aarch64) → cài `edge-agent` + ZeroTier + nginx → join + authorize ztncui → **NVR scanner tự thấy** (verify `gw-b34bf17c9e89` @ `10.147.20.72`) → hardened **key-only SSH** (password auth off + password locked, NOPASSWD sudo giữ vì chỉ vào bằng SSH key của NVR `~/.ssh/pi_gateway`) → `bake-prep.sh` → poweroff. Image nén đang chụp: `/home/toan/gateway-golden.img.gz` (full-card, flash sang thẻ **≥32GB cùng cỡ**; chưa auto-expand vì PoC).
+> **Gotchas đã gặp khi flash (ghi để khỏi lặp):** (1) rpi-imager OS-customisation đôi khi KHÔNG áp → bootfs trống `firstrun`/`ssh`/user; fix bằng tạo tay cờ `ssh` + `userconf.txt` trên bootfs, HOẶC sửa thẳng rootfs khi cắm thẻ vào PC. (2) Pi OS trixie tạo user theo username gõ trong Imager (vd `pi3`), KHÔNG phải `pi` mặc định. (3) Khung chat Claude không có TTY → `sudo`/`ssh` nhập-pass phải chạy ở **Terminal thật**, hoặc dùng `sudo -S` pipe pass / SSH key.
+> **Dọn sau bake:** xoá member test `15df2d5dc5` khỏi ztncui; entry gateway test trên NVR đã xoá bằng nút DELETE (Phase 3).
+
+**Cách hoàn tất A1 khi có Pi spare (đã làm, giữ làm tham chiếu):**
 1. Trên Pi spare: copy thư mục `edge-agent/` sang, `sudo ./install.sh` (đã có sẵn fix nginx boot-race: `ip_nonlocal_bind=1` + systemd drop-in `After=zerotier-one`).
 2. Sửa `/etc/nvr-edge-agent/agent.env`: đặt `EDGE_AGENT_TOKEN` = fleet token (khớp `secrets/edge_agent_token` trên NVR). `ZT_NETWORK_ID` đã được `bake-prep.sh` bake = `efb242bde2f3e856`.
 3. `sudo ./bake-prep.sh` — xoá ZT identity/peers/state + machine-id + ssh host keys + log để mỗi Pi clone **tự sinh node-id riêng** ở boot đầu; giữ `agent.env`; reset nginx cams về rỗng.
 4. `sudo poweroff` → tháo thẻ SD → Pi Imager/dd chụp image. Mỗi Pi flash ra: boot đầu tự sinh identity → agent tự `zerotier join efb242bde2f3e856` → hiện member CHỜ trên ztncui → admin authorize → NVR scanner tự thấy.
 
 Code liên quan: `edge-agent/bake-prep.sh` (prep golden image), `edge-agent/install.sh` (đã bake nginx boot-race fix).
+
+### Băng thông & sức chứa camera qua gateway (capacity planning)
+
+**Luồng dữ liệu:** `Camera → Gateway(Pi) → [UPLOAD site gateway] → internet → [DOWNLOAD site NVR] → NVR`.
+Mỗi camera kéo **2 luồng** (main=`record`, sub=`detect`) chạy 24/7 (xem § "Thêm Camera").
+
+**Nút thắt = DOWNLOAD của NVR**, KHÔNG phải RAM/CPU Pi:
+- Gateway chỉ là **proxy L4 (nginx `stream{}`)** — forward byte TCP, **không decode/transcode/buffer frame** → RAM ~const (~4MB), **không phụ thuộc độ phân giải**. Hạ res KHÔNG giảm RAM gateway; chỉ giảm **băng thông** + tải Frigate (detect) + đĩa (record 4K ngốn ~100–250 GB/cam/ngày).
+- Video đi **ra** ở gateway (ăn UPLOAD), đi **vào** ở NVR (ăn DOWNLOAD). Download NVR thường thấp hơn + **gánh tất cả gateway cộng lại** → đó là trần cứng.
+
+**Trần là TỔNG camera toàn hệ thống, KHÔNG phải mỗi gateway.** Download NVR là 1 ống chung; cắm thêm gateway KHÔNG mở rộng được (mọi camera vẫn chen qua cùng ống). Đếm tổng camera, đừng đếm theo gateway.
+
+Bitrate/camera (H.265, 30fps, ước lượng — cảnh động đẩy cao hơn):
+- **Config A (Full):** 4K main + FullHD sub ≈ **12–16 Mbps/cam**
+- **Config B (Low):** FullHD main + 720p sub ≈ **4–5.5 Mbps/cam** (nhẹ hơn ~3×)
+
+**Ví dụ hạ tầng hiện tại (đo 2026-06-06): NVR download 68 Mbps / upload 99 Mbps.** Chừa ~30% headroom cho ZeroTier chập chờn + RTSP-over-TCP retransmit → dùng thực ~48 Mbps:
+| Config | Max camera (TỔNG hệ thống) |
+|---|---|
+| A — Full (4K) | **~3 camera** |
+| B — Low (FullHD/720p) | **~9–10 camera** |
+→ "Điểm ngọt" cho link này: **main FullHD + sub 720p**. Muốn nhiều cam 4K hơn → **chỉ có cách nâng gói DOWNLOAD của NVR** (nâng đường gateway vô ích vì upload 99 đã thừa).
+
+**Đổi resolution làm trên CHÍNH camera** (web cam / ONVIF `SetVideoEncoderConfiguration`), không phải trên gateway/NVR; RTSP URL/profile thường giữ nguyên nên config NVR không cần sửa (verify lại camera vẫn trả đúng 2 profile sau khi đổi).
+
+**Triệu chứng QUÁ TẢI băng thông** (vì RTSP-over-TCP qua ZT chập chờn → KHÔNG vỡ hình kiểu nhiễu hạt mà **kẹt → đơ → rớt**): live view lag/freeze/màn đen-xám; record **thủng đoạn**/segment hỏng; camera flapping online↔offline; detect trễ; log Frigate `Unable to read frames`/`No frames received`/go2rtc reconnect loop. **Hiệu ứng dây chuyền:** 1 luồng nghẽn → TCP retransmit → buffer ffmpeg đầy → Frigate restart stream → thêm tải reconnect → **càng tải càng sập**, kéo đứt cả camera đang ổn. (Giống triệu chứng camera offline gây `stream.mp4 500` + live đen ở § Known Issues.)
 
 ---
 

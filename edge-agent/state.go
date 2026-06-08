@@ -26,6 +26,11 @@ type State struct {
 	Name      string   `json:"name,omitempty"`      // label set via app /label (overrides EDGE_AGENT_NAME)
 	Installer string   `json:"installer,omitempty"` // who installed it (field worker), set via app
 	Location  string   `json:"location,omitempty"`  // site/location label, set via app
+	// NetworkID is the ZeroTier network this gateway was enrolled into via the app's POST /enroll.
+	// It OVERRIDES the baked ZT_NETWORK_ID env (cách A: one generic image, the app points each Pi
+	// at its region's network at install time). Persisted so a reboot re-joins the right region with
+	// no env edit. Empty on a fresh image until the app enrolls it.
+	NetworkID string   `json:"networkId,omitempty"`
 	Cameras   []Camera `json:"cameras"`
 
 	mu   sync.Mutex `json:"-"`
@@ -129,6 +134,21 @@ func (s *State) labels() (name, installer, location string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.Name, s.Installer, s.Location
+}
+
+// networkID returns the enrolled ZeroTier network id (empty if never enrolled), under lock.
+func (s *State) networkID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.NetworkID
+}
+
+// setNetworkID records the ZeroTier network the app enrolled this gateway into (under lock).
+// Caller is responsible for s.save() + actually running the zerotier join/leave.
+func (s *State) setNetworkID(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.NetworkID = id
 }
 
 func (s *State) remove(localIP string) bool {

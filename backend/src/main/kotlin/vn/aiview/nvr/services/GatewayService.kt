@@ -11,6 +11,7 @@ import vn.aiview.nvr.gateway.EdgeAgentClient
 import vn.aiview.nvr.gateway.EdgeDevice
 import vn.aiview.nvr.gateway.EdgeHealth
 import vn.aiview.nvr.gateway.GatewayConfig
+import vn.aiview.nvr.gateway.ZtControllerClient
 import vn.aiview.nvr.models.Cameras
 import vn.aiview.nvr.models.Gateways
 import vn.aiview.nvr.utils.AppLogger
@@ -43,6 +44,11 @@ object GatewayService {
     /** A gateway counts as online if its agent answered /health recently. */
     private val ONLINE_WINDOW: Duration get() = Duration.ofSeconds(GatewayConfig.scanIntervalSec * 3)
 
+    /** Node addresses the admin just authorized from the NVR ("Cấp phép"). When the scanner later
+     *  discovers the matching gateway we approve it immediately, so one click does BOTH the ZeroTier
+     *  authorization and the NVR adoption gate — no redundant second "Phê duyệt". */
+    private val pendingAutoApprove: MutableSet<String> = java.util.Collections.synchronizedSet(mutableSetOf())
+
     data class Conn(val ip: String, val port: Int, val token: String)
 
     // ── discovery / liveness (called by GatewayScanner) ────────────────────────
@@ -54,19 +60,21 @@ object GatewayService {
         transaction {
             val existing = Gateways.selectAll().where { Gateways.id eq h.gatewayId }.firstOrNull()
             if (existing == null) {
+                // If the admin authorized this node from the NVR, skip the manual "Phê duyệt" gate.
+                val autoApproved = h.ztAddress.isNotBlank() && pendingAutoApprove.remove(h.ztAddress)
                 Gateways.insert {
                     it[Gateways.id] = h.gatewayId
                     it[Gateways.name] = h.gatewayName.ifBlank { ip }
                     it[Gateways.zerotierIp] = ip
                     it[Gateways.agentPort] = if (h.agentPort > 0) h.agentPort else GatewayConfig.agentPort
-                    it[Gateways.status] = "discovered"
+                    it[Gateways.status] = if (autoApproved) "approved" else "discovered"
                     it[Gateways.fieldSubnet] = h.fieldSubnet.ifBlank { null }
                     it[Gateways.ztAddress] = h.ztAddress.ifBlank { null }
                     it[Gateways.installer] = h.installer.ifBlank { null }
                     it[Gateways.location] = h.location.ifBlank { null }
                     it[Gateways.lastSeen] = LocalDateTime.now()
                 }
-                AppLogger.info(AppLogger.Module.SYSTEM, "GATEWAY", "DISCOVERED", "id=${h.gatewayId} ip=$ip name=${h.gatewayName}")
+                AppLogger.info(AppLogger.Module.SYSTEM, "GATEWAY", if (autoApproved) "DISCOVERED_AUTOAPPROVED" else "DISCOVERED", "id=${h.gatewayId} ip=$ip name=${h.gatewayName}")
             } else {
                 Gateways.update({ Gateways.id eq h.gatewayId }) {
                     it[Gateways.name] = h.gatewayName.ifBlank { existing[Gateways.name] }
@@ -113,6 +121,38 @@ object GatewayService {
             it[Gateways.status] = "approved"
             it[Gateways.updatedAt] = LocalDateTime.now()
         } > 0
+    }
+
+    // ── ZeroTier member authorization (approve a brand-new gateway from the NVR, no ztncui) ─────
+
+    @Serializable
+    data class PendingMemberDto(val nodeId: String, val ipAssignments: List<String>)
+
+    /** Is the controller integration wired (url + network id + token)? Drives whether the UI
+     *  shows the "pending ZeroTier members" section at all. */
+    fun controllerConfigured(): Boolean = ZtControllerClient.isConfigured()
+
+    /**
+     * Members the controller knows but that are NOT yet authorized — i.e. freshly-booted gateways
+     * waiting to be let onto the overlay. Already-authorized members (other gateways, NVRs) are
+     * excluded; so are any whose node address already maps to a gateway row we track.
+     */
+    suspend fun listPending(): List<PendingMemberDto> {
+        val members = ZtControllerClient.listMembers() ?: return emptyList()
+        val known = transaction { Gateways.selectAll().mapNotNull { it[Gateways.ztAddress] }.toSet() }
+        return members
+            .filter { !it.authorized && it.nodeId !in known }
+            .map { PendingMemberDto(it.nodeId, it.ipAssignments) }
+    }
+
+    /** Authorize a pending member; controller assigns its IP and the scanner picks it up shortly. */
+    suspend fun authorizeMember(nodeId: String): Boolean {
+        val ok = ZtControllerClient.authorize(nodeId)
+        if (ok) {
+            pendingAutoApprove.add(nodeId)   // auto-approve it once the scanner discovers it
+            AppLogger.info(AppLogger.Module.SYSTEM, "GATEWAY", "ZT_AUTHORIZED", "node=$nodeId")
+        }
+        return ok
     }
 
     private fun conn(id: String): Conn? = transaction {
