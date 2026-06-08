@@ -54,3 +54,15 @@ media/
 data/dc-bridge
 data/.device_key
 secrets/
+
+# Gradle/Kotlin build output (compiled artifacts — never commit)
+backend/build/
+backend/.gradle/
+watchdog/build/
+watchdog/.gradle/
+
+# E2E test artifacts (auto-generated reports + videos)
+tests/e2e/playwright-report/
+tests/e2e/test-results/
+android-app/app/build/
+android-app/.gradle/
