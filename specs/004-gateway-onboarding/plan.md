@@ -1,6 +1,6 @@
 # Implementation Plan: Gateway Onboarding (self-hosted ZeroTier + Android app)
 
-**Branch**: `004-gateway-onboarding` | **Date**: 2026-06-04 | **Builds on**: Plan A (`4-6-to-do-jobs.md`, gateway already DONE end-to-end on ZeroTier Central)
+**Branch**: `004-gateway-onboarding` | **Date**: 2026-06-04 | **Builds on**: Plan A (`gateway/4-6-to-do-jobs.md`, gateway already DONE end-to-end on ZeroTier Central)
 **Working dir**: `/home/toan/my-nvr`
 
 ## Summary
@@ -87,15 +87,15 @@ Plan A đã chạy end-to-end (NVR auto-scan ZeroTier → approve → adopt came
 ## Phases & tasks
 
 ### Phase 0 — HQ self-host controller (nền móng, làm TRƯỚC)
-> ✅ Artifact đã sẵn: `hq-controller/` (install + systemd + backup) và hướng dẫn `controller_hq_setup.md`. Việc còn lại là CHẠY trên box HQ + thao tác tay trên ztncui.
+> ✅ Artifact đã sẵn: `gateway/hq-controller/` (install + systemd + backup) và hướng dẫn `gateway/controller_hq_setup.md`. Việc còn lại là CHẠY trên box HQ + thao tác tay trên ztncui.
 - [x] Script `install-controller.sh`: cài `zerotier-one` (controller mode) + Node18 + ztncui + user `ztncui` + `.env`.
 - [x] systemd: `zerotier-one` (installer tự enable) + `ztncui.service` (auto-start) — **enable cả 2 tự lên khi boot** (yêu cầu owner).
 - [x] Backup: `backup.sh` + `zt-controller-backup.{service,timer}` (dump `identity.secret`+`controller.d`+ztncui etc, 03:00 hằng ngày, giữ 14 bản).
-- [x] **CHẠY:** `sudo bash hq-controller/install-controller.sh` trên box HQ (`192.168.2.106`, ZT node `efb242bde2`). 2026-06-05. (Gặp + đã patch script: xung đột Node 12→18, thiếu TLS cert, thiếu `etc/passwd` seed.) ✅ verify reboot 2026-06-05: 3 dịch vụ active, `:3443` listening, `zerotier-cli info` ONLINE, web UI OK.
+- [x] **CHẠY:** `sudo bash gateway/hq-controller/install-controller.sh` trên box HQ (`192.168.2.106`, ZT node `efb242bde2`). 2026-06-05. (Gặp + đã patch script: xung đột Node 12→18, thiếu TLS cert, thiếu `etc/passwd` seed.) ✅ verify reboot 2026-06-05: 3 dịch vụ active, `:3443` listening, `zerotier-cli info` ONLINE, web UI OK.
 - [x] **Tay trên ztncui:** đổi mật khẩu admin; Add network `nvr-fleet` + Easy setup pool `10.147.20.0/24` → **NETWORK ID `efb242bde2f3e856`**.
 - [x] Copy backup `.tar.gz` off-box → NAS `192.168.2.88:/volume1/backUpGatewayServer/zt-controller/` (2026-06-05, scp `-O`). `backup.sh` đã thêm bước đẩy NAS định kỳ (opt-in qua `/etc/zt-controller-backup.env`, SSH key) — chờ setup key trên HQ box để tự động.
 - [x] Migrate NVR: đã đổi `.env` → `ZT_NETWORK_ID=efb242bde2f3e856` + `ZT_SCAN_SUBNET=10.147.20.0/24` (2026-06-05). Scanner `SCAN_DONE subnet=10.147.20.0/24 found=1`. NVR đã `leave` Central `3b19...`.
-- [x] **Cutover gateway-nha-A (Pi3)** 2026-06-05: Pi `join efb242bde2f3e856` + `leave 3b19...`; authorize trên ztncui → IP `10.147.20.12`; `agent.env` đã sẵn network ID mới. Sửa `config/config.yml` cam_6 `10.34.24.12→10.147.20.12` (cả main+sub); restart Frigate → go2rtc kéo video OK. **Gotcha:** nginx proxy bind `<ztIP>:8081`, sau đổi IP nginx chết (boot-race: nginx start trước khi ZT có IP). Fix: `systemctl start nginx` ngay; lâu dài đã bake vào `edge-agent/install.sh` (`ip_nonlocal_bind=1` + nginx systemd drop-in `After=zerotier-one`+`Restart=on-failure`).
+- [x] **Cutover gateway-nha-A (Pi3)** 2026-06-05: Pi `join efb242bde2f3e856` + `leave 3b19...`; authorize trên ztncui → IP `10.147.20.12`; `agent.env` đã sẵn network ID mới. Sửa `config/config.yml` cam_6 `10.34.24.12→10.147.20.12` (cả main+sub); restart Frigate → go2rtc kéo video OK. **Gotcha:** nginx proxy bind `<ztIP>:8081`, sau đổi IP nginx chết (boot-race: nginx start trước khi ZT có IP). Fix: `systemctl start nginx` ngay; lâu dài đã bake vào `gateway/edge-agent/install.sh` (`ip_nonlocal_bind=1` + nginx systemd drop-in `After=zerotier-one`+`Restart=on-failure`).
 - [ ] (Quan trọng) Re-bake image gateway với `efb242bde2f3e856` (+ fix nginx boot-race ở `install.sh`) **trước khi deploy hàng loạt** Pi mới. Pi3 hiện tại đã đúng.
 
 ### Phase 1 — Edge Agent (Go, sửa nhẹ) — ✅ DONE 2026-06-05
@@ -106,7 +106,7 @@ Plan A đã chạy end-to-end (NVR auto-scan ZeroTier → approve → adopt came
 - [x] **Bind 0.0.0.0 (2026-06-05):** API listener đổi từ `127.0.0.1 + ztIP` sang **một** `0.0.0.0:PORT` → app field tự với tới được qua **field LAN** trên image nướng-sẵn mà KHÔNG cần `EDGE_AGENT_EXTRA_BIND` (IP LAN là DHCP per-site, không bake được). Bỏ luôn `EDGE_AGENT_EXTRA_BIND` (thừa: wildcard đã phủ loopback+ZT+LAN; bind cả `127.0.0.1`+`0.0.0.0` cùng cổng → EADDRINUSE trên Linux). An toàn không đổi: `/identity`+`/label` vốn no-auth/read-only, mọi mutation camera vẫn sau fleet token trên mọi interface. Verify native: `/identity` qua LAN IP (no token) 200, `/cameras` qua LAN IP 401, qua loopback 200.
 
 ### Phase 2 — Android App (mới) — 🟡 SCAFFOLD DONE, build OK 2026-06-05 (chưa test trên thiết bị thật)
-> Code ở `android-app/` (Kotlin + Jetpack Compose). Build: `cd android-app && ./gradlew :app:assembleDebug` → `app-debug.apk` (~9.9MB). Tái dùng gradle 8.10.2 wrapper của backend (gradle hệ thống 4.4.1 quá cũ). SDK ở `~/Android/Sdk` (compileSdk 35, minSdk 26).
+> Code ở `gateway/android-app/` (Kotlin + Jetpack Compose). Build: `cd gateway/android-app && ./gradlew :app:assembleDebug` → `app-debug.apk` (~9.9MB). Tái dùng gradle 8.10.2 wrapper của backend (gradle hệ thống 4.4.1 quá cũ). SDK ở `~/Android/Sdk` (compileSdk 35, minSdk 26).
 - [x] **Chốt stack: Kotlin + Jetpack Compose** (Material3, OkHttp, kotlinx.serialization, coroutines). SDK đã cài sẵn, không Flutter. (D6)
 - [x] Màn 1 `ScanScreen`: quét /24 của LAN (NetworkInterface site-local IPv4) trên cổng agent 9797, gọi `GET /identity` song song (Semaphore 48, timeout 700ms/host), list incremental. Android không cần quyền local-network như iOS (chỉ INTERNET).
 - [x] Màn 2 `DetailScreen`: alive/ztJoined/ztOnline, ztAddress, zerotierIp, **cameraCount lấy từ `/identity`** (KHÔNG gọi `/discovery` — endpoint đó token-gated, app không có fleet token theo D4).
@@ -133,7 +133,7 @@ Plan A đã chạy end-to-end (NVR auto-scan ZeroTier → approve → adopt came
 
 ### Phase 4 — Image & docs
 - [ ] Script đóng image từ Pi mẫu (xoá ZT identity, dọn log, set first-boot self-gen).
-- [ ] `gateway_setup.md`: bổ sung mục self-host controller + flow FW dùng app + flash image.
+- [ ] `gateway/gateway_setup.md`: bổ sung mục self-host controller + flow FW dùng app + flash image.
 - [ ] Cập nhật `CLAUDE.md`: bảng codebase, Known Issues, Security.
 
 ## Data model (delta)

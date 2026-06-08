@@ -1,6 +1,6 @@
 # HQ Controller Setup — Self-host ZeroTier + ztncui
 
-> Phase 0 của [specs/004-gateway-onboarding/plan.md](./specs/004-gateway-onboarding/plan.md).
+> Phase 0 của [specs/004-gateway-onboarding/plan.md](../specs/004-gateway-onboarding/plan.md).
 > Mục tiêu: **tự host control plane ZeroTier** trên một **box Ubuntu riêng ở HQ** (always-on) — $0, **không giới hạn node**, full ability. Data plane vẫn là ZeroTier One (đã chốt). NAT traversal dùng **planet roots công cộng** (không cần moon). Scripts ở `hq-controller/`.
 
 ---
