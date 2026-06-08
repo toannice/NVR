@@ -1,8 +1,14 @@
+# syntax=docker/dockerfile:1
+# BuildKit cache mounts (the `--mount=type=cache` lines below) persist npm/gradle
+# download caches BETWEEN builds, so deps aren't re-fetched every time. Requires
+# BuildKit (default on modern Docker). See CLAUDE.md "Build & Deploy" for the fast loop.
+
 # 1. Build Frontend
 FROM node:22-alpine AS frontend-builder
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
-RUN npm install
+# Cache ~/.npm so re-installs reuse downloaded packages.
+RUN --mount=type=cache,target=/root/.npm npm install
 COPY frontend/ .
 RUN npm run build
 
@@ -12,12 +18,14 @@ WORKDIR /app/backend
 # Copy gradle wrapper and config first for caching
 COPY backend/gradlew backend/build.gradle.kts backend/settings.gradle.kts backend/gradle.properties ./
 COPY backend/gradle ./gradle
-# Setup wrapper permissions and pre-fetch dependencies (optional optimization)
 RUN apk add --no-cache bash
 RUN chmod +x gradlew
-# Now copy source code and build
+# Now copy source code and build.
+# Cache /root/.gradle (dependency downloads + build cache) across builds → only changed
+# Kotlin recompiles instead of re-resolving every dependency. --no-daemon: no persistent
+# daemon inside the ephemeral build container (the cache mount is what gives the speedup).
 COPY backend/src ./src
-RUN ./gradlew installDist --no-daemon
+RUN --mount=type=cache,target=/root/.gradle ./gradlew installDist --no-daemon
 
 # 3. Final Runtime Image (JRE only to save space)
 FROM eclipse-temurin:21-jre-alpine
