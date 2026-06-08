@@ -3795,7 +3795,19 @@ function App() {
   };
 
   // Live View State
-  const [visibleCamIds, setVisibleCamIds] = useState<string[]>([]);
+  // Persist which cameras occupy which cells (order = cell position) so a reload restores the
+  // exact arrangement. Lazy-init from storage BEFORE the persist effect runs, so mount can't
+  // clobber the saved value with an empty array; fetchCameras then drops any deleted cameras.
+  const [visibleCamIds, setVisibleCamIds] = useState<string[]>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('nvr.visibleCamIds') || 'null');
+      if (Array.isArray(saved)) return saved;
+    } catch { /* corrupt/unavailable storage → empty (fetchCameras fills with all) */ }
+    return [];
+  });
+  useEffect(() => {
+    try { localStorage.setItem('nvr.visibleCamIds', JSON.stringify(visibleCamIds)); } catch { /* ignore */ }
+  }, [visibleCamIds]);
   // Persist the grid layout so a reload keeps the user's choice (e.g. '1+5') instead of
   // snapping back to the 2x2 default. Stored as JSON so number (2) vs string ('1+5') survives.
   const [layout, setLayout] = useState<number | string>(() => {
@@ -3933,7 +3945,13 @@ function App() {
           ptzMode: c.ptzMode ?? 'auto' // PTZ capability override: auto | full | zoom
         }));
         setCameras(list);
-        setVisibleCamIds(list.map((c: any) => c.id));
+        // Keep the restored/current arrangement, just drop cameras that no longer exist.
+        // Nothing valid saved (first run / all stale) → fall back to showing every camera.
+        const ids = list.map((c: any) => c.id);
+        setVisibleCamIds(prev => {
+          const kept = prev.filter(id => ids.includes(id));
+          return kept.length ? kept : ids;
+        });
       }
     } catch (e) { console.error(e) } finally { setLoading(false) }
   }
