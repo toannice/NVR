@@ -54,6 +54,9 @@ func ztInfo() (address string, online bool) {
 // ztJoined reports whether the node joined networkID and got an OK config.
 // `zerotier-cli listnetworks` lines: "200 listnetworks <nwid> <name> <mac> <status> ...".
 // The header line carries the literal "<nwid>" so it never matches a real id.
+// NOTE: an unauthorized member shows status ACCESS_DENIED (not OK), so right after a fresh join this
+// stays false until the admin authorizes the member on the controller (NVR "Cấp phép"). That is the
+// expected state during onboarding — "joined the network, waiting for authorization".
 func ztJoined(networkID string) bool {
 	if networkID == "" {
 		return false
@@ -69,4 +72,32 @@ func ztJoined(networkID string) bool {
 		}
 	}
 	return false
+}
+
+// ztJoin runs `zerotier-cli join <id>`. Returns the trimmed CLI output for logging at the call site.
+func ztJoin(networkID string) (string, error) {
+	out, err := exec.Command("zerotier-cli", "join", networkID).CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+// ztLeave runs `zerotier-cli leave <id>` — used when the app re-points a gateway to a different
+// network (region), so the Pi doesn't linger as a member of the old one.
+func ztLeave(networkID string) (string, error) {
+	out, err := exec.Command("zerotier-cli", "leave", networkID).CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+// validNetworkID checks the shape of a ZeroTier network id: exactly 16 lowercase hex characters
+// (the controller node id (10 hex) + a 6-hex network number). We validate before shelling out to
+// zerotier-cli so a typo from the field app is rejected with a clear 400 instead of a CLI error.
+func validNetworkID(id string) bool {
+	if len(id) != 16 {
+		return false
+	}
+	for _, c := range id {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
 }

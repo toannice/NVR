@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import vn.aiview.nvr.gatewayonboard.net.AgentClient
+import vn.aiview.nvr.gatewayonboard.net.EnrollResponse
 import vn.aiview.nvr.gatewayonboard.net.Gateway
 import vn.aiview.nvr.gatewayonboard.net.Identity
 import vn.aiview.nvr.gatewayonboard.net.LanScanner
@@ -42,6 +43,14 @@ class OnboardViewModel : ViewModel() {
     var submitError by mutableStateOf<String?>(null)
         private set
     var submitted by mutableStateOf<Identity?>(null)
+        private set
+
+    // Enroll (point the gateway at a region's ZeroTier network) — independent of the label submit.
+    var enrolling by mutableStateOf(false)
+        private set
+    var enrollError by mutableStateOf<String?>(null)
+        private set
+    var enrollResult by mutableStateOf<EnrollResponse?>(null)
         private set
 
     init {
@@ -81,6 +90,8 @@ class OnboardViewModel : ViewModel() {
     fun startAdd(gw: Gateway) {
         submitError = null
         submitted = null
+        enrollError = null
+        enrollResult = null
         screen = Screen.Add(gw)
     }
 
@@ -95,7 +106,39 @@ class OnboardViewModel : ViewModel() {
     fun finishToScan() {
         submitted = null
         submitError = null
+        enrollError = null
+        enrollResult = null
         screen = Screen.Scan
+    }
+
+    /**
+     * Enroll a gateway into a region's ZeroTier network. The field worker types the 16-hex id the
+     * admin handed out; the agent leaves any old network, joins this one, and persists it. On success
+     * we patch the in-memory gateway so the rest of the UI reflects the new network + ZeroTier addr.
+     */
+    fun submitEnroll(gw: Gateway, networkId: String) {
+        if (enrolling) return
+        enrolling = true
+        enrollError = null
+        viewModelScope.launch {
+            val port = gw.identity.agentPort.takeIf { it > 0 } ?: AgentClient.DEFAULT_PORT
+            val res = agent.enroll(gw.host, port, networkId)
+            enrolling = false
+            res.onSuccess { r ->
+                enrollResult = r
+                val idx = gateways.indexOfFirst { it.host == gw.host }
+                if (idx >= 0) {
+                    gateways[idx] = gw.copy(
+                        identity = gw.identity.copy(
+                            networkId = r.networkId,
+                            ztAddress = r.ztAddress.ifBlank { gw.identity.ztAddress },
+                            ztJoined = r.ztJoined,
+                            ztOnline = r.ztOnline,
+                        ),
+                    )
+                }
+            }.onFailure { enrollError = it.message ?: "Gửi thất bại" }
+        }
     }
 
     fun submitLabel(gw: Gateway, name: String, installer: String, location: String) {

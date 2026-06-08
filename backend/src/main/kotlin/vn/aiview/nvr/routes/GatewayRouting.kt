@@ -26,6 +26,12 @@ private data class DeleteGatewayResponse(
     val camerasRemoved: Int,
 )
 
+@Serializable
+private data class PendingResponse(
+    val configured: Boolean,
+    val members: List<GatewayService.PendingMemberDto>,
+)
+
 /**
  * Admin-facing gateway endpoints (4-6 Plan A). All NVR-initiated; there is intentionally NO
  * /register or /pending-cameras endpoint — the gateway never pushes to us.
@@ -41,6 +47,24 @@ fun Route.gatewayRouting() {
         post("/scan") {
             val found = GatewayScanner.scanNow()
             call.respond(mapOf("found" to found))
+        }
+
+        // ZeroTier members waiting to be authorized (brand-new gateways not yet on the overlay).
+        // `configured=false` when the controller integration isn't wired — UI hides the section.
+        get("/pending") {
+            if (!GatewayService.controllerConfigured()) {
+                call.respond(PendingResponse(false, emptyList()))
+            } else {
+                call.respond(PendingResponse(true, GatewayService.listPending()))
+            }
+        }
+
+        // Authorize a ZeroTier member straight from the NVR (replaces the manual ztncui click).
+        post("/authorize/{nodeId}") {
+            val nodeId = call.parameters["nodeId"]
+                ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing nodeId"))
+            if (GatewayService.authorizeMember(nodeId)) call.respond(mapOf("success" to true))
+            else call.respond(HttpStatusCode.BadGateway, mapOf("error" to "controller authorize failed"))
         }
 
         // Delete a gateway + cascade-remove its adopted cameras (DB+YAML+go2rtc+Frigate restart).

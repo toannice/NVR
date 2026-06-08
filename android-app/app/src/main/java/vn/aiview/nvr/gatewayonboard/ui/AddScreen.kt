@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -71,6 +72,12 @@ fun AddScreen(vm: OnboardViewModel, gw: Gateway) {
 
 @Composable
 private fun AddForm(vm: OnboardViewModel, gw: Gateway) {
+    EnrollSection(vm, gw)
+
+    Spacer(Modifier.height(20.dp))
+    HorizontalDivider()
+    Spacer(Modifier.height(20.dp))
+
     var name by rememberSaveable { mutableStateOf(gw.identity.name) }
     var installer by rememberSaveable { mutableStateOf(gw.identity.installer) }
     var location by rememberSaveable { mutableStateOf(gw.identity.location) }
@@ -117,6 +124,73 @@ private fun AddForm(vm: OnboardViewModel, gw: Gateway) {
     }
 }
 
+/**
+ * Region enrollment: the field worker types the 16-hex ZeroTier network id the admin gave them, and
+ * the gateway joins that region's network (cách A — one generic image, region chosen here). This is
+ * the key new step; naming the gateway (below) is optional/cosmetic.
+ */
+@Composable
+private fun EnrollSection(vm: OnboardViewModel, gw: Gateway) {
+    // Effective current network: prefer the latest enroll result, else what the gateway reported.
+    val currentNetwork = vm.enrollResult?.networkId?.takeIf { it.isNotBlank() }
+        ?: gw.identity.networkId
+    var networkId by rememberSaveable { mutableStateOf(currentNetwork) }
+
+    Text("Khu vực (ZeroTier)", style = MaterialTheme.typography.titleMedium)
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "Nhập dãy 16 ký tự (network id) admin cấp cho khu vực này. Gateway sẽ vào đúng mạng đó. " +
+            "Sau khi gửi, admin bấm \"Cấp phép\" trên NVR là xong — không cần đụng vào gateway.",
+        style = MaterialTheme.typography.bodyMedium,
+    )
+    Spacer(Modifier.height(8.dp))
+    Text(
+        if (currentNetwork.isBlank()) "Hiện chưa vào khu vực nào." else "Đang ở khu vực: $currentNetwork",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(12.dp))
+    OutlinedTextField(
+        value = networkId,
+        onValueChange = { networkId = it.trim().lowercase() },
+        label = { Text("Network ID (16 ký tự hex)") },
+        singleLine = true,
+        isError = networkId.isNotEmpty() && !isValidNetworkId(networkId),
+        supportingText = {
+            if (networkId.isNotEmpty() && !isValidNetworkId(networkId)) {
+                Text("Phải đúng 16 ký tự 0-9/a-f")
+            }
+        },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    vm.enrollError?.let {
+        Spacer(Modifier.height(8.dp))
+        Text(it, color = MaterialTheme.colorScheme.error)
+    }
+    vm.enrollResult?.let { r ->
+        Spacer(Modifier.height(8.dp))
+        // ztJoined is normally false here: joined the network, waiting for admin authorization.
+        val msg = if (r.ztJoined) {
+            "✓ Đã vào khu vực ${r.networkId} và được cấp phép."
+        } else {
+            "✓ Đã gửi yêu cầu vào khu vực ${r.networkId}. Báo admin bấm \"Cấp phép\" trên NVR."
+        }
+        Text(msg, color = MaterialTheme.colorScheme.primary)
+    }
+    Spacer(Modifier.height(12.dp))
+    Button(
+        onClick = { vm.submitEnroll(gw, networkId) },
+        enabled = !vm.enrolling && isValidNetworkId(networkId),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(if (vm.enrolling) "Đang kết nối…" else "Kết nối khu vực")
+    }
+}
+
+/** Local mirror of the agent's validation: ZeroTier network ids are exactly 16 lowercase hex chars. */
+private fun isValidNetworkId(id: String): Boolean =
+    id.length == 16 && id.all { it in '0'..'9' || it in 'a'..'f' }
+
 @Composable
 private fun SuccessPanel(vm: OnboardViewModel, ztAddress: String) {
     val clipboard = LocalClipboardManager.current
@@ -124,7 +198,7 @@ private fun SuccessPanel(vm: OnboardViewModel, ztAddress: String) {
     Text("Đã lưu thông tin ✓", style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(16.dp))
     Text(
-        "Báo admin DUYỆT thành viên này trên ztncui (địa chỉ ZeroTier 10 ký tự):",
+        "Báo admin bấm \"Cấp phép\" trên NVR. Địa chỉ ZeroTier (10 ký tự) của gateway này:",
         style = MaterialTheme.typography.bodyMedium,
     )
     Spacer(Modifier.height(8.dp))

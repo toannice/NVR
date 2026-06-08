@@ -20,4 +20,19 @@ object GatewayConfig {
             if (secret.exists()) return secret.readText().trim()
             return System.getenv("EDGE_AGENT_TOKEN") ?: ""
         }
+
+    // ── Self-hosted ZeroTier controller (lets the NVR authorize new members itself, no ztncui) ──
+    //   - ZT_CONTROLLER_URL    base URL of the controller API, e.g. "http://192.168.2.106:9993"
+    //   - ZT_NETWORK_ID        fleet network id (16-hex), same one the gateways join
+    //   - controller token     /run/secrets/zt_controller_token, else env ZT_CONTROLLER_TOKEN
+    //                          (= contents of the controller's /var/lib/zerotier-one/authtoken.secret)
+    val controllerUrl: String? get() = System.getenv("ZT_CONTROLLER_URL")?.takeIf { it.isNotBlank() }
+    val controllerNetworkId: String? get() = System.getenv("ZT_NETWORK_ID")?.takeIf { it.isNotBlank() }
+
+    val controllerToken: String
+        get() {
+            val secret = File("/run/secrets/zt_controller_token")
+            if (secret.exists()) return secret.readText().trim()
+            return System.getenv("ZT_CONTROLLER_TOKEN") ?: ""
+        }
 }

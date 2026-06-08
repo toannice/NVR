@@ -19,6 +19,11 @@ type Gateway = {
   cameraCount: number
 }
 
+type PendingMember = {
+  nodeId: string
+  ipAssignments: string[]
+}
+
 type Addable = {
   localIp: string
   name: string
@@ -45,6 +50,7 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
   }
 
   const [gateways, setGateways] = useState<Gateway[]>([])
+  const [pending, setPending] = useState<PendingMember[]>([])
   const [loading, setLoading] = useState(true)
   const [scanning, setScanning] = useState(false)
   // per-gateway list of addable cameras + whether its panel is expanded
@@ -60,11 +66,38 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
     setLoading(false)
   }, [])
 
+  const fetchPending = useCallback(async () => {
+    try {
+      const r = await fetch('/api/gateways/pending')
+      if (r.ok) {
+        const d = await r.json()
+        setPending(d.configured ? (d.members || []) : [])
+      }
+    } catch { /* ignore */ }
+  }, [])
+
   useEffect(() => {
     fetchGateways()
-    const t = setInterval(fetchGateways, 10000)
+    fetchPending()
+    const t = setInterval(() => { fetchGateways(); fetchPending() }, 10000)
     return () => clearInterval(t)
-  }, [fetchGateways])
+  }, [fetchGateways, fetchPending])
+
+  const authorizeMember = async (nodeId: string) => {
+    setBusyAction('authorize:' + nodeId)
+    try {
+      const r = await fetch(`/api/gateways/authorize/${nodeId}`, { method: 'POST' })
+      if (r.ok) {
+        toast('Đã cấp phép thiết bị vào mạng. Gateway sẽ xuất hiện trong ~30 giây.', 'success')
+        setPending(prev => prev.filter(p => p.nodeId !== nodeId))
+        await fetchGateways()
+      } else {
+        const d = await r.json().catch(() => ({}))
+        toast(d.error || 'Cấp phép thất bại', 'error')
+      }
+    } catch { toast('Lỗi mạng khi cấp phép', 'error') }
+    finally { setBusyAction('') }
+  }
 
   const scanNow = async () => {
     setScanning(true)
@@ -192,6 +225,34 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
         </button>
       </div>
 
+      {pending.length > 0 && (
+        <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-1">
+            <Icon name="verified_user" className="text-amber-600 text-base" />
+            <h2 className="font-semibold text-amber-800 text-sm">Thiết bị mới chờ cấp phép ({pending.length})</h2>
+          </div>
+          <p className="text-xs text-amber-700/80 mb-3">
+            Gateway vừa cắm điện đã liên hệ controller nhưng chưa được vào mạng. Cấp phép để NVR thấy và quản lý.
+          </p>
+          <div className="space-y-2">
+            {pending.map(p => (
+              <div key={p.nodeId} className="flex items-center justify-between bg-white border border-amber-200 rounded-lg px-3 py-2">
+                <div className="min-w-0">
+                  <div className="font-mono text-sm text-gray-800">{p.nodeId}</div>
+                  <div className="text-xs text-gray-400">
+                    {p.ipAssignments.length > 0 ? `IP dự kiến: ${p.ipAssignments.join(', ')}` : 'Chưa cấp IP'}
+                  </div>
+                </div>
+                <button onClick={() => authorizeMember(p.nodeId)} disabled={busyAction === 'authorize:' + p.nodeId}
+                  className="bg-amber-600 text-white px-3 py-1.5 rounded-lg text-sm shrink-0 disabled:opacity-50">
+                  {busyAction === 'authorize:' + p.nodeId ? 'Đang cấp phép…' : 'Cấp phép'}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {loading ? (
         <p className="text-gray-500">Đang tải…</p>
       ) : gateways.length === 0 ? (
@@ -241,11 +302,11 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
                 <div className="border-t border-gray-100 p-4 bg-gray-50/60">
                   <div className="flex gap-2 mb-3">
                     <button onClick={() => loadProxied(g.id)} disabled={busyAction === 'proxied:' + g.id}
-                      className="text-sm bg-white border border-gray-300 px-3 py-1.5 rounded-lg disabled:opacity-50">
+                      className="text-sm bg-white text-gray-800 border border-gray-300 px-3 py-1.5 rounded-lg disabled:opacity-50">
                       {busyAction === 'proxied:' + g.id ? 'Đang tải…' : 'Camera đã sẵn sàng'}
                     </button>
                     <button onClick={() => discover(g.id)} disabled={busyAction === 'discover:' + g.id}
-                      className="text-sm bg-white border border-gray-300 px-3 py-1.5 rounded-lg disabled:opacity-50">
+                      className="text-sm bg-white text-gray-800 border border-gray-300 px-3 py-1.5 rounded-lg disabled:opacity-50">
                       {busyAction === 'discover:' + g.id ? 'Đang quét LAN…' : 'Quét LAN hiện trường'}
                     </button>
                   </div>

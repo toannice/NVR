@@ -12,6 +12,9 @@ data class Identity(
     val name: String = "",
     val installer: String = "",
     val location: String = "",
+    // networkId = the ZeroTier network this gateway is currently pointed at (set via POST /enroll).
+    // Empty = not enrolled into any region yet. Older agents that predate /enroll omit it (defaults "").
+    val networkId: String = "",
     val ztAddress: String = "",
     val ztJoined: Boolean = false,
     val ztOnline: Boolean = false,
@@ -33,6 +36,26 @@ data class LabelRequest(
     val name: String,
     val installer: String,
     val location: String,
+)
+
+/** Body of POST /enroll — the 16-hex ZeroTier network id the admin gave the field worker. */
+@Serializable
+data class EnrollRequest(
+    val networkId: String,
+)
+
+/**
+ * Response of POST /enroll. `ztJoined` is usually false right after enrolling — the gateway has
+ * requested membership but stays unauthorized until the admin approves it on the NVR ("Cấp phép").
+ */
+@Serializable
+data class EnrollResponse(
+    val networkId: String = "",
+    val ztAddress: String = "",
+    val ztJoined: Boolean = false,
+    val ztOnline: Boolean = false,
+    val zerotierIp: String = "",
+    val requested: Boolean = false,
 )
 
 @Serializable

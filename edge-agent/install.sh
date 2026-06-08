@@ -14,6 +14,19 @@ if [[ ! -f "$BIN" ]]; then
   exit 1
 fi
 
+echo "==> Installing ZeroTier (overlay so NVRs reach this gateway across networks)"
+# Idempotent: skip if already present. The agent only needs zerotier-one running + the CLI; the
+# network it joins is NOT baked here — the Android app sets it per-region via POST /enroll (cách A).
+if ! command -v zerotier-cli >/dev/null 2>&1; then
+  if command -v curl >/dev/null 2>&1; then
+    curl -s https://install.zerotier.com | bash
+  else
+    apt-get update -qq && apt-get install -y curl
+    curl -s https://install.zerotier.com | bash
+  fi
+fi
+systemctl enable --now zerotier-one.service 2>/dev/null || true
+
 echo "==> Installing nginx (with stream module)"
 if ! command -v nginx >/dev/null 2>&1; then
   apt-get update -qq
@@ -76,7 +89,8 @@ systemctl enable --now nvr-edge-agent.service
 
 echo
 echo "Done. Next:"
-echo "  1) edit /etc/nvr-edge-agent/agent.env  (token + ZT_NETWORK_ID),  then: systemctl restart nvr-edge-agent"
-echo "  2) authorize this Pi as a member on the self-host controller (ztncui)"
-echo "  3) check:  systemctl status nvr-edge-agent ;  curl -s localhost:9797/health | head"
-echo "  4) field app reaches /identity + /label over the field LAN (set EDGE_AGENT_EXTRA_BIND)"
+echo "  1) edit /etc/nvr-edge-agent/agent.env  (set EDGE_AGENT_TOKEN = fleet token),  then: systemctl restart nvr-edge-agent"
+echo "     (leave ZT_NETWORK_ID empty — the Android app sets the region per-gateway via /enroll)"
+echo "  2) field worker: open the app on the same field LAN -> scan -> nhập Network ID khu vực (POST /enroll)"
+echo "  3) on the NVR Web UI -> tab Gateway -> mục 'Chờ cấp phép' -> 'Cấp phép' (Plan A; no ztncui)"
+echo "  4) check:  systemctl status nvr-edge-agent ;  curl -s localhost:9797/health | head"
