@@ -228,6 +228,7 @@ fun Route.onvifRouting() {
             when (mode?.lowercase()) {
                 "full" -> return@get call.respond(mapOf("hasPtz" to true, "hasPanTilt" to true, "hasZoom" to true))
                 "zoom" -> return@get call.respond(mapOf("hasPtz" to true, "hasPanTilt" to false, "hasZoom" to true))
+                "none" -> return@get call.respond(mapOf("hasPtz" to false, "hasPanTilt" to false, "hasZoom" to false))
             }
 
             val (ip, onvifPort, username, password) = getCameraOnvifConfig(id)
@@ -249,9 +250,25 @@ fun Route.onvifRouting() {
 
             val jsonStr = call.receiveText()
             val json = Json.parseToJsonElement(jsonStr).jsonObject
-            val pan  = json["pan"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0
-            val tilt = json["tilt"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0
-            val zoom = json["zoom"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0
+            var pan   = json["pan"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0
+            var tilt  = json["tilt"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0
+            val zoom  = json["zoom"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0
+
+            // Enforce the camera's PTZ classification SERVER-SIDE so a stray pan/tilt never reaches a
+            // zoom-only (or no-PTZ) camera and triggers a SOAP fault ("speed out of bounds") + log spam.
+            // The UI already hides the unsupported controls; this is the authoritative backstop.
+            val Cam = vn.aiview.nvr.models.Cameras
+            val (ptzEnabled, ptzMode) = transaction {
+                Cam.selectAll().where { Cam.slug eq id }.firstOrNull()
+                    ?.let { it[Cam.ptzEnabled] to it[Cam.ptzMode]?.lowercase() } ?: (false to null)
+            }
+            if (!ptzEnabled || ptzMode == "none") {
+                return@post call.respond(HttpStatusCode.NoContent)   // PTZ off → silently ignore
+            }
+            if (ptzMode == "zoom") { pan = 0.0; tilt = 0.0 }          // zoom-only → drop pan/tilt
+            if (pan == 0.0 && tilt == 0.0 && zoom == 0.0) {
+                return@post call.respond(HttpStatusCode.NoContent)   // nothing left to send → no fault
+            }
 
             val (ptzUrl, profileToken) = OnvifSoapClient.getPtzServiceUrlAndTokenCached(ip, onvifPort, username, password)
             OnvifSoapClient.continuousMove(ptzUrl, profileToken, username, password, pan, tilt, zoom)
