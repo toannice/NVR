@@ -75,6 +75,21 @@ fun Route.gatewayRouting() {
             call.respond(DeleteGatewayResponse(res.deleted, res.camerasRemoved))
         }
 
+        // Cameras the NVR adopted through this gateway (from our DB) — drives the per-camera list/delete.
+        get("/{id}/cameras") {
+            val id = call.parameters["id"] ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing id"))
+            call.respond(mapOf("cameras" to GatewayService.adoptedCameras(id)))
+        }
+
+        // Delete a SINGLE adopted camera (frees the agent proxy + DB/YAML/go2rtc/Frigate restart).
+        delete("/{id}/cameras/{slug}") {
+            val id = call.parameters["id"] ?: return@delete call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing id"))
+            val slug = call.parameters["slug"] ?: return@delete call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing slug"))
+            val res = GatewayService.removeCamera(id, slug)
+                ?: return@delete call.respond(HttpStatusCode.NotFound, mapOf("error" to "camera not found on this gateway"))
+            call.respond(DeleteGatewayResponse(res.deleted, res.camerasRemoved))
+        }
+
         post("/{id}/approve") {
             val id = call.parameters["id"] ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing id"))
             if (GatewayService.approve(id)) call.respond(mapOf("success" to true))

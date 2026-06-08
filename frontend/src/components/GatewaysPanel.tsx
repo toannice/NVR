@@ -34,6 +34,14 @@ type Addable = {
   busy?: boolean
 }
 
+// A camera already adopted through this gateway (as the NVR stores it).
+type AdoptedCam = {
+  slug: string
+  name: string
+  localIp: string | null
+  channelId: string | null
+}
+
 const Icon = ({ name, className = '' }: { name: string; className?: string }) => (
   <span className={`material-icons ${className}`}>{name}</span>
 )
@@ -56,6 +64,8 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
   // per-gateway list of addable cameras + whether its panel is expanded
   const [openId, setOpenId] = useState<string | null>(null)
   const [addable, setAddable] = useState<Record<string, Addable[]>>({})
+  // per-gateway list of cameras already adopted through it (for the delete-single-camera list)
+  const [adopted, setAdopted] = useState<Record<string, AdoptedCam[]>>({})
   const [busyAction, setBusyAction] = useState<string>('')
 
   const fetchGateways = useCallback(async () => {
@@ -193,6 +203,7 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
         // remove the row once adopted
         setAddable(prev => ({ ...prev, [id]: (prev[id] || []).filter(x => x.localIp !== row.localIp) }))
         await fetchGateways()
+        await fetchAdopted(id)   // refresh the "camera đã thêm" list
         onCamerasChanged?.()   // tell App to re-fetch /api/cameras so it shows up immediately
       } else {
         toast(d.error || 'Thêm camera thất bại', 'error')
@@ -202,6 +213,38 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
       toast('Lỗi mạng khi thêm camera', 'error')
       updateRow(id, row.localIp, { busy: false })
     }
+  }
+
+  // Load the cameras already adopted through a gateway (NVR DB), for the delete list.
+  const fetchAdopted = useCallback(async (id: string) => {
+    try {
+      const r = await fetch(`/api/gateways/${id}/cameras`)
+      if (r.ok) {
+        const d = await r.json().catch(() => ({}))
+        setAdopted(prev => ({ ...prev, [id]: d.cameras || [] }))
+      }
+    } catch { /* ignore */ }
+  }, [])
+
+  // Auto-load adopted cameras whenever a gateway panel is expanded.
+  useEffect(() => {
+    if (openId) fetchAdopted(openId)
+  }, [openId, fetchAdopted])
+
+  const deleteCamera = async (id: string, cam: AdoptedCam) => {
+    if (!window.confirm(`Xóa camera "${cam.name}" khỏi gateway? Không thể hoàn tác.`)) return
+    setBusyAction('delcam:' + cam.slug)
+    try {
+      const r = await fetch(`/api/gateways/${id}/cameras/${encodeURIComponent(cam.slug)}`, { method: 'DELETE' })
+      const d = await r.json().catch(() => ({}))
+      if (r.ok && d.success) {
+        toast(`Đã xóa camera ${cam.name}`, 'success')
+        setAdopted(prev => ({ ...prev, [id]: (prev[id] || []).filter(x => x.slug !== cam.slug) }))
+        await fetchGateways()
+        onCamerasChanged?.()   // refresh the global camera list
+      } else toast(d.error || 'Xóa camera thất bại', 'error')
+    } catch { toast('Lỗi mạng khi xóa camera', 'error') }
+    finally { setBusyAction('') }
   }
 
   const statusBadge = (g: Gateway) => {
@@ -300,6 +343,31 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
 
               {openId === g.id && g.status === 'approved' && (
                 <div className="border-t border-gray-100 p-4 bg-gray-50/60">
+                  {(adopted[g.id] || []).length > 0 && (
+                    <div className="mb-4">
+                      <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                        Camera đã thêm ({(adopted[g.id] || []).length})
+                      </h3>
+                      <div className="space-y-1.5">
+                        {(adopted[g.id] || []).map(cam => (
+                          <div key={cam.slug} className="flex items-center justify-between bg-white border border-gray-200 rounded-lg px-3 py-2">
+                            <div className="min-w-0">
+                              <div className="text-sm font-medium text-gray-800 truncate">{cam.name}</div>
+                              <div className="text-xs text-gray-400 truncate">
+                                {cam.localIp || '(không rõ IP)'}{cam.channelId ? ` · kênh ${cam.channelId}` : ''}
+                              </div>
+                            </div>
+                            <button onClick={() => deleteCamera(g.id, cam)} disabled={busyAction === 'delcam:' + cam.slug}
+                              title="Xóa camera" aria-label="Xóa camera"
+                              className="flex items-center text-gray-400 hover:text-red-600 px-2 py-1.5 rounded-lg disabled:opacity-50 shrink-0">
+                              <Icon name="delete_outline" className="text-base" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="flex gap-2 mb-3">
                     <button onClick={() => loadProxied(g.id)} disabled={busyAction === 'proxied:' + g.id}
                       className="text-sm bg-white text-gray-800 border border-gray-300 px-3 py-1.5 rounded-lg disabled:opacity-50">
