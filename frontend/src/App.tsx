@@ -3796,7 +3796,18 @@ function App() {
 
   // Live View State
   const [visibleCamIds, setVisibleCamIds] = useState<string[]>([]);
-  const [layout, setLayout] = useState<number | string>(2);
+  // Persist the grid layout so a reload keeps the user's choice (e.g. '1+5') instead of
+  // snapping back to the 2x2 default. Stored as JSON so number (2) vs string ('1+5') survives.
+  const [layout, setLayout] = useState<number | string>(() => {
+    try {
+      const saved = localStorage.getItem('nvr.liveLayout');
+      if (saved != null) return JSON.parse(saved);
+    } catch { /* corrupt/unavailable storage → fall through to default */ }
+    return 2;
+  });
+  useEffect(() => {
+    try { localStorage.setItem('nvr.liveLayout', JSON.stringify(layout)); } catch { /* ignore */ }
+  }, [layout]);
   const [fullscreenCamId, setFullscreenCamId] = useState<string | null>(null);
   const [miniPlayerCamId, setMiniPlayerCamId] = useState<string | null>(null);
 
