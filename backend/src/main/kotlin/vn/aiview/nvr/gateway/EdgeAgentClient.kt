@@ -29,6 +29,9 @@ data class EdgeHealth(
     val ztAddress: String = "",
     val ztJoined: Boolean = false,
     val ztOnline: Boolean = false,
+    val overlayIp: String = "",   // Nebula agents report this instead of zerotierIp/ztAddress
+    val nebulaUp: Boolean = false,
+    val certExpiry: String = "",
     val installer: String = "",
     val location: String = "",
     val fieldSubnet: String = "",

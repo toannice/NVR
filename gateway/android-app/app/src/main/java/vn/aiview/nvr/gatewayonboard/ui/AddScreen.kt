@@ -64,7 +64,12 @@ fun AddScreen(vm: OnboardViewModel, gw: Gateway) {
             if (submitted == null) {
                 AddForm(vm, gw)
             } else {
-                SuccessPanel(vm, ztAddress = submitted.ztAddress.ifBlank { gw.identity.ztAddress })
+                SuccessPanel(
+                    vm,
+                    address = if (gw.identity.overlay == "nebula") gw.identity.overlayIp
+                              else submitted.ztAddress.ifBlank { gw.identity.ztAddress },
+                    isNebula = gw.identity.overlay == "nebula",
+                )
             }
         }
     }
@@ -125,42 +130,49 @@ private fun AddForm(vm: OnboardViewModel, gw: Gateway) {
 }
 
 /**
- * Region enrollment: the field worker types the 16-hex ZeroTier network id the admin gave them, and
- * the gateway joins that region's network (cách A — one generic image, region chosen here). This is
- * the key new step; naming the gateway (below) is optional/cosmetic.
+ * Region enrollment (Nebula): the field worker types the "mã khu vực" the admin gave them — the HQ
+ * signing-service URL + a one-time token. The gateway generates a keypair and submits its public key;
+ * the admin then "Cấp phép" on the NVR to sign the cert. This is the key new step; naming the gateway
+ * (below) is optional/cosmetic.
  */
 @Composable
 private fun EnrollSection(vm: OnboardViewModel, gw: Gateway) {
-    // Effective current network: prefer the latest enroll result, else what the gateway reported.
-    val currentNetwork = vm.enrollResult?.networkId?.takeIf { it.isNotBlank() }
-        ?: gw.identity.networkId
-    var networkId by rememberSaveable { mutableStateOf(currentNetwork) }
+    var signingUrl by rememberSaveable { mutableStateOf("") }
+    var token by rememberSaveable { mutableStateOf("") }
+    val alreadyEnrolled = gw.identity.enrolled || (vm.enrollResult?.requested == true)
 
-    Text("Khu vực (ZeroTier)", style = MaterialTheme.typography.titleMedium)
+    Text("Khu vực (Nebula)", style = MaterialTheme.typography.titleMedium)
     Spacer(Modifier.height(4.dp))
     Text(
-        "Nhập dãy 16 ký tự (network id) admin cấp cho khu vực này. Gateway sẽ vào đúng mạng đó. " +
-            "Sau khi gửi, admin bấm \"Cấp phép\" trên NVR là xong — không cần đụng vào gateway.",
+        "Nhập \"mã khu vực\" admin cấp: địa chỉ máy chủ ký (signing URL) và mã token. Sau khi gửi, " +
+            "admin bấm \"Cấp phép\" trên NVR là xong — không cần đụng vào gateway.",
         style = MaterialTheme.typography.bodyMedium,
     )
     Spacer(Modifier.height(8.dp))
     Text(
-        if (currentNetwork.isBlank()) "Hiện chưa vào khu vực nào." else "Đang ở khu vực: $currentNetwork",
+        if (!alreadyEnrolled) "Hiện chưa vào khu vực nào."
+        else "Đã gửi yêu cầu" + gw.identity.overlayIp.takeIf { it.isNotBlank() }?.let { " (IP: $it)" }.orEmpty(),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     Spacer(Modifier.height(12.dp))
     OutlinedTextField(
-        value = networkId,
-        onValueChange = { networkId = it.trim().lowercase() },
-        label = { Text("Network ID (16 ký tự hex)") },
+        value = signingUrl,
+        onValueChange = { signingUrl = it.trim() },
+        label = { Text("Signing URL (vd http://hq:9443)") },
         singleLine = true,
-        isError = networkId.isNotEmpty() && !isValidNetworkId(networkId),
+        isError = signingUrl.isNotEmpty() && !isValidSigningUrl(signingUrl),
         supportingText = {
-            if (networkId.isNotEmpty() && !isValidNetworkId(networkId)) {
-                Text("Phải đúng 16 ký tự 0-9/a-f")
-            }
+            if (signingUrl.isNotEmpty() && !isValidSigningUrl(signingUrl)) Text("Phải bắt đầu bằng http:// hoặc https://")
         },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(
+        value = token,
+        onValueChange = { token = it.trim() },
+        label = { Text("Token (mã khu vực)") },
+        singleLine = true,
         modifier = Modifier.fillMaxWidth(),
     )
     vm.enrollError?.let {
@@ -169,36 +181,38 @@ private fun EnrollSection(vm: OnboardViewModel, gw: Gateway) {
     }
     vm.enrollResult?.let { r ->
         Spacer(Modifier.height(8.dp))
-        // ztJoined is normally false here: joined the network, waiting for admin authorization.
-        val msg = if (r.ztJoined) {
-            "✓ Đã vào khu vực ${r.networkId} và được cấp phép."
+        // status is normally "pending" here: submitted, waiting for admin authorization.
+        val msg = if (r.status == "signed") {
+            "✓ Đã được cấp phép và cấp chứng chỉ" + r.overlayIp.takeIf { it.isNotBlank() }?.let { " (IP $it)" }.orEmpty() + "."
         } else {
-            "✓ Đã gửi yêu cầu vào khu vực ${r.networkId}. Báo admin bấm \"Cấp phép\" trên NVR."
+            "✓ Đã gửi yêu cầu. Báo admin bấm \"Cấp phép\" trên NVR."
         }
         Text(msg, color = MaterialTheme.colorScheme.primary)
     }
     Spacer(Modifier.height(12.dp))
     Button(
-        onClick = { vm.submitEnroll(gw, networkId) },
-        enabled = !vm.enrolling && isValidNetworkId(networkId),
+        onClick = { vm.submitEnroll(gw, signingUrl, token) },
+        enabled = !vm.enrolling && isValidSigningUrl(signingUrl) && token.isNotBlank(),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text(if (vm.enrolling) "Đang kết nối…" else "Kết nối khu vực")
     }
 }
 
-/** Local mirror of the agent's validation: ZeroTier network ids are exactly 16 lowercase hex chars. */
-private fun isValidNetworkId(id: String): Boolean =
-    id.length == 16 && id.all { it in '0'..'9' || it in 'a'..'f' }
+/** Local sanity check for the signing-service URL the admin hands out. */
+private fun isValidSigningUrl(url: String): Boolean =
+    url.startsWith("http://") || url.startsWith("https://")
 
 @Composable
-private fun SuccessPanel(vm: OnboardViewModel, ztAddress: String) {
+private fun SuccessPanel(vm: OnboardViewModel, address: String, isNebula: Boolean) {
     val clipboard = LocalClipboardManager.current
+    val blankHint = if (isNebula) "(chưa enroll khu vực)" else "(chưa join ZeroTier)"
 
     Text("Đã lưu thông tin ✓", style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(16.dp))
     Text(
-        "Báo admin bấm \"Cấp phép\" trên NVR. Địa chỉ ZeroTier (10 ký tự) của gateway này:",
+        "Báo admin bấm \"Cấp phép\" trên NVR." +
+            if (isNebula) " Gateway sẽ nhận chứng chỉ và lên overlay sau đó." else " Địa chỉ ZeroTier (10 ký tự) của gateway này:",
         style = MaterialTheme.typography.bodyMedium,
     )
     Spacer(Modifier.height(8.dp))
@@ -209,18 +223,18 @@ private fun SuccessPanel(vm: OnboardViewModel, ztAddress: String) {
     ) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = ztAddress.ifBlank { "(chưa join ZeroTier)" },
+                text = address.ifBlank { blankHint },
                 style = MaterialTheme.typography.headlineSmall,
                 modifier = Modifier.weight(1f),
             )
-            if (ztAddress.isNotBlank()) {
-                TextButton(onClick = { clipboard.setText(AnnotatedString(ztAddress)) }) {
+            if (address.isNotBlank()) {
+                TextButton(onClick = { clipboard.setText(AnnotatedString(address)) }) {
                     Text("Sao chép")
                 }
             }
         }
     }
-    if (ztAddress.isBlank()) {
+    if (address.isBlank() && !isNebula) {
         Spacer(Modifier.height(8.dp))
         Text(
             "Gateway chưa join ZeroTier — kiểm tra Internet của gateway, rồi mở lại để lấy địa chỉ.",

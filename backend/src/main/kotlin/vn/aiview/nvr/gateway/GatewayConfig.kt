@@ -56,4 +56,7 @@ object GatewayConfig {
 
     /** True when the Nebula overlay is the active control plane (its CA URL + token are configured). */
     val nebulaEnabled: Boolean get() = nebulaCaUrl != null && nebulaSignToken.isNotBlank()
+
+    /** The subnet the scanner sweeps: the Nebula overlay when Nebula is active, else the ZeroTier one. */
+    val activeScanSubnet: String? get() = if (nebulaEnabled) nebulaOverlaySubnet else scanSubnet
 }

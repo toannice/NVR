@@ -116,13 +116,13 @@ class OnboardViewModel : ViewModel() {
      * admin handed out; the agent leaves any old network, joins this one, and persists it. On success
      * we patch the in-memory gateway so the rest of the UI reflects the new network + ZeroTier addr.
      */
-    fun submitEnroll(gw: Gateway, networkId: String) {
+    fun submitEnroll(gw: Gateway, signingUrl: String, token: String) {
         if (enrolling) return
         enrolling = true
         enrollError = null
         viewModelScope.launch {
             val port = gw.identity.agentPort.takeIf { it > 0 } ?: AgentClient.DEFAULT_PORT
-            val res = agent.enroll(gw.host, port, networkId)
+            val res = agent.enroll(gw.host, port, signingUrl, token, gw.identity.name)
             enrolling = false
             res.onSuccess { r ->
                 enrollResult = r
@@ -130,10 +130,10 @@ class OnboardViewModel : ViewModel() {
                 if (idx >= 0) {
                     gateways[idx] = gw.copy(
                         identity = gw.identity.copy(
-                            networkId = r.networkId,
-                            ztAddress = r.ztAddress.ifBlank { gw.identity.ztAddress },
-                            ztJoined = r.ztJoined,
-                            ztOnline = r.ztOnline,
+                            overlay = "nebula",
+                            enrolled = true,
+                            overlayIp = r.overlayIp.ifBlank { gw.identity.overlayIp },
+                            signed = r.status == "signed",
                         ),
                     )
                 }

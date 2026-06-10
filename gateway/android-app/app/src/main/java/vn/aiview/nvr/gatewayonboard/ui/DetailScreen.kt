@@ -53,16 +53,27 @@ fun DetailScreen(vm: OnboardViewModel, gw: Gateway) {
             InfoRow("Gateway ID", id.gatewayId.ifBlank { "—" })
             InfoRow("Người lắp", id.installer.ifBlank { "—" })
             InfoRow("Vị trí", id.location.ifBlank { "—" })
-            InfoRow("Khu vực (network)", id.networkId.ifBlank { "(chưa vào khu vực)" })
-            InfoRow("ZeroTier addr", id.ztAddress.ifBlank { "—" })
-            InfoRow("ZeroTier IP", id.zerotierIp.ifBlank { "—" })
+            if (id.overlay == "nebula") {
+                InfoRow("Overlay", "Nebula")
+                InfoRow("Trạng thái", if (id.signed) "đã ký cert" else if (id.enrolled) "chờ cấp phép" else "chưa enroll")
+                InfoRow("Overlay IP", id.overlayIp.ifBlank { "—" })
+                InfoRow("Lighthouse", id.lighthouse.ifBlank { "—" })
+            } else {
+                InfoRow("Khu vực (network)", id.networkId.ifBlank { "(chưa vào khu vực)" })
+                InfoRow("ZeroTier addr", id.ztAddress.ifBlank { "—" })
+                InfoRow("ZeroTier IP", id.zerotierIp.ifBlank { "—" })
+            }
             InfoRow("Camera đang proxy", id.cameraCount.toString())
 
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 StatusChip(if (id.alive) "Hoạt động" else "Offline", id.alive)
-                StatusChip(if (id.ztJoined) "Đã join ZT" else "Chưa join ZT", id.ztJoined)
-                StatusChip(if (id.ztOnline) "ZT online" else "ZT offline", id.ztOnline)
+                if (id.overlay == "nebula") {
+                    StatusChip(if (id.signed) "Đã ký cert" else "Chưa ký", id.signed)
+                } else {
+                    StatusChip(if (id.ztJoined) "Đã join ZT" else "Chưa join ZT", id.ztJoined)
+                    StatusChip(if (id.ztOnline) "ZT online" else "ZT offline", id.ztOnline)
+                }
             }
 
             Spacer(Modifier.height(28.dp))

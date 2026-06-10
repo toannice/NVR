@@ -20,9 +20,9 @@ object GatewayScanner {
     private const val MAX_CONCURRENCY = 32
 
     fun start() {
-        val subnet = GatewayConfig.scanSubnet
+        val subnet = GatewayConfig.activeScanSubnet
         if (subnet == null) {
-            AppLogger.info(AppLogger.Module.SYSTEM, "GATEWAY", "SCAN_DISABLED", "ZT_SCAN_SUBNET not set")
+            AppLogger.info(AppLogger.Module.SYSTEM, "GATEWAY", "SCAN_DISABLED", "no scan subnet (ZT_SCAN_SUBNET / NEBULA_OVERLAY_SUBNET)")
             return
         }
         if (job != null) return
@@ -40,7 +40,7 @@ object GatewayScanner {
 
     /** One sweep of the subnet. Safe to call manually (POST /api/gateways/scan). */
     suspend fun scanNow(): Int = coroutineScope {
-        val subnet = GatewayConfig.scanSubnet ?: return@coroutineScope 0
+        val subnet = GatewayConfig.activeScanSubnet ?: return@coroutineScope 0
         val token = GatewayConfig.token
         val port = GatewayConfig.agentPort
         val hosts = expandCidr(subnet)

@@ -63,8 +63,11 @@ object GatewayService {
         transaction {
             val existing = Gateways.selectAll().where { Gateways.id eq h.gatewayId }.firstOrNull()
             if (existing == null) {
-                // If the admin authorized this node from the NVR, skip the manual "Phê duyệt" gate.
-                val autoApproved = h.ztAddress.isNotBlank() && pendingAutoApprove.remove(h.ztAddress)
+                // If the admin authorized this node from the NVR, skip the manual "Phê duyệt" gate. On
+                // Nebula, presence on the overlay already means the admin signed the cert ("Cấp phép"),
+                // so a freshly-discovered Nebula gateway is approved outright.
+                val autoApproved = GatewayConfig.nebulaEnabled ||
+                    (h.ztAddress.isNotBlank() && pendingAutoApprove.remove(h.ztAddress))
                 Gateways.insert {
                     it[Gateways.id] = h.gatewayId
                     it[Gateways.name] = h.gatewayName.ifBlank { ip }
