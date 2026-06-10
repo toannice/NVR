@@ -1,0 +1,21 @@
+[Unit]
+Description=NVR Edge Agent (passive L4 gateway provisioning)
+Documentation=https://github.com/toannice/NVR
+After=network-online.target zerotier-one.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/nvr-edge-agent/agent.env
+ExecStart=/usr/local/bin/nvr-edge-agent
+Restart=always
+RestartSec=3
+# nginx -s reload needs privilege; agent writes /etc/nginx/stream.d + /var/lib/nvr-edge-agent.
+# Keep it simple on the Pi (runs as root); harden later if needed.
+User=root
+# Low footprint guardrails for the 256MB Pi.
+MemoryMax=48M
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

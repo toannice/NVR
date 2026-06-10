@@ -35,4 +35,25 @@ object GatewayConfig {
             if (secret.exists()) return secret.readText().trim()
             return System.getenv("ZT_CONTROLLER_TOKEN") ?: ""
         }
+
+    // ── Nebula control plane (ZeroTier→Nebula migration; parallel + additive) ───────────────────
+    // When NEBULA_CA_URL + token are set, the NVR drives the HQ signing service instead of the
+    // ZeroTier controller: list pending gateways, approve ("Cấp phép") → sign a cert. ZeroTier stays
+    // fully functional when these are unset (overlay choice is decided per deployment).
+    //   - NEBULA_CA_URL          signing-service base URL, e.g. "http://203.0.113.10:9443"
+    //   - NEBULA_OVERLAY_SUBNET  Nebula subnet to auto-scan for gateways (replaces ZT_SCAN_SUBNET)
+    //   - sign token             /run/secrets/nebula_sign_token, else env NEBULA_SIGN_TOKEN
+    //                            (= the admin bearer the signing service expects)
+    val nebulaCaUrl: String? get() = System.getenv("NEBULA_CA_URL")?.takeIf { it.isNotBlank() }
+    val nebulaOverlaySubnet: String? get() = System.getenv("NEBULA_OVERLAY_SUBNET")?.takeIf { it.isNotBlank() }
+
+    val nebulaSignToken: String
+        get() {
+            val secret = File("/run/secrets/nebula_sign_token")
+            if (secret.exists()) return secret.readText().trim()
+            return System.getenv("NEBULA_SIGN_TOKEN") ?: ""
+        }
+
+    /** True when the Nebula overlay is the active control plane (its CA URL + token are configured). */
+    val nebulaEnabled: Boolean get() = nebulaCaUrl != null && nebulaSignToken.isNotBlank()
 }

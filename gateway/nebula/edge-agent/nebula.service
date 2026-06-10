@@ -1,0 +1,19 @@
+[Unit]
+Description=Nebula overlay (field gateway node)
+Wants=basic.target network-online.target
+After=basic.target network.target network-online.target
+# config.yml is written by nvr-edge-agent at enroll time; until then nebula fails fast and Restart
+# brings it back once the cert/config land. ConditionPathExists keeps the journal quiet pre-enroll.
+ConditionPathExists=/etc/nebula/config.yml
+
+[Service]
+Type=notify
+NotifyAccess=main
+SyslogIdentifier=nebula
+ExecReload=/bin/kill -HUP $MAINPID
+ExecStart=/usr/local/bin/nebula -config /etc/nebula/config.yml
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
