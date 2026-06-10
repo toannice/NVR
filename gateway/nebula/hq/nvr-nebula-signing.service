@@ -1,0 +1,16 @@
+[Unit]
+Description=NVR Nebula signing service (HQ control plane — replaces ztncui)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/nebula-hq/signing.env
+ExecStart=/usr/local/bin/nvr-nebula-signing
+Restart=always
+RestartSec=3
+# Hardening: the signing service only needs its CA dir (read), state dir (write) and nebula-cert.
+NoNewPrivileges=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

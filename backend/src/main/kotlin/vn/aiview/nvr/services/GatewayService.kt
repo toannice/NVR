@@ -13,6 +13,8 @@ import vn.aiview.nvr.gateway.EdgeDevice
 import vn.aiview.nvr.gateway.EdgeHealth
 import vn.aiview.nvr.gateway.GatewayConfig
 import vn.aiview.nvr.gateway.ZtControllerClient
+import vn.aiview.nvr.gateway.NebulaCaClient
+import vn.aiview.nvr.gateway.NebulaPending
 import vn.aiview.nvr.models.Cameras
 import vn.aiview.nvr.models.Gateways
 import vn.aiview.nvr.utils.AppLogger
@@ -153,6 +155,27 @@ object GatewayService {
             pendingAutoApprove.add(nodeId)   // auto-approve it once the scanner discovers it
             AppLogger.info(AppLogger.Module.SYSTEM, "GATEWAY", "ZT_AUTHORIZED", "node=$nodeId")
         }
+        return ok
+    }
+
+    // ── Nebula control plane (parallel to ZeroTier; active when NEBULA_CA_URL is set) ────────────
+    // These mirror controllerConfigured/listPending/authorizeMember but drive the HQ signing service
+    // (NebulaCaClient) instead of the ZeroTier controller: "Cấp phép" SIGNS the gateway's cert. The
+    // routes/scanner pick the active overlay via GatewayConfig.nebulaEnabled. ZeroTier path untouched.
+
+    fun nebulaConfigured(): Boolean = NebulaCaClient.isConfigured()
+
+    /** Gateways that enrolled on the HQ signing service and await admin "Cấp phép" (Nebula). */
+    suspend fun listPendingNebula(): List<NebulaPending> = NebulaCaClient.listPending() ?: emptyList()
+
+    /**
+     * Approve ("Cấp phép") a pending Nebula gateway by its enrollment token → the signing service signs
+     * its cert; the polling agent applies it + starts nebula, and the scanner discovers the new overlay
+     * node shortly (inserted as approved, like DISCOVERED_AUTOAPPROVED).
+     */
+    suspend fun approveNebula(token: String): Boolean {
+        val ok = NebulaCaClient.approve(token)
+        if (ok) AppLogger.info(AppLogger.Module.SYSTEM, "GATEWAY", "NEBULA_APPROVED", "token=${token.take(6)}..")
         return ok
     }
 

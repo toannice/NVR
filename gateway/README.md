@@ -7,11 +7,13 @@ longer mixed in with the NVR application code.
 ```
 gateway/
 ├── edge-agent/        Go agent that runs ON the Pi (passive L4 proxy + ZeroTier join + field web page)
+├── nebula/            ZeroTier→Nebula migration (parallel): HQ signing service + Nebula edge-agent fork
 ├── android-app/       Phone app used in the field to enroll a gateway into a ZeroTier network
 ├── hq-controller/     Self-hosted ZeroTier controller (ztncui) install/systemd/backup scripts for the HQ box
 ├── gateway_setup.md   How to bring up a Pi gateway end-to-end
 ├── controller_hq_setup.md   How to stand up the HQ ZeroTier controller
 ├── 4-6-to-do-jobs.md  Plan A design + verify steps
+├── nebula-migration-va-trien-khai.md   ĐỀ XUẤT: đổi overlay ZeroTier→Nebula (license) + runbook Pi mới (VI)
 └── tổng-quan-kiến-trúc-gateway-8-6-26.md   Architecture overview (VI)
 ```
 
