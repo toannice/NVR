@@ -84,6 +84,7 @@ services:
       - gmail_app_password
       - edge_agent_token                       # Shared fleet token for edge gateways (4-6 Plan A)
       - zt_controller_token                    # ZeroTier controller authtoken — NVR authorizes members itself
+      - nebula_sign_token                      # Nebula HQ signing-service admin token (ZeroTier→Nebula migration)
     environment:
       - FRIGATE_URL=http://localhost:5000
       - MQTT_URL=tcp://localhost:1883
@@ -101,6 +102,9 @@ services:
       - GATEWAY_SCAN_INTERVAL_SEC=${GATEWAY_SCAN_INTERVAL_SEC:-30}
       - ZT_CONTROLLER_URL=${ZT_CONTROLLER_URL:-} # Self-hosted ZT controller API, e.g. http://192.168.2.106:9993 (empty = NVR authorize disabled)
       - ZT_NETWORK_ID=${ZT_NETWORK_ID:-}        # Fleet network id the gateways join (for controller member API)
+      # ─── Nebula overlay (ZeroTier→Nebula migration; empty = ZeroTier stays active) ───
+      - NEBULA_CA_URL=${NEBULA_CA_URL:-}         # HQ signing-service base URL, e.g. http://192.168.2.106:9443
+      - NEBULA_OVERLAY_SUBNET=${NEBULA_OVERLAY_SUBNET:-}  # Nebula subnet to auto-scan, e.g. 10.10.20.0/24
     healthcheck:
       test: [ "CMD-SHELL", "curl -f http://127.0.0.1:3000/api/health || exit 1" ]
       interval: 20s
@@ -157,6 +161,8 @@ secrets:
     file: ./secrets/edge_agent_token
   zt_controller_token:
     file: ./secrets/zt_controller_token
+  nebula_sign_token:
+    file: ./secrets/nebula_sign_token
 
 # ─── Networks ──────────────────────────────────────────────
 networks:
