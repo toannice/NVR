@@ -26,10 +26,16 @@ private data class DeleteGatewayResponse(
     val camerasRemoved: Int,
 )
 
+// Unified pending item across overlays: `id` is what /authorize takes (ZeroTier nodeId OR Nebula
+// enrollment token), `label` is the display name, `detail` the IP assignment(s).
+@Serializable
+private data class PendingItem(val id: String, val label: String, val detail: List<String>)
+
 @Serializable
 private data class PendingResponse(
     val configured: Boolean,
-    val members: List<GatewayService.PendingMemberDto>,
+    val overlay: String,                 // "zerotier" | "nebula" | "none"
+    val members: List<PendingItem>,
 )
 
 /**
@@ -49,22 +55,29 @@ fun Route.gatewayRouting() {
             call.respond(mapOf("found" to found))
         }
 
-        // ZeroTier members waiting to be authorized (brand-new gateways not yet on the overlay).
-        // `configured=false` when the controller integration isn't wired — UI hides the section.
+        // Gateways waiting to be let onto the overlay (brand-new, not yet authorized/signed).
+        // Nebula takes precedence when configured; else ZeroTier; else `configured=false` (UI hides it).
         get("/pending") {
-            if (!GatewayService.controllerConfigured()) {
-                call.respond(PendingResponse(false, emptyList()))
-            } else {
-                call.respond(PendingResponse(true, GatewayService.listPending()))
+            when {
+                GatewayService.nebulaConfigured() -> call.respond(PendingResponse(true, "nebula",
+                    GatewayService.listPendingNebula().map {
+                        PendingItem(it.token, it.name.ifBlank { it.token.take(8) }, listOf(it.overlayIp))
+                    }))
+                GatewayService.controllerConfigured() -> call.respond(PendingResponse(true, "zerotier",
+                    GatewayService.listPending().map { PendingItem(it.nodeId, it.nodeId, it.ipAssignments) }))
+                else -> call.respond(PendingResponse(false, "none", emptyList()))
             }
         }
 
-        // Authorize a ZeroTier member straight from the NVR (replaces the manual ztncui click).
+        // Authorize/sign a pending gateway from the NVR ("Cấp phép"). `id` = ZeroTier nodeId OR Nebula
+        // enrollment token, matching what /pending returned. One endpoint, overlay picked by config.
         post("/authorize/{nodeId}") {
-            val nodeId = call.parameters["nodeId"]
-                ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing nodeId"))
-            if (GatewayService.authorizeMember(nodeId)) call.respond(mapOf("success" to true))
-            else call.respond(HttpStatusCode.BadGateway, mapOf("error" to "controller authorize failed"))
+            val id = call.parameters["nodeId"]
+                ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing id"))
+            val ok = if (GatewayService.nebulaConfigured()) GatewayService.approveNebula(id)
+                     else GatewayService.authorizeMember(id)
+            if (ok) call.respond(mapOf("success" to true))
+            else call.respond(HttpStatusCode.BadGateway, mapOf("error" to "authorize/sign failed"))
         }
 
         // Delete a gateway + cascade-remove its adopted cameras (DB+YAML+go2rtc+Frigate restart).

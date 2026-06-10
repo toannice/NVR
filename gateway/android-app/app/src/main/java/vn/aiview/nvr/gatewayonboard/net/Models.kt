@@ -19,6 +19,13 @@ data class Identity(
     val ztJoined: Boolean = false,
     val ztOnline: Boolean = false,
     val zerotierIp: String = "",
+    // Nebula agents report these instead of the ZeroTier fields (overlay == "nebula"). `enrolled` = a
+    // region (signing URL + token) was set; `signed` = the cert was issued and nebula is up.
+    val overlay: String = "",
+    val enrolled: Boolean = false,
+    val signed: Boolean = false,
+    val overlayIp: String = "",
+    val lighthouse: String = "",
     val fieldSubnet: String = "",
     val agentPort: Int = 0,
     val alive: Boolean = false,
@@ -38,24 +45,27 @@ data class LabelRequest(
     val location: String,
 )
 
-/** Body of POST /enroll — the 16-hex ZeroTier network id the admin gave the field worker. */
+/**
+ * Body of POST /enroll — the "mã khu vực" the admin gave the field worker: the HQ signing-service URL
+ * and a one-time enrollment token. (Nebula analog of the old 16-hex ZeroTier network id.)
+ */
 @Serializable
 data class EnrollRequest(
-    val networkId: String,
+    val signingUrl: String,
+    val token: String,
+    val name: String = "",
 )
 
 /**
- * Response of POST /enroll. `ztJoined` is usually false right after enrolling — the gateway has
- * requested membership but stays unauthorized until the admin approves it on the NVR ("Cấp phép").
+ * Response of POST /enroll. `status` is normally "pending" right after enrolling — the gateway has
+ * submitted its public key but stays unsigned until the admin approves it on the NVR ("Cấp phép").
  */
 @Serializable
 data class EnrollResponse(
-    val networkId: String = "",
-    val ztAddress: String = "",
-    val ztJoined: Boolean = false,
-    val ztOnline: Boolean = false,
-    val zerotierIp: String = "",
+    val status: String = "",
+    val overlayIp: String = "",
     val requested: Boolean = false,
+    val note: String = "",
 )
 
 @Serializable

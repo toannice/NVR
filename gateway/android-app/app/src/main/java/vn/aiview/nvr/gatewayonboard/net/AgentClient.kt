@@ -78,16 +78,18 @@ class AgentClient(
     }
 
     /**
-     * POST /enroll — point the gateway at a region's ZeroTier network (the 16-hex id the admin gave).
-     * No fleet token needed (the network id isn't a secret; the node stays unauthorized until the
-     * admin approves it on the NVR). The agent leaves any old network and joins this one.
+     * POST /enroll — point the gateway at a region (the HQ signing-service URL + one-time token the
+     * admin gave). No fleet token needed (the token is single-use and the node stays unsigned until the
+     * admin approves it on the NVR). The agent generates a keypair and submits its public key.
      */
     suspend fun enroll(
         host: String,
         port: Int,
-        networkId: String,
+        signingUrl: String,
+        token: String,
+        name: String = "",
     ): Result<EnrollResponse> = withContext(Dispatchers.IO) {
-        val payload = json.encodeToString(EnrollRequest(networkId.trim().lowercase()))
+        val payload = json.encodeToString(EnrollRequest(signingUrl.trim(), token.trim(), name.trim()))
         val req = Request.Builder()
             .url("http://$host:$port/enroll")
             .post(payload.toRequestBody(jsonMedia))

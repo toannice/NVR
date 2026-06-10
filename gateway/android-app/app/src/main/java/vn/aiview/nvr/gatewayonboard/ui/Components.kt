@@ -67,11 +67,14 @@ fun GatewayCard(gw: Gateway, onClick: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 StatusChip(
                     label = when {
+                        id.overlay == "nebula" && id.signed -> "Nebula ✓"
+                        id.overlay == "nebula" && id.enrolled -> "Chờ cấp phép"
+                        id.overlay == "nebula" -> "Chưa enroll"
                         id.ztOnline -> "ZT online"
                         id.ztJoined -> "ZT đã join"
-                        else -> "ZT chưa nối"
+                        else -> "Chưa nối"
                     },
-                    ok = id.ztOnline,
+                    ok = if (id.overlay == "nebula") id.signed else id.ztOnline,
                 )
                 StatusChip("${id.cameraCount} camera", id.cameraCount > 0)
             }

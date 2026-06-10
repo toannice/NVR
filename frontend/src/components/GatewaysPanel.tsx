@@ -19,9 +19,12 @@ type Gateway = {
   cameraCount: number
 }
 
+// Unified across overlays: `id` is what /authorize takes (ZeroTier nodeId OR Nebula enrollment token),
+// `label` the display name, `detail` the IP assignment(s).
 type PendingMember = {
-  nodeId: string
-  ipAssignments: string[]
+  id: string
+  label: string
+  detail: string[]
 }
 
 type Addable = {
@@ -95,13 +98,13 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
     return () => clearInterval(t)
   }, [fetchGateways, fetchPending])
 
-  const authorizeMember = async (nodeId: string) => {
-    setBusyAction('authorize:' + nodeId)
+  const authorizeMember = async (id: string) => {
+    setBusyAction('authorize:' + id)
     try {
-      const r = await fetch(`/api/gateways/authorize/${nodeId}`, { method: 'POST' })
+      const r = await fetch(`/api/gateways/authorize/${id}`, { method: 'POST' })
       if (r.ok) {
         toast('Đã cấp phép thiết bị vào mạng. Gateway sẽ xuất hiện trong ~30 giây.', 'success')
-        setPending(prev => prev.filter(p => p.nodeId !== nodeId))
+        setPending(prev => prev.filter(p => p.id !== id))
         await fetchGateways()
       } else {
         const d = await r.json().catch(() => ({}))
@@ -299,16 +302,16 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
           </p>
           <div className="space-y-2">
             {pending.map(p => (
-              <div key={p.nodeId} className="flex items-center justify-between bg-white border border-amber-200 rounded-lg px-3 py-2">
+              <div key={p.id} className="flex items-center justify-between bg-white border border-amber-200 rounded-lg px-3 py-2">
                 <div className="min-w-0">
-                  <div className="font-mono text-sm text-gray-800">{p.nodeId}</div>
+                  <div className="font-mono text-sm text-gray-800 truncate">{p.label}</div>
                   <div className="text-xs text-gray-400">
-                    {p.ipAssignments.length > 0 ? `IP dự kiến: ${p.ipAssignments.join(', ')}` : 'Chưa cấp IP'}
+                    {p.detail.length > 0 && p.detail.some(d => d) ? `IP dự kiến: ${p.detail.filter(d => d).join(', ')}` : 'Chưa cấp IP'}
                   </div>
                 </div>
-                <button onClick={() => authorizeMember(p.nodeId)} disabled={busyAction === 'authorize:' + p.nodeId}
+                <button onClick={() => authorizeMember(p.id)} disabled={busyAction === 'authorize:' + p.id}
                   className="bg-amber-600 text-white px-3 py-1.5 rounded-lg text-sm shrink-0 disabled:opacity-50">
-                  {busyAction === 'authorize:' + p.nodeId ? 'Đang cấp phép…' : 'Cấp phép'}
+                  {busyAction === 'authorize:' + p.id ? 'Đang cấp phép…' : 'Cấp phép'}
                 </button>
               </div>
             ))}
