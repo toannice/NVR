@@ -36,20 +36,23 @@ NVR-side (edited in place under `backend/.../gateway/`):
 | Edge-agent Nebula fork | ✅ builds (`go build`), gofmt-clean |
 | HQ install scripts + systemd + lighthouse | ✅ written, `bash -n` clean (not yet run on a real box) |
 | NVR `NebulaCaClient` + config + service methods | ✅ compiles (`./gradlew compileKotlin`); additive, ZeroTier untouched |
-| **Remaining wiring** (below) | ⏳ |
+| Routes + scanner + frontend + Android app wiring | ✅ done & compiles (see below) |
+| **Real-Pi end-to-end test** | ⏳ pending hardware |
 
-### Remaining to wire (needs nvr-wrapper rebuild + a real Pi/Nebula to verify)
-1. **Routes** (`backend/.../routes/GatewayRouting.kt`): when `GatewayConfig.nebulaEnabled`, serve
-   `listPendingNebula()` / `approveNebula(token)` instead of the ZeroTier `listPending()`/`authorizeMember()`.
-2. **Scanner** (`backend/.../services/GatewayScanner.kt` + `GatewayService.upsertFromScan`): Nebula
-   `/health` reports `overlayIp` + `gatewayId` (no `ztAddress`). Auto-approve should key on `gatewayId`
-   for Nebula gateways; persist `overlayIp` into `Gateways.zerotierIp` (same column, overlay-agnostic).
-3. **Frontend** (`frontend/src/components/GatewaysPanel.tsx`): relabel "Network ID" → "Mã khu vực"
-   (signing URL + token); the pending list shows token/name instead of nodeId.
-4. **Android app** (`gateway/android-app/.../net/AgentClient.kt`, `Models.kt`, enroll screen): `/enroll`
-   body becomes `{signingUrl, token, name}` (already partly modeled; field input + labels to update).
-5. **Real-Pi end-to-end test** (runbook §5): fresh Pi → install → enroll → Cấp phép → scan → live view;
-   measure NAT traversal / decide if a relay is needed.
+### Wiring DONE (commit `5922f55`) — overlay-aware, ZeroTier untouched when Nebula env unset
+1. **Routes** (`GatewayRouting.kt`): `/pending` + `/authorize` pick `NebulaCaClient` vs `ZtControllerClient`
+   by config (unified `PendingItem{id,label,detail}`); `id` = ZT nodeId OR Nebula token.
+2. **Scanner** (`GatewayScanner.kt` + `GatewayConfig.activeScanSubnet`): sweeps `NEBULA_OVERLAY_SUBNET`
+   when Nebula active. `upsertFromHealth` auto-approves Nebula gateways (overlay presence == admin signed).
+   `EdgeHealth` gained `overlayIp`/`nebulaUp`/`certExpiry`; the scanned IP is stored in `Gateways.zerotierIp`
+   (same column, overlay-agnostic).
+3. **Frontend** (`GatewaysPanel.tsx`): pending list uses `{id,label,detail}`; authorize by `id`.
+4. **Android app**: `/enroll` body = `{signingUrl, token, name}` ("mã khu vực"); identity/detail/status
+   views are overlay-aware (Nebula `signed`/`enrolled`/`overlayIp`/`lighthouse`). `compileDebugKotlin` ✅.
+
+### Remaining (needs hardware + a running HQ/Pi to verify)
+- **Real-Pi end-to-end test** (runbook §5): fresh Pi → install → enroll → Cấp phép → scan → live view;
+  measure NAT traversal / decide if a relay is needed. Then rebuild `nvr-wrapper` with `NEBULA_*` env set.
 
 ## Build / test
 
