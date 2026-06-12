@@ -91,15 +91,39 @@ var publicPaths = map[string]bool{"/identity": true, "/label": true, "/enroll": 
 
 func (s *server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopback(r.RemoteAddr) && !publicPaths[r.URL.Path] {
-			tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if s.cfg.Token == "" || tok != s.cfg.Token {
-				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-				return
-			}
+		if isLoopback(r.RemoteAddr) || publicPaths[r.URL.Path] {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// G2:C — when the Nebula firewall enforces the NVR group, any request that arrived over the
+		// overlay interface is already authenticated as that group, so trust it without the fleet token.
+		if s.cfg.NebulaNvrGroup != "" && s.isOverlayRequest(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// Legacy / field-LAN path: require the shared fleet token.
+		tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if s.cfg.Token == "" || tok != s.cfg.Token {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isOverlayRequest reports whether the request was accepted on the agent's overlay IP (vs the field
+// LAN). Used by G2:C to trust cert/group-authenticated overlay callers without a bearer token.
+func (s *server) isOverlayRequest(r *http.Request) bool {
+	la, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
+	if !ok || la == nil {
+		return false
+	}
+	host, _, err := net.SplitHostPort(la.String())
+	if err != nil {
+		host = la.String()
+	}
+	overlay := s.cfg.resolveOverlayIP()
+	return overlay != "" && host == overlay
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {

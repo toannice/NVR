@@ -29,6 +29,13 @@ type Config struct {
 	// it lapses, claiming an un-adopted gateway requires a reboot to reopen the window. <=0 disables.
 	EnrollWindowMin int // EDGE_AGENT_ENROLL_WINDOW_MIN (default 30)
 
+	// NebulaNvrGroup turns on cert-based auth (G2:C). When set, the Nebula firewall only admits this
+	// group (the NVR's cert group) inbound, and the agent trusts overlay requests WITHOUT the fleet
+	// token (the overlay + group already authenticate them). Empty = legacy: any overlay member may
+	// reach the agent but must present the shared fleet token. Requires the NVR cert be signed
+	// `-groups <this>`; gateways are signed `gateways`, so one gateway can't reach another's API.
+	NebulaNvrGroup string // NEBULA_FW_NVR_GROUP (e.g. "nvr")
+
 	fieldNet *net.IPNet // parsed FieldSubnet; nil when unset/invalid (then the /camera whitelist is off)
 }
 
@@ -46,6 +53,7 @@ func loadConfig() Config {
 		StateFile:       envOr("EDGE_AGENT_STATE", "/var/lib/nvr-edge-agent/state.json"),
 		PortPoolStart:   envInt("EDGE_AGENT_POOL_START", 8080),
 		EnrollWindowMin: envInt("EDGE_AGENT_ENROLL_WINDOW_MIN", 30),
+		NebulaNvrGroup:  os.Getenv("NEBULA_FW_NVR_GROUP"),
 	}
 	if c.Token == "" {
 		log.Println("WARN: EDGE_AGENT_TOKEN empty — remote (non-loopback) requests will be rejected")
