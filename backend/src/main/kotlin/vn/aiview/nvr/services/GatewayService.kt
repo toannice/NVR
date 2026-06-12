@@ -35,6 +35,9 @@ data class GatewayDto(
     val location: String?,       // site label from the Android app
     val lastSeenEpoch: Long?,    // epoch seconds, null if never
     val cameraCount: Int,
+    val certExpiry: String? = null,    // Nebula cert NotAfter (RFC3339), null on ZeroTier/unknown
+    val certDaysLeft: Long? = null,    // days until cert expiry, null if unknown
+    val health: String = "offline",    // online | degraded (cert<30d) | offline — for the tab + alerts
 )
 
 /**
@@ -46,6 +49,24 @@ object GatewayService {
 
     /** A gateway counts as online if its agent answered /health recently. */
     private val ONLINE_WINDOW: Duration get() = Duration.ofSeconds(GatewayConfig.scanIntervalSec * 3)
+
+    /** Warn (degraded) when a gateway's cert is within this many days of expiry. */
+    const val CERT_WARN_DAYS = 30L
+
+    /** Days until the RFC3339 cert NotAfter, or null if unparseable/blank. */
+    fun certDaysLeft(certExpiry: String?): Long? {
+        if (certExpiry.isNullOrBlank()) return null
+        return runCatching {
+            Duration.between(java.time.Instant.now(), java.time.Instant.parse(certExpiry)).toDays()
+        }.getOrNull()
+    }
+
+    /** online | degraded (cert expiring soon) | offline. */
+    fun healthOf(online: Boolean, certDaysLeft: Long?): String = when {
+        !online -> "offline"
+        certDaysLeft != null && certDaysLeft <= CERT_WARN_DAYS -> "degraded"
+        else -> "online"
+    }
 
     /** Node addresses the admin just authorized from the NVR ("Cấp phép"). When the scanner later
      *  discovers the matching gateway we approve it immediately, so one click does BOTH the ZeroTier
@@ -78,6 +99,7 @@ object GatewayService {
                     it[Gateways.ztAddress] = h.ztAddress.ifBlank { null }
                     it[Gateways.installer] = h.installer.ifBlank { null }
                     it[Gateways.location] = h.location.ifBlank { null }
+                    it[Gateways.certExpiry] = h.certExpiry.ifBlank { null }
                     it[Gateways.lastSeen] = LocalDateTime.now()
                 }
                 AppLogger.info(AppLogger.Module.SYSTEM, "GATEWAY", if (autoApproved) "DISCOVERED_AUTOAPPROVED" else "DISCOVERED", "id=${h.gatewayId} ip=$ip name=${h.gatewayName}")
@@ -90,6 +112,7 @@ object GatewayService {
                     if (h.ztAddress.isNotBlank()) it[Gateways.ztAddress] = h.ztAddress
                     if (h.installer.isNotBlank()) it[Gateways.installer] = h.installer
                     if (h.location.isNotBlank()) it[Gateways.location] = h.location
+                    if (h.certExpiry.isNotBlank()) it[Gateways.certExpiry] = h.certExpiry
                     it[Gateways.lastSeen] = LocalDateTime.now()
                     it[Gateways.updatedAt] = LocalDateTime.now()
                 }
@@ -105,6 +128,9 @@ object GatewayService {
         Gateways.selectAll().map { row ->
             val id = row[Gateways.id]
             val lastSeen = row[Gateways.lastSeen]
+            val online = lastSeen != null && Duration.between(lastSeen, LocalDateTime.now()) < ONLINE_WINDOW
+            val certExpiry = row[Gateways.certExpiry]
+            val daysLeft = certDaysLeft(certExpiry)
             GatewayDto(
                 id = id,
                 name = row[Gateways.name],
@@ -112,12 +138,15 @@ object GatewayService {
                 ztAddress = row[Gateways.ztAddress],
                 agentPort = row[Gateways.agentPort],
                 status = row[Gateways.status],
-                online = lastSeen != null && Duration.between(lastSeen, LocalDateTime.now()) < ONLINE_WINDOW,
+                online = online,
                 fieldSubnet = row[Gateways.fieldSubnet],
                 installer = row[Gateways.installer],
                 location = row[Gateways.location],
                 lastSeenEpoch = lastSeen?.atZone(java.time.ZoneId.systemDefault())?.toEpochSecond(),
                 cameraCount = counts[id] ?: 0,
+                certExpiry = certExpiry,
+                certDaysLeft = daysLeft,
+                health = healthOf(online, daysLeft),
             )
         }
     }
