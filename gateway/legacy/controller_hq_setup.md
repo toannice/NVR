@@ -1,3 +1,8 @@
+> ⚠️ **LEGACY (ZeroTier era).** Overlay đã chốt = **Nebula (MIT)** từ 2026-06-11. Tài liệu này
+> giữ lại để tham chiếu lịch sử; KHÔNG dùng cho triển khai mới. Runbook hiện hành:
+> [`gateway/nebula-migration-va-trien-khai.md`](../nebula-migration-va-trien-khai.md) ·
+> nguyên tắc: [`.specify/memory/constitution.md`](../../.specify/memory/constitution.md).
+
 # HQ Controller Setup — Self-host ZeroTier + ztncui
 
 > Phase 0 của [specs/004-gateway-onboarding/plan.md](../specs/004-gateway-onboarding/plan.md).

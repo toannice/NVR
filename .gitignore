@@ -55,6 +55,11 @@ data/dc-bridge
 data/.device_key
 secrets/
 
+# Compiled Go edge-agent binaries (build via gateway/nebula/edge-agent/build.sh)
+gateway/nebula/edge-agent/nvr-edge-agent
+gateway/edge-agent/nvr-edge-agent
+config/config (copy).yml
+
 # Gradle/Kotlin build output (compiled artifacts — never commit)
 backend/build/
 backend/.gradle/

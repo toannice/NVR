@@ -1,3 +1,7 @@
+> ⚠️ **LEGACY (ZeroTier era).** Overlay đã chốt = **Nebula (MIT)** từ 2026-06-11. Plan này mô tả
+> hướng self-hosted ZeroTier controller + Android app — đã thay bằng Nebula. Giữ để tham chiếu.
+> Runbook hiện hành: `gateway/nebula-migration-va-trien-khai.md`.
+
 # Implementation Plan: Gateway Onboarding (self-hosted ZeroTier + Android app)
 
 **Branch**: `004-gateway-onboarding` | **Date**: 2026-06-04 | **Builds on**: Plan A (`gateway/4-6-to-do-jobs.md`, gateway already DONE end-to-end on ZeroTier Central)

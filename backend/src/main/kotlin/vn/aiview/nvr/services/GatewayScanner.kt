@@ -9,10 +9,12 @@ import vn.aiview.nvr.utils.AppLogger
 import java.net.InetAddress
 
 /**
- * Auto-discovers edge gateways by sweeping the ZeroTier subnet (ZT_SCAN_SUBNET) and calling each
- * host's /health (bounded concurrency, short timeout). This is the "auto connect" piece — the
- * gateway never registers itself; the NVR finds it. Found gateways land as `discovered` for the
- * admin to approve. Disabled when ZT_SCAN_SUBNET is unset.
+ * Auto-discovers edge gateways by sweeping the overlay subnet and calling each host's /health
+ * (bounded concurrency, short timeout). The subnet is the active overlay's range: NEBULA_OVERLAY_SUBNET
+ * (Nebula — the locked production overlay) or, when Nebula is unconfigured, the legacy ZT_SCAN_SUBNET
+ * (ZeroTier fallback, dormant). This is the "auto connect" piece — the gateway never registers itself;
+ * the NVR finds it. Found gateways land as `discovered` for the admin to approve. Disabled when no
+ * overlay subnet is set.
  */
 object GatewayScanner {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
