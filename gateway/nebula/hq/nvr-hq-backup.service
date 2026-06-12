@@ -1,0 +1,9 @@
+[Unit]
+Description=Nebula HQ trust-material backup (CA key/cert + signing state)
+After=nvr-nebula-signing.service
+# Picks up NEBULA_CA_DIR / NEBULA_SIGN_STATE overrides if the operator customised them.
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/nebula-hq/signing.env
+ExecStart=/usr/local/bin/nvr-hq-backup

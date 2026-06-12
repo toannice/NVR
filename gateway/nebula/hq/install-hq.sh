@@ -123,10 +123,17 @@ else
 fi
 install -m 0644 "$HERE/nvr-nebula-signing.service" /etc/systemd/system/nvr-nebula-signing.service
 
+echo "==> HQ trust-material backup (ca.key + signing state) on a daily timer"
+install -m 0700 "$HERE/backup-hq.sh" /usr/local/bin/nvr-hq-backup
+install -m 0644 "$HERE/nvr-hq-backup.service" /etc/systemd/system/nvr-hq-backup.service
+install -m 0644 "$HERE/nvr-hq-backup.timer" /etc/systemd/system/nvr-hq-backup.timer
+
 systemctl daemon-reload
 systemctl enable --now nebula.service
 systemctl enable --now nvr-nebula-signing.service || \
   echo "    (signing service not started — set NEBULA_SIGN_TOKEN in /etc/nebula-hq/signing.env first)"
+systemctl enable --now nvr-hq-backup.timer
+/usr/local/bin/nvr-hq-backup || echo "    (first backup failed — run /usr/local/bin/nvr-hq-backup by hand)"
 
 echo
 echo "Done. Next:"
@@ -138,3 +145,5 @@ echo "       curl -s -X POST localhost:9443/tokens -H 'Authorization: Bearer <ad
 echo "            -d '{\"region\":\"nha-A\",\"ipCidr\":\"${OVERLAY_CIDR}\"}'"
 echo "     Hand the returned token + lighthouse to the field worker as the 'mã khu vực'."
 echo "  4) Check: systemctl status nebula nvr-nebula-signing ; curl -s localhost:9443/healthz"
+echo "  5) Backups: a daily nvr-hq-backup.timer snapshots the CA key + signing state to"
+echo "     /var/backups/nebula-hq. COPY THOSE TARBALLS OFFSITE — a backup that dies with the box is none."
