@@ -16,6 +16,19 @@ type Gateway = {
   location: string | null
   lastSeenEpoch: number | null
   cameraCount: number
+  certExpiry?: string | null
+  certDaysLeft?: number | null
+  health?: string        // online | degraded (cert<30d) | offline
+}
+
+// Overlay control-plane (HQ) health, from GET /api/gateways/hq.
+type HqStatus = {
+  configured: boolean
+  overlay: string        // nebula | zerotier | none
+  reachable: boolean
+  lighthouse?: string | null
+  pending?: number
+  uptimeSec?: number
 }
 
 // A gateway awaiting "Cấp phép": `id` is what /authorize takes (the Nebula enrollment token),
@@ -62,6 +75,7 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
   }
 
   const [gateways, setGateways] = useState<Gateway[]>([])
+  const [hq, setHq] = useState<HqStatus | null>(null)
   const [pending, setPending] = useState<PendingMember[]>([])
   const [loading, setLoading] = useState(true)
   const [scanning, setScanning] = useState(false)
@@ -90,12 +104,20 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
     } catch { /* ignore */ }
   }, [])
 
+  const fetchHq = useCallback(async () => {
+    try {
+      const r = await fetch('/api/gateways/hq')
+      if (r.ok) setHq(await r.json())
+    } catch { /* ignore */ }
+  }, [])
+
   useEffect(() => {
     fetchGateways()
     fetchPending()
-    const t = setInterval(() => { fetchGateways(); fetchPending() }, 10000)
+    fetchHq()
+    const t = setInterval(() => { fetchGateways(); fetchPending(); fetchHq() }, 10000)
     return () => clearInterval(t)
-  }, [fetchGateways, fetchPending])
+  }, [fetchGateways, fetchPending, fetchHq])
 
   const authorizeMember = async (id: string) => {
     setBusyAction('authorize:' + id)
@@ -272,9 +294,11 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
   const statusBadge = (g: Gateway) => {
     if (g.status === 'discovered')
       return <span className="px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700">Chờ duyệt</span>
-    return g.online
-      ? <span className="px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700">● Online</span>
-      : <span className="px-2 py-0.5 rounded-full text-xs bg-gray-200 text-gray-600">○ Offline</span>
+    if (!g.online)
+      return <span className="px-2 py-0.5 rounded-full text-xs bg-gray-200 text-gray-600">○ Offline</span>
+    if (g.health === 'degraded')
+      return <span className="px-2 py-0.5 rounded-full text-xs bg-orange-100 text-orange-700" title={`Cert còn ${g.certDaysLeft} ngày`}>▲ Cert sắp hết</span>
+    return <span className="px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700">● Online</span>
   }
 
   return (
@@ -289,6 +313,16 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
           <Icon name="radar" className="text-base" /> {scanning ? 'Đang quét…' : 'Quét ngay'}
         </button>
       </div>
+
+      {hq?.configured && hq.overlay === 'nebula' && (
+        <div className={`mb-4 flex items-center gap-2 rounded-xl px-4 py-2 text-sm border ${
+          hq.reachable ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
+          <Icon name={hq.reachable ? 'cloud_done' : 'cloud_off'} className="text-base" />
+          <span className="font-medium">HQ {hq.reachable ? 'online' : 'KHÔNG phản hồi'}</span>
+          {hq.reachable && hq.lighthouse && <span className="text-xs opacity-80">· lighthouse {hq.lighthouse}</span>}
+          {hq.reachable && (hq.pending ?? 0) > 0 && <span className="text-xs opacity-80">· {hq.pending} chờ cấp phép</span>}
+        </div>
+      )}
 
       {pending.length > 0 && (
         <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl p-4">
@@ -337,6 +371,9 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
                   <div className="text-xs text-gray-500 mt-0.5">
                     {g.zerotierIp || '(chưa có IP)'} :{g.agentPort}
                     {g.fieldSubnet ? ` · LAN ${g.fieldSubnet}` : ''} · {g.cameraCount} camera
+                    {g.certDaysLeft != null && (
+                      <span className={g.certDaysLeft <= 30 ? 'text-orange-600' : ''}> · cert {g.certDaysLeft}d</span>
+                    )}
                   </div>
                   {(g.installer || g.location) && (
                     <div className="text-xs text-gray-400 mt-0.5 truncate">
