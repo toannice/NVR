@@ -48,6 +48,17 @@ func TestEnrollWindowOpen(t *testing.T) {
 	}
 }
 
+// TestFirewallInbound covers G2:C: with a group set the inbound rule restricts to that group; empty
+// keeps the legacy allow-any host rule.
+func TestFirewallInbound(t *testing.T) {
+	if got := (Config{NebulaNvrGroup: "nvr"}).firewallInbound(); !strings.Contains(got, "group: nvr") || strings.Contains(got, "host: any") {
+		t.Fatalf("group set should yield a group rule, got:\n%s", got)
+	}
+	if got := (Config{}).firewallInbound(); !strings.Contains(got, "host: any") {
+		t.Fatalf("empty group should keep allow-any, got:\n%s", got)
+	}
+}
+
 // TestSanitizeComment covers G6: a camera name can never break out of the nginx `#` comment line.
 func TestSanitizeComment(t *testing.T) {
 	inj := "cam\nserver { listen 0.0.0.0:22; proxy_pass 10.0.0.1:22; }"

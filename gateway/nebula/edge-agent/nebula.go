@@ -66,6 +66,20 @@ func (c Config) writeCertAndConfig(certPem, caPem, overlayIP, lighthouse, lighth
 	return nil
 }
 
+// firewallInbound returns the inbound firewall rule body for the node config. With NebulaNvrGroup set
+// (G2:C) only that group (the NVR's cert group) may reach the agent API + proxied ONVIF/RTSP ports over
+// the overlay — so one gateway (group "gateways") can't reach another's. Empty = legacy allow-any.
+func (c Config) firewallInbound() string {
+	if c.NebulaNvrGroup != "" {
+		return fmt.Sprintf(`    - port: any
+      proto: any
+      group: %s`, c.NebulaNvrGroup)
+	}
+	return `    - port: any
+      proto: any
+      host: any`
+}
+
 // renderConfig builds a Nebula node (non-lighthouse) config.yml. The overlay IP itself comes from the
 // cert (Nebula reads it from there), so it isn't repeated here. Relays are enabled and point at the
 // lighthouse overlay IP — effective only if that node runs am_relay (see HQ install).
@@ -112,11 +126,9 @@ firewall:
       proto: any
       host: any
   inbound:
-    # Allow NVR(s) on the overlay to reach the proxied ONVIF/RTSP ports. Tighten by group later (G-series).
-    - port: any
-      proto: any
-      host: any
-`, c.NebulaDir, lighthouseOverlayIP, lighthousePublic, c.NebulaIface)
+    # G2:C — restricted to the NVR group when NEBULA_FW_NVR_GROUP is set; else allow-any (legacy).
+%[5]s
+`, c.NebulaDir, lighthouseOverlayIP, lighthousePublic, c.NebulaIface, c.firewallInbound())
 }
 
 // restartNebula (re)starts the systemd nebula service so it picks up a freshly written config/cert.
