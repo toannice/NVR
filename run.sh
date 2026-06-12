@@ -214,7 +214,7 @@ if ! grep -q "GITHUB_TOKEN=" .env; then
     echo "WATCHTOWER_TOKEN=\"$(date +%s | sha256sum | base64 | tr -dc 'a-zA-Z0-9' | head -c 24)\"" >> .env
     echo "WATCHTOWER_SCHEDULE=\"0 0 3 * * *\"" >> .env  # Tự động cập nhật 3h sáng
 fi
-echo "DOCKER_API_VERSION=\"1.44\"" >> .env
+grep -q "^DOCKER_API_VERSION=" .env || echo "DOCKER_API_VERSION=\"1.44\"" >> .env
 
 # 4. Tailscale & SSH
 echo ""
