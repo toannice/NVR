@@ -122,6 +122,22 @@ object CloudCameras : Table("cloud_cameras") {
     override val primaryKey = PrimaryKey(channelId)
 }
 
+/**
+ * AiView Box integration settings (NVR_AIView_Integration_Protocol v1.1, §8 — auth hướng A).
+ * Single-row (id=1). A dedicated username/password pair for the Box↔NVR integration, fully
+ * independent of the pattern-lock (LockConfig): locking the NVR UI does NOT disable this API.
+ * Admin toggles `enabled` and rotates credentials to grant/revoke the Box.
+ */
+object IntegrationSettings : Table("integration_settings") {
+    val id = integer("id").default(1)                  // single-row, always = 1
+    val enabled = bool("enabled").default(false)        // master on/off for the Box integration API
+    val username = varchar("username", 255).default("")
+    val passwordHash = text("password_hash").default("") // bcrypt (verifyPattern-compatible)
+    val updatedAt = datetime("updated_at").defaultExpression(CurrentDateTime)
+
+    override val primaryKey = PrimaryKey(id)
+}
+
 object AIEvents : Table("ai_events") {
     val id = varchar("id", 255)
     val cameraSlug = varchar("camera_slug", 255).index()

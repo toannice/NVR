@@ -22,13 +22,19 @@ fun Application.configureRouting() {
             configRouting()
             onvifRouting()
             gatewayRouting()
+
+            // AiView Box integration — admin settings (enable + credentials)
+            integrationAdminRouting()
         }
-        
+
         // Dev/test helpers (active only when E2E_TEST_MODE=true)
         devRouting()
 
         // Cloud connection (public — internal dc-bridge callback + config endpoints)
         cloudRouting()
+
+        // AiView Box integration — public contract endpoints (self-authenticate, v1.1)
+        integrationRouting()
 
         // Static files (for frontend)
         staticFilesRouting()
