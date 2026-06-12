@@ -4,6 +4,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestLocalIPInField covers the G1 whitelist: /camera may only target hosts on the configured field
@@ -30,6 +31,20 @@ func TestLocalIPInField(t *testing.T) {
 				t.Fatalf("localIPInField(%q) = %v, want %v", c.ip, got, c.want)
 			}
 		})
+	}
+}
+
+// TestEnrollWindowOpen covers G3: /enroll only accepts a new region within the post-boot window.
+func TestEnrollWindowOpen(t *testing.T) {
+	c := Config{EnrollWindowMin: 30}
+	if !c.enrollWindowOpen(5 * time.Minute) {
+		t.Fatal("window should be open 5min after boot")
+	}
+	if c.enrollWindowOpen(31 * time.Minute) {
+		t.Fatal("window should be closed 31min after boot")
+	}
+	if !(Config{EnrollWindowMin: 0}).enrollWindowOpen(99 * time.Hour) {
+		t.Fatal("EnrollWindowMin<=0 must disable the lock (always open)")
 	}
 }
 

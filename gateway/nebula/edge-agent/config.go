@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config is loaded entirely from environment (agent.env via systemd EnvironmentFile). Compared to the
@@ -24,22 +25,27 @@ type Config struct {
 	StateFile      string // EDGE_AGENT_STATE (default /var/lib/nvr-edge-agent/state.json)
 	PortPoolStart  int    // EDGE_AGENT_POOL_START (default 8080)
 
+	// EnrollWindowMin bounds how long after boot /enroll accepts a NEW region (G3 anti-hijack). After
+	// it lapses, claiming an un-adopted gateway requires a reboot to reopen the window. <=0 disables.
+	EnrollWindowMin int // EDGE_AGENT_ENROLL_WINDOW_MIN (default 30)
+
 	fieldNet *net.IPNet // parsed FieldSubnet; nil when unset/invalid (then the /camera whitelist is off)
 }
 
 func loadConfig() Config {
 	c := Config{
-		Token:          os.Getenv("EDGE_AGENT_TOKEN"),
-		GatewayName:    envOr("EDGE_AGENT_NAME", hostnameOr("gateway")),
-		Port:           envInt("EDGE_AGENT_PORT", 9797),
-		OverlayIP:      os.Getenv("EDGE_AGENT_OVERLAY_IP"),
-		NebulaDir:      envOr("NEBULA_DIR", "/etc/nebula"),
-		NebulaCertBin:  envOr("NEBULA_CERT_BIN", "nebula-cert"),
-		NebulaIface:    envOr("NEBULA_IFACE", "nebula1"),
-		FieldSubnet:    os.Getenv("EDGE_AGENT_FIELD_SUBNET"),
-		NginxStreamCfg: envOr("EDGE_AGENT_NGINX_CONF", "/etc/nginx/stream.d/cameras.conf"),
-		StateFile:      envOr("EDGE_AGENT_STATE", "/var/lib/nvr-edge-agent/state.json"),
-		PortPoolStart:  envInt("EDGE_AGENT_POOL_START", 8080),
+		Token:           os.Getenv("EDGE_AGENT_TOKEN"),
+		GatewayName:     envOr("EDGE_AGENT_NAME", hostnameOr("gateway")),
+		Port:            envInt("EDGE_AGENT_PORT", 9797),
+		OverlayIP:       os.Getenv("EDGE_AGENT_OVERLAY_IP"),
+		NebulaDir:       envOr("NEBULA_DIR", "/etc/nebula"),
+		NebulaCertBin:   envOr("NEBULA_CERT_BIN", "nebula-cert"),
+		NebulaIface:     envOr("NEBULA_IFACE", "nebula1"),
+		FieldSubnet:     os.Getenv("EDGE_AGENT_FIELD_SUBNET"),
+		NginxStreamCfg:  envOr("EDGE_AGENT_NGINX_CONF", "/etc/nginx/stream.d/cameras.conf"),
+		StateFile:       envOr("EDGE_AGENT_STATE", "/var/lib/nvr-edge-agent/state.json"),
+		PortPoolStart:   envInt("EDGE_AGENT_POOL_START", 8080),
+		EnrollWindowMin: envInt("EDGE_AGENT_ENROLL_WINDOW_MIN", 30),
 	}
 	if c.Token == "" {
 		log.Println("WARN: EDGE_AGENT_TOKEN empty — remote (non-loopback) requests will be rejected")
@@ -54,6 +60,15 @@ func loadConfig() Config {
 		log.Println("WARN: EDGE_AGENT_FIELD_SUBNET empty — /camera accepts any localIp (set it to whitelist the field LAN)")
 	}
 	return c
+}
+
+// enrollWindowOpen reports whether /enroll still accepts a NEW region, given how long the agent has
+// been up (G3). A non-positive EnrollWindowMin disables the lock (always open).
+func (c Config) enrollWindowOpen(sinceBoot time.Duration) bool {
+	if c.EnrollWindowMin <= 0 {
+		return true
+	}
+	return sinceBoot < time.Duration(c.EnrollWindowMin)*time.Minute
 }
 
 // localIPInField reports whether ip is inside the configured field subnet (G1: stop /camera being an
