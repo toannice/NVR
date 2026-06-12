@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // renderStreamConf builds the full /etc/nginx/stream.d/cameras.conf body from state.
@@ -17,11 +18,30 @@ func renderStreamConf(ztIP string, cams []Camera) string {
 	b.WriteString("# Managed by nvr-edge-agent — DO NOT EDIT BY HAND.\n")
 	b.WriteString("# Regenerated from state on every change and on boot.\n\n")
 	for _, c := range sortedCameras(cams) {
-		fmt.Fprintf(&b, "# %s (%s)\n", c.Name, c.LocalIP)
+		// G6: the name is attacker-influenced (set via /camera) and only used in this comment — strip
+		// anything that could break out of the `#` line and inject nginx directives. LocalIP is already
+		// IP-validated at ingest, so it's safe in the proxy_pass below.
+		fmt.Fprintf(&b, "# %s (%s)\n", sanitizeComment(c.Name), c.LocalIP)
 		fmt.Fprintf(&b, "server {\n    listen %s:%d;\n    proxy_pass %s:80;\n}\n", ztIP, c.OnvifPort, c.LocalIP)
 		fmt.Fprintf(&b, "server {\n    listen %s:%d;\n    proxy_pass %s:554;\n}\n\n", ztIP, c.RtspPort, c.LocalIP)
 	}
 	return b.String()
+}
+
+// sanitizeComment removes newlines and control characters so an attacker-supplied camera name cannot
+// break out of an nginx `#` comment line and inject directives (G6). Also caps length to keep the
+// config readable.
+func sanitizeComment(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r < 0x20 {
+			return -1
+		}
+		return r
+	}, s)
+	if len(s) > 64 {
+		s = s[:64]
+	}
+	return s
 }
 
 // writeAndReload writes the stream config atomically and reloads nginx. If the reload fails it

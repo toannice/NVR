@@ -83,12 +83,12 @@ Audit code `gateway/edge-agent/` (proxy L4 thụ động). Thiết kế kín ở
 
 | # | Mức | Lỗ hổng | Vị trí | Vá đề xuất |
 |---|---|---|---|---|
-| G1 | 🔴 | **`/camera` = port-forward tùy ý vào LAN field (SSRF/pivot).** `localIp` chỉ validate "IP hợp lệ", KHÔNG bắt buộc thuộc field subnet → ai có fleet token + trên overlay forward tới bất kỳ host:80/:554 của LAN khách. | `main.go#handleCamera` | Whitelist `localIp` phải nằm trong `FieldSubnet` |
+| G1 | ✅ | **`/camera` = port-forward tùy ý vào LAN field (SSRF/pivot).** `localIp` chỉ validate "IP hợp lệ", KHÔNG bắt buộc thuộc field subnet → ai có fleet token + trên overlay forward tới bất kỳ host:80/:554 của LAN khách. | `main.go#handleCamera` | ✅ DONE (Nebula agent): `localIPInField()` chặn `localIp ∉ FieldSubnet` (403); fail-open + WARN nếu chưa cấu hình subnet. TODO mirror sang ZT agent nếu còn dùng. |
 | G2 | 🔴 | **Fleet token DÙNG CHUNG cả fleet.** Trộm 1 Pi / đọc 1 SD = điều khiển TẤT CẢ gateway; không revoke lẻ được. | `config.go` `EDGE_AGENT_TOKEN` | Per-gateway token (hoặc ít nhất rotate được) |
 | G3 | 🔴 | **`/enroll` no-auth → hijack gateway CHƯA adopt.** Van 409 chỉ chặn khi đã có camera; Pi mới cắm bị trỏ sang ZeroTier network của kẻ tấn công. | `main.go#handleEnroll` | Khoá `/enroll`: nút vật lý / cửa sổ thời gian sau boot / PIN ngắn |
 | G4 | 🟠 | **Agent chạy `root` + `ip_nonlocal_bind=1` global.** RCE = root. | `nvr-edge-agent.service`, `install.sh` | Hạ quyền: cap `NET_BIND_SERVICE` + sudoers hẹp |
 | G5 | 🟠 | **API bind `0.0.0.0`** → `/identity` rò recon ra cả LAN field. | `config.go#listenAddrs` | Giới hạn field/định danh; giảm thông tin `/identity` |
-| G6 | 🟠 | **nginx config injection qua tên camera.** `c.Name` ghi thẳng vào nginx conf, không lọc newline. | `nginx.go#renderStreamConf` | Lọc newline/ký tự lạ trong `Name` |
+| G6 | ✅ | **nginx config injection qua tên camera.** `c.Name` ghi thẳng vào nginx conf, không lọc newline. | `nginx.go#renderStreamConf` | ✅ DONE (Nebula agent): `sanitizeComment()` strip newline/control char + cap 64 ký tự. TODO mirror sang ZT agent nếu còn dùng. |
 | G7 | 🟠 | **Gateway nới rộng bề mặt tấn công của camera** (pass mặc định, ONVIF lộ info, CVE firmware) giờ với tới từ overlay. | (thiết kế) | Cứng hoá camera; G1 giảm phần lớn |
 
 > Trọng tâm thực dụng (nhà dân/cửa hàng): **G1 (pivot vào LAN khách) + G2 (token chung)** là rủi ro đáng tiền nhất.

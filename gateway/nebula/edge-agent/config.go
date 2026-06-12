@@ -23,6 +23,8 @@ type Config struct {
 	NginxStreamCfg string // EDGE_AGENT_NGINX_CONF (default /etc/nginx/stream.d/cameras.conf)
 	StateFile      string // EDGE_AGENT_STATE (default /var/lib/nvr-edge-agent/state.json)
 	PortPoolStart  int    // EDGE_AGENT_POOL_START (default 8080)
+
+	fieldNet *net.IPNet // parsed FieldSubnet; nil when unset/invalid (then the /camera whitelist is off)
 }
 
 func loadConfig() Config {
@@ -42,7 +44,27 @@ func loadConfig() Config {
 	if c.Token == "" {
 		log.Println("WARN: EDGE_AGENT_TOKEN empty — remote (non-loopback) requests will be rejected")
 	}
+	if c.FieldSubnet != "" {
+		if _, n, err := net.ParseCIDR(c.FieldSubnet); err == nil {
+			c.fieldNet = n
+		} else {
+			log.Printf("WARN: EDGE_AGENT_FIELD_SUBNET %q invalid (%v) — /camera localIp whitelist DISABLED", c.FieldSubnet, err)
+		}
+	} else {
+		log.Println("WARN: EDGE_AGENT_FIELD_SUBNET empty — /camera accepts any localIp (set it to whitelist the field LAN)")
+	}
 	return c
+}
+
+// localIPInField reports whether ip is inside the configured field subnet (G1: stop /camera being an
+// arbitrary port-forward into the customer LAN). Fails OPEN when no valid field subnet is configured —
+// loadConfig logs a warning in that case so the operator knows the whitelist is off.
+func (c Config) localIPInField(ip string) bool {
+	if c.fieldNet == nil {
+		return true
+	}
+	parsed := net.ParseIP(ip)
+	return parsed != nil && c.fieldNet.Contains(parsed)
 }
 
 // listenAddrs binds the wildcard 0.0.0.0 (covers loopback, the overlay IP for NVRs, AND the field LAN
