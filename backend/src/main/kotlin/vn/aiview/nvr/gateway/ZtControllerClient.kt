@@ -18,6 +18,11 @@ data class ZtMember(
 )
 
 /**
+ * ⚠️ LEGACY / FALLBACK — ZeroTier overlay. The locked production overlay is Nebula (see
+ * gateway/nebula-migration-va-trien-khai.md). This client stays compiled but dormant: it only
+ * activates when ZT_CONTROLLER_URL is set AND Nebula (NEBULA_CA_URL) is not. Kept as an escape
+ * hatch until Nebula is validated cross-internet (NAT traversal) on real hardware.
+ *
  * Talks to the self-hosted ZeroTier controller REST API on the HQ box (ZT_CONTROLLER_URL,
  * e.g. http://192.168.2.106:9993). This is what lets the admin authorize a brand-new gateway
  * straight from the NVR UI instead of opening ztncui: the controller already knows about a
