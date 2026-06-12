@@ -36,24 +36,29 @@ type Config struct {
 	// `-groups <this>`; gateways are signed `gateways`, so one gateway can't reach another's API.
 	NebulaNvrGroup string // NEBULA_FW_NVR_GROUP (e.g. "nvr")
 
+	// RenewThresholdDays: the agent auto-renews its cert (R1) once it's within this many days of expiry,
+	// so a fielded fleet never lapses. <=0 disables auto-renew.
+	RenewThresholdDays int // NEBULA_RENEW_THRESHOLD_DAYS (default 30)
+
 	fieldNet *net.IPNet // parsed FieldSubnet; nil when unset/invalid (then the /camera whitelist is off)
 }
 
 func loadConfig() Config {
 	c := Config{
-		Token:           os.Getenv("EDGE_AGENT_TOKEN"),
-		GatewayName:     envOr("EDGE_AGENT_NAME", hostnameOr("gateway")),
-		Port:            envInt("EDGE_AGENT_PORT", 9797),
-		OverlayIP:       os.Getenv("EDGE_AGENT_OVERLAY_IP"),
-		NebulaDir:       envOr("NEBULA_DIR", "/etc/nebula"),
-		NebulaCertBin:   envOr("NEBULA_CERT_BIN", "nebula-cert"),
-		NebulaIface:     envOr("NEBULA_IFACE", "nebula1"),
-		FieldSubnet:     os.Getenv("EDGE_AGENT_FIELD_SUBNET"),
-		NginxStreamCfg:  envOr("EDGE_AGENT_NGINX_CONF", "/etc/nginx/stream.d/cameras.conf"),
-		StateFile:       envOr("EDGE_AGENT_STATE", "/var/lib/nvr-edge-agent/state.json"),
-		PortPoolStart:   envInt("EDGE_AGENT_POOL_START", 8080),
-		EnrollWindowMin: envInt("EDGE_AGENT_ENROLL_WINDOW_MIN", 30),
-		NebulaNvrGroup:  os.Getenv("NEBULA_FW_NVR_GROUP"),
+		Token:              os.Getenv("EDGE_AGENT_TOKEN"),
+		GatewayName:        envOr("EDGE_AGENT_NAME", hostnameOr("gateway")),
+		Port:               envInt("EDGE_AGENT_PORT", 9797),
+		OverlayIP:          os.Getenv("EDGE_AGENT_OVERLAY_IP"),
+		NebulaDir:          envOr("NEBULA_DIR", "/etc/nebula"),
+		NebulaCertBin:      envOr("NEBULA_CERT_BIN", "nebula-cert"),
+		NebulaIface:        envOr("NEBULA_IFACE", "nebula1"),
+		FieldSubnet:        os.Getenv("EDGE_AGENT_FIELD_SUBNET"),
+		NginxStreamCfg:     envOr("EDGE_AGENT_NGINX_CONF", "/etc/nginx/stream.d/cameras.conf"),
+		StateFile:          envOr("EDGE_AGENT_STATE", "/var/lib/nvr-edge-agent/state.json"),
+		PortPoolStart:      envInt("EDGE_AGENT_POOL_START", 8080),
+		EnrollWindowMin:    envInt("EDGE_AGENT_ENROLL_WINDOW_MIN", 30),
+		NebulaNvrGroup:     os.Getenv("NEBULA_FW_NVR_GROUP"),
+		RenewThresholdDays: envInt("NEBULA_RENEW_THRESHOLD_DAYS", 30),
 	}
 	if c.Token == "" {
 		log.Println("WARN: EDGE_AGENT_TOKEN empty — remote (non-loopback) requests will be rejected")

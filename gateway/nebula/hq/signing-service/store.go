@@ -33,15 +33,17 @@ func (t *Token) expired() bool { return t.ExpiresAt != 0 && time.Now().Unix() > 
 // to click "Cấp phép" on the NVR) and becomes "signed" once approved — at which point CertPem/CaPem
 // are filled and the agent (which has been polling) picks them up.
 type Request struct {
-	Token     string `json:"token"`
-	Name      string `json:"name"`      // gateway name → nebula cert name
-	PubPem    string `json:"pubPem"`    // the gateway's X25519 public key (private key stays on the Pi)
-	OverlayIP string `json:"overlayIp"` // assigned overlay IP (without mask), e.g. 10.10.20.12
-	Status    string `json:"status"`    // "pending" | "signed"
-	CertPem   string `json:"certPem,omitempty"`
-	CaPem     string `json:"caPem,omitempty"`
-	CreatedAt int64  `json:"createdAt"`
-	SignedAt  int64  `json:"signedAt,omitempty"`
+	Token       string `json:"token"`
+	Name        string `json:"name"`      // gateway name → nebula cert name
+	PubPem      string `json:"pubPem"`    // the gateway's X25519 public key (private key stays on the Pi)
+	OverlayIP   string `json:"overlayIp"` // assigned overlay IP (without mask), e.g. 10.10.20.12
+	Status      string `json:"status"`    // "pending" | "signed"
+	CertPem     string `json:"certPem,omitempty"`
+	CaPem       string `json:"caPem,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"` // signed cert fingerprint (for V3 blocklist on revoke)
+	Revoked     bool   `json:"revoked,omitempty"`     // admin revoked → /renew + re-/enroll refused
+	CreatedAt   int64  `json:"createdAt"`
+	SignedAt    int64  `json:"signedAt,omitempty"`
 }
 
 type stateData struct {
@@ -140,6 +142,9 @@ func (s *Store) enroll(tokenStr, name, pubPem string) (*Request, *Token, error) 
 		return nil, nil, errExpiredToken
 	}
 	if r := s.d.Requests[tokenStr]; r != nil {
+		if r.Revoked {
+			return nil, nil, errRevoked
+		}
 		// Already enrolled with this token — return the existing request (idempotent for polling).
 		// Refresh the pubkey/name in case the agent regenerated before approval.
 		if r.Status == "pending" {
@@ -189,16 +194,31 @@ func (s *Store) listPending() []*Request {
 	return out
 }
 
-// markSigned stores the signed cert + ca chain against the request and flips it to "signed".
-func (s *Store) markSigned(tokenStr, certPem, caPem string) error {
+// markSigned stores the signed cert + ca chain (+ fingerprint) against the request and flips it to
+// "signed". Used by both the initial approve and a renewal (re-sign).
+func (s *Store) markSigned(tokenStr, certPem, caPem, fingerprint string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r := s.d.Requests[tokenStr]
 	if r == nil {
 		return errNoRequest
 	}
-	r.CertPem, r.CaPem, r.Status, r.SignedAt = certPem, caPem, "signed", time.Now().Unix()
+	r.CertPem, r.CaPem, r.Fingerprint, r.Status, r.SignedAt = certPem, caPem, fingerprint, "signed", time.Now().Unix()
 	return s.saveLocked()
+}
+
+// markRevoked flags a gateway's request revoked (so /renew + re-/enroll refuse it) and returns the
+// fingerprint of its last signed cert (for the lighthouse blocklist). Returns "" if unknown.
+func (s *Store) markRevoked(tokenStr string) (fingerprint string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.d.Requests[tokenStr]
+	if r == nil {
+		return "", false
+	}
+	r.Revoked = true
+	_ = s.saveLocked()
+	return r.Fingerprint, true
 }
 
 func (s *Store) reject(tokenStr string) bool {

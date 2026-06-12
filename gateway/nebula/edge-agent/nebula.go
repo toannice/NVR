@@ -192,6 +192,20 @@ func (c Config) certExpiry() string {
 	return parsed.Details.NotAfter
 }
 
+// certDaysLeft returns whole days until the current cert expires, or a large sentinel when the expiry
+// is unknown/unparseable (so a missing value never triggers a renew). Used by the R1 auto-renew loop.
+func (c Config) certDaysLeft() int {
+	exp := c.certExpiry()
+	if exp == "" {
+		return 1 << 30
+	}
+	t, err := time.Parse(time.RFC3339, exp)
+	if err != nil {
+		return 1 << 30
+	}
+	return int(time.Until(t).Hours() / 24)
+}
+
 func serviceActive(unit string) bool {
 	out, _ := exec.Command("systemctl", "is-active", unit).Output()
 	return strings.TrimSpace(string(out)) == "active"
