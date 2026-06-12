@@ -289,6 +289,12 @@ func (s *server) handleCamera(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid localIp"})
 			return
 		}
+		// G1: only proxy to hosts on the field LAN — never let a fleet-token holder turn the gateway
+		// into an arbitrary port-forward into the customer's network (router/NAS/etc).
+		if !s.cfg.localIPInField(req.LocalIP) {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "localIp not in field subnet " + s.cfg.FieldSubnet})
+			return
+		}
 		overlayIP := s.cfg.resolveOverlayIP()
 		if overlayIP == "" {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "overlay IP not available yet"})
