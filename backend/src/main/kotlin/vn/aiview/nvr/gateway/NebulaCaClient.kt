@@ -28,6 +28,15 @@ data class NebulaMintResult(
     val lighthouseOverlayIp: String = "",
 )
 
+/** HQ signing-service `/healthz` payload (no auth) — lets the NVR/watchdog tell if the control plane is alive. */
+@Serializable
+data class NebulaHqHealth(
+    val ok: Boolean = false,
+    val lighthouse: String = "",
+    val pending: Int = 0,
+    val uptimeSec: Long = 0,
+)
+
 /**
  * Talks to the HQ Nebula signing service (NEBULA_CA_URL, e.g. http://203.0.113.10:9443) — the
  * ZeroTier→Nebula replacement for [ZtControllerClient]. Instead of authorizing a member on the
@@ -54,6 +63,25 @@ object NebulaCaClient {
     fun isConfigured(): Boolean = cfg() != null
 
     private fun HttpRequestBuilder.bearer(token: String) { header("Authorization", "Bearer $token") }
+
+    /**
+     * Poll the HQ signing service `/healthz` (no auth) so the NVR knows whether the control plane is up.
+     * Only needs [GatewayConfig.nebulaCaUrl] (not the admin token), so it works even before the sign
+     * token is set. Returns null on any failure (unreachable / bad payload) — caller treats null as down.
+     */
+    suspend fun health(): NebulaHqHealth? {
+        val url = GatewayConfig.nebulaCaUrl?.trimEnd('/') ?: return null
+        return withTimeoutOrNull(6_000) {
+            runCatching {
+                val resp = http.get("$url/healthz")
+                if (!resp.status.isSuccess()) null
+                else json.decodeFromString(NebulaHqHealth.serializer(), resp.bodyAsText())
+            }.getOrElse {
+                AppLogger.warn(AppLogger.Module.SYSTEM, "GATEWAY", "NEBULA_HEALTHZ_FAIL", it.message ?: "")
+                null
+            }
+        }
+    }
 
     /** Gateways that submitted an enrollment and await admin approval (NVR "Chờ cấp phép"). */
     suspend fun listPending(): List<NebulaPending>? {

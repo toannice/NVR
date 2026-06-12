@@ -168,6 +168,30 @@ object GatewayService {
 
     fun nebulaConfigured(): Boolean = NebulaCaClient.isConfigured()
 
+    /** Health of the overlay control plane (HQ), for the Gateway tab banner + watchdog alerts. On
+     *  Nebula this polls the signing service /healthz; on ZeroTier/none there is no such concept. */
+    @Serializable
+    data class HqStatus(
+        val configured: Boolean,
+        val overlay: String,            // "nebula" | "zerotier" | "none"
+        val reachable: Boolean,
+        val lighthouse: String? = null,
+        val pending: Int = 0,
+        val uptimeSec: Long = 0,
+    )
+
+    suspend fun hqStatus(): HqStatus {
+        if (!GatewayConfig.nebulaEnabled) {
+            val zt = ZtControllerClient.isConfigured()
+            return HqStatus(configured = zt, overlay = if (zt) "zerotier" else "none", reachable = false)
+        }
+        val h = NebulaCaClient.health()
+        return HqStatus(
+            configured = true, overlay = "nebula", reachable = h?.ok == true,
+            lighthouse = h?.lighthouse?.ifBlank { null }, pending = h?.pending ?: 0, uptimeSec = h?.uptimeSec ?: 0,
+        )
+    }
+
     /** Gateways that enrolled on the HQ signing service and await admin "Cấp phép" (Nebula). */
     suspend fun listPendingNebula(): List<NebulaPending> = NebulaCaClient.listPending() ?: emptyList()
 
