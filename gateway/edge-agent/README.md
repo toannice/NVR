@@ -1,7 +1,7 @@
 # nvr-edge-agent
 
 Passive L4 provisioning agent for a field **gateway** (Raspberry Pi) on the ZeroTier mesh.
-Part of the gateway plan — see [`../4-6-to-do-jobs.md`](../4-6-to-do-jobs.md) (Plan A).
+Part of the gateway plan — see [`../legacy/4-6-to-do-jobs.md`](../legacy/4-6-to-do-jobs.md) (Plan A).
 
 ## What it does (and deliberately does NOT)
 

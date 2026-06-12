@@ -1,12 +1,11 @@
-# gateway/nebula/ — Nebula overlay (ZeroTier→Nebula migration, in progress)
+# gateway/nebula/ — Nebula overlay (ACTIVE / locked production overlay)
 
-Parallel implementation of the gateway overlay on **Nebula (MIT)** instead of ZeroTier, to unblock
-commercialization (license + sovereignty). Design + rationale + runbook:
-[`../nebula-migration-va-trien-khai.md`](../nebula-migration-va-trien-khai.md).
+The gateway overlay runs on **Nebula (MIT)** — the locked production choice (license + sovereignty).
+Design + rationale + runbook: [`../nebula-migration-va-trien-khai.md`](../nebula-migration-va-trien-khai.md).
 
-> The ZeroTier implementation in `../edge-agent/` + `../hq-controller/` is **left untouched and still
-> works**. This folder is the Nebula sibling. The NVR-side Kotlin is edited **in place** in `backend/`
-> (additive, gated by `NEBULA_CA_URL`), so ZeroTier keeps working when Nebula env is unset.
+> The ZeroTier agent in `../edge-agent/` stays compiled as a **dormant fallback** (its HQ-controller
+> scripts + docs were archived to `../legacy/`). The NVR-side Kotlin is edited **in place** in
+> `backend/` (additive, gated by `NEBULA_CA_URL`): ZeroTier only activates when Nebula env is unset.
 
 ## What's here
 

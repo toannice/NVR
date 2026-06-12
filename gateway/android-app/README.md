@@ -26,4 +26,4 @@ Kotlin 2.0.21 · Jetpack Compose (Material 3) · OkHttp · kotlinx.serialization
 - Camera count comes from `/identity.cameraCount` (proxied cameras). `/discovery` is token-gated on the
   agent, so the app does not call it.
 - Admin still does two remote clicks (approve on ztncui, adopt camera on NVR) — by design (Tier 0).
-- See `../../specs/004-gateway-onboarding/plan.md` (Phase 2) and `../edge-agent/main.go` for the agent contract.
+- See `../../specs/legacy/004-gateway-onboarding-zerotier/plan.md` (Phase 2) and `../edge-agent/main.go` for the agent contract.

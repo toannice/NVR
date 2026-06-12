@@ -60,6 +60,10 @@ gateway/nebula/edge-agent/nvr-edge-agent
 gateway/edge-agent/nvr-edge-agent
 config/config (copy).yml
 
+# Release doc-generator source-code bundles (huge zips — never commit)
+docs/**/bundle/ma_nguon/
+**/bundle/ma_nguon/
+
 # Gradle/Kotlin build output (compiled artifacts — never commit)
 backend/build/
 backend/.gradle/
