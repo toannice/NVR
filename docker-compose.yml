@@ -60,7 +60,7 @@ services:
   # ─── NVR Wrapper (Our App) ─────────────────────────────────
   nvr-wrapper:
     container_name: nvr-wrapper
-    image: ghcr.io/toannice/nvr:${WRAPPER_TAG:-staging} # Sử dụng GHCR image để OTA hoạt động
+    image: ghcr.io/toannice/nvr:${WRAPPER_TAG:-latest} # GHCR image để OTA. latest=stable(main), staging=beta. Prod để mặc định latest.
     # build: .
     restart: unless-stopped
     network_mode: "host" # Required for ONVIF multicast (WS-Discovery) to work
@@ -150,6 +150,7 @@ services:
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - HOSTNAME=${HOSTNAME:-nvr-edge-node}
       - TZ=${TZ:-Asia/Ho_Chi_Minh}
+      - WRAPPER_TAG=${WRAPPER_TAG:-latest}  # OTA target tag — watchdog.yml ${WRAPPER_TAG} resolves to this (update + rollback dùng chung)
     depends_on:
       - nvr-wrapper
 

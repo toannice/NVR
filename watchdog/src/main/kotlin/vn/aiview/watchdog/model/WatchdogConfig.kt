@@ -59,9 +59,13 @@ data class WatchdogConfig(
 
 fun loadConfig(path: String): WatchdogConfig {
     val yaml = Yaml()
+    // WRAPPER_TAG controls the OTA target tag (latest=stable / staging=beta). Single source of
+    // truth: it is injected into the watchdog container from .env in docker-compose.yml, and both
+    // the forward update and the rollback read the resolved image — no hardcoded tag anywhere.
     val rawText = File(path).readText()
         .replace("\${TELEGRAM_BOT_TOKEN}", System.getenv("TELEGRAM_BOT_TOKEN") ?: "")
         .replace("\${TELEGRAM_CHAT_ID}", System.getenv("TELEGRAM_CHAT_ID") ?: "")
+        .replace("\${WRAPPER_TAG}", System.getenv("WRAPPER_TAG") ?: "latest")
 
     @Suppress("UNCHECKED_CAST")
     val raw = yaml.load<Map<String, Any>>(rawText)

@@ -108,8 +108,11 @@ class UpdateManager(
                 // Dừng và xoá lỗi
                 docker.exec("docker", "rm", "-f", containerName)
                 
-                // Rollback an toàn: Tag ID cũ đè lên tag hiện tại (vd :staging) để compose up dùng lại bản cũ
-                val targetImage = config.containers.firstOrNull { it.name == containerName }?.image ?: "ghcr.io/toannice/nvr:staging"
+                // Rollback an toàn: Tag ID cũ đè lên tag hiện tại (đã resolve từ WRAPPER_TAG) để compose up
+                // dùng lại bản cũ. KHÔNG hardcode tag — fallback theo đúng WRAPPER_TAG (mặc định latest).
+                val resolvedTag = System.getenv("WRAPPER_TAG") ?: "latest"
+                val targetImage = config.containers.firstOrNull { it.name == containerName }?.image
+                    ?: "ghcr.io/toannice/nvr:$resolvedTag"
                 docker.exec("docker", "tag", oldImageId, targetImage)
                 
                 // Chạy lại với cấu hình chuẩn
