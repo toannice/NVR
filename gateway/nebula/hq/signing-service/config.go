@@ -33,6 +33,12 @@ type Config struct {
 	// LighthouseOverlayIP is the lighthouse's address ON the overlay (e.g. 10.10.20.1) — goes into the
 	// agent's lighthouse.hosts + static_host_map key.
 	LighthouseOverlayIP string // NEBULA_LIGHTHOUSE_OVERLAY_IP (default 10.10.20.1)
+
+	// ReservedIPs are overlay IPs the allocator must NEVER hand to a gateway because they belong to
+	// infra nodes signed OUTSIDE this service (e.g. the NVR at 10.10.20.2, set up by hand with
+	// `nebula-cert sign`). Without this, the first gateway of a pool collides with the NVR. Comma-list,
+	// from NEBULA_RESERVED_IPS. The lighthouse (.1), network (.0) and broadcast (.255) are always skipped.
+	ReservedIPs []string // NEBULA_RESERVED_IPS, e.g. "10.10.20.2"
 }
 
 func loadConfig() Config {
@@ -44,6 +50,7 @@ func loadConfig() Config {
 		AdminToken:          loadSecret("NEBULA_SIGN_TOKEN", "NEBULA_SIGN_TOKEN_FILE"),
 		Lighthouse:          os.Getenv("NEBULA_LIGHTHOUSE"),
 		LighthouseOverlayIP: envOr("NEBULA_LIGHTHOUSE_OVERLAY_IP", "10.10.20.1"),
+		ReservedIPs:         splitCSV(os.Getenv("NEBULA_RESERVED_IPS")),
 	}
 	if c.AdminToken == "" {
 		log.Println("WARN: NEBULA_SIGN_TOKEN empty — admin endpoints (mint/approve) will reject every call")
@@ -52,6 +59,17 @@ func loadConfig() Config {
 		log.Println("WARN: NEBULA_LIGHTHOUSE empty — agents cannot learn where the lighthouse is")
 	}
 	return c
+}
+
+// splitCSV parses a comma-separated env value into a trimmed, non-empty slice.
+func splitCSV(v string) []string {
+	out := []string{}
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func envOr(k, def string) string {

@@ -27,7 +27,7 @@ type server struct {
 func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
 	cfg := loadConfig()
-	st, err := loadStore(cfg.StateFile)
+	st, err := loadStore(cfg.StateFile, cfg.ReservedIPs)
 	if err != nil {
 		log.Fatalf("load state: %v", err)
 	}

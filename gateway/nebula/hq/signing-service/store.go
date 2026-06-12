@@ -50,13 +50,20 @@ type stateData struct {
 }
 
 type Store struct {
-	mu   sync.Mutex
-	path string
-	d    stateData
+	mu       sync.Mutex
+	path     string
+	d        stateData
+	reserved map[string]bool // overlay IPs never auto-allocated (infra nodes signed outside this service)
 }
 
-func loadStore(path string) (*Store, error) {
-	s := &Store{path: path, d: stateData{Tokens: map[string]*Token{}, Requests: map[string]*Request{}}}
+func loadStore(path string, reservedIPs []string) (*Store, error) {
+	reserved := map[string]bool{}
+	for _, ip := range reservedIPs {
+		if p := net.ParseIP(ip); p != nil {
+			reserved[p.String()] = true // canonicalize so it matches allocIPLocked's ip.String()
+		}
+	}
+	s := &Store{path: path, reserved: reserved, d: stateData{Tokens: map[string]*Token{}, Requests: map[string]*Request{}}}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -217,6 +224,9 @@ func (s *Store) allocIPLocked(cidr string) (string, error) {
 		return "", err
 	}
 	used := map[string]bool{}
+	for ip := range s.reserved { // infra IPs (e.g. the NVR) signed outside this service
+		used[ip] = true
+	}
 	for _, r := range s.d.Requests {
 		used[r.OverlayIP] = true
 	}
