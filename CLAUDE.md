@@ -3,7 +3,8 @@
 ## Repository
 - **GitHub:** https://github.com/toannice/NVR.git
 - **Main branch:** `main` · **Active feature branch:** `003-cloud-data-sync`
-- **Active plan:** `specs/003-cloud-data-sync/plan.md`
+- **Active plan:** `specs/003-cloud-data-sync/plan.md` (cloud sync — mostly DONE)
+- **Principles & gates:** [`.specify/memory/constitution.md`](./.specify/memory/constitution.md) · **Doc map:** [`docs/INDEX.md`](./docs/INDEX.md)
 - **Working directory on host:** `/home/toan/my-nvr`
 
 ---
@@ -22,17 +23,36 @@ mosquitto (MQTT) → frigate (NVR engine) → nvr-wrapper (Kotlin/React app)
 |-----------|-------|------|---------|
 | `mosquitto` | `eclipse-mosquitto:2` | 1883, 9001 | MQTT broker |
 | `frigate` | `ghcr.io/blakeblackshear/frigate:0.16.3` | 5000, 8554, 1984 | NVR engine, chốt version, không OTA |
-| `nvr-wrapper` | `nvr-wrapper:latest` (override) | 3000 (host) | App chính (Kotlin backend + React frontend) |
-| `nvr-watchdog` | build local `./watchdog` | — | Self-healing + OTA |
+| `nvr-wrapper` | prod: `ghcr.io/toannice/nvr:${WRAPPER_TAG:-latest}` · dev: `nvr-wrapper:latest` (override) | 3000 (host) | App chính (Kotlin backend + React frontend) |
+| `nvr-watchdog` | build local `./watchdog` | — | Self-healing + OTA (luôn build local, KHÔNG OTA chính nó) |
 | `nvr-nginx` | `nginx:stable-alpine` | 443 (host) | HTTPS gateway |
 
 ---
 
 ## Build & Deploy
 
-### CRITICAL: docker-compose.override.yml
-`docker-compose.override.yml` auto-merges và override `nvr-wrapper` thành `image: nvr-wrapper:latest` + `build: .`.
-**LUÔN dùng `docker compose build`** — KHÔNG dùng `docker build -t ghcr.io/toannice/nvr:staging .` (build sai tag).
+### Triển khai máy mới (production) — `install.sh`
+```bash
+git clone https://github.com/toannice/NVR.git my-nvr && cd my-nvr
+sudo ./install.sh           # .env từ template + TLS cert + secrets + docker login GHCR + compose pull/up
+#   sudo ./install.sh --check   # chỉ kiểm tra, không đổi gì
+```
+`install.sh` **kéo image từ GHCR** (không build). Nó tự sinh `.env` (từ `.env.template`),
+self-signed cert (`nginx/server.{crt,key}`), và `secrets/*` nếu thiếu. Máy prod KHÔNG có
+`docker-compose.override.yml` → compose dùng `ghcr.io/toannice/nvr:${WRAPPER_TAG:-latest}`.
+
+### OTA channel — `WRAPPER_TAG` (1 nguồn sự thật)
+| `WRAPPER_TAG` | Kênh | Build từ |
+|---|---|---|
+| `latest` | **stable** (mặc định prod) | git `main` |
+| `staging` | beta / máy test | git `staging` |
+| `vX.Y.Z` | pin cứng 1 bản | git tag `v*.*.*` |
+Watchdog OTA + rollback đều đọc đúng tag này (hết hardcode `staging`). Muốn beta: đổi 1 dòng `.env`.
+
+### CRITICAL: docker-compose.override.yml (chỉ máy DEV)
+`docker-compose.override.yml` **git-ignored** — chỉ tồn tại trên máy dev, auto-merge để override
+`nvr-wrapper` thành `image: nvr-wrapper:latest` + `build: .` (build từ source). Máy prod KHÔNG có file
+này nên compose kéo GHCR image. **Trên dev LUÔN dùng `docker compose build`** — KHÔNG `docker build -t ...`.
 
 ### Build image nvr-wrapper (app chính)
 ```bash
@@ -69,7 +89,8 @@ Stage 3: eclipse-temurin:21-jre-alpine → runtime image
 
 | Path | Mô tả |
 |------|-------|
-| `frontend/src/App.tsx` | Toàn bộ React UI (file lớn, ~3000+ dòng) |
+| `frontend/src/App.tsx` | React shell + orchestration (~626 dòng; UI đã tách ra `components/`) |
+| `frontend/src/components/*.tsx` | UI tách từ App.tsx: `LiveView`, `PlaybackView`, `SetupView`, `Header`, `PtzControls`, `CameraModals`, `IntegrationPanel`... |
 | `frontend/src/components/PatternLockScreen.tsx` | Pattern lock, setup, Gmail OTP flow |
 | `frontend/src/components/GatewaysPanel.tsx` | Web UI "Gateway" tab: discover → approve → adopt |
 | `backend/.../routes/CameraRouting.kt` | Local Web UI camera CRUD; delegates persistence to `CameraService` |
@@ -87,11 +108,14 @@ Stage 3: eclipse-temurin:21-jre-alpine → runtime image
 | `backend/.../routes/GatewayRouting.kt` | `/api/gateways*` — list/scan/approve/discover/adoptable/adopt |
 | `backend/.../routes/LockRouting.kt` | Pattern lock API, OTP verify endpoint |
 | `backend/.../routes/OnvifRouting.kt` | Scan ONVIF, thêm camera qua ONVIF, PTZ |
+| `backend/.../routes/IntegrationRouting.kt` | AiView Box integration v1.1: public contract + admin (enable/creds) |
+| `backend/.../services/IntegrationService.kt` | Box integration settings (`IntegrationSettings` table, bcrypt creds, độc lập pattern lock) |
+| `backend/.../services/StreamOnlineTracker.kt` | Suy ra camera `online` từ go2rtc active producers (`Go2RtcClient.liveStreamNames`) |
 | `backend/.../services/EmailService.kt` | Gmail SMTP, OTP send/peek/verify với SQLite |
 | `backend/.../models/Schema.kt` | DB schema: LockConfig, OtpTokens, AIEvents, Cameras... |
 | `backend/.../plugins/Databases.kt` | SQLite init, createMissingTablesAndColumns |
 | `backend/.../plugins/Security.kt` | hashString (SHA-256), hashPattern (bcrypt), verifyPattern |
-| `gateway/` | All gateway-side artifacts (Pi agent, enroll app, ZeroTier controller, docs). Xem `gateway/README.md` |
+| `gateway/` | All gateway-side artifacts (Pi agent, enroll app, Nebula control plane, docs). Xem `gateway/README.md`. ZeroTier-era docs ở `gateway/legacy/` |
 | `gateway/edge-agent/` | Go agent on Pi — passive L4 proxy (nginx stream), WS-Discovery, field web page |
 | `config/config.yml` | Frigate config (cameras, go2rtc, ffmpeg global) |
 | `config/watchdog.yml` | Watchdog config (thresholds, OTA, schedule) |
@@ -191,7 +215,7 @@ Web UI điều khiển PTZ qua `/api/cameras/{slug}/ptz/{capabilities,move,stop}
 > Camera zoom-only thật (Bkav P200-0802N): để `Tự động` hoặc `Chỉ Zoom`. Gửi PanTilt → fault.
 
 ### Gateway Camera Provisioning (Plan A) — ✅ DONE 2026-06-04
-> Kế hoạch + verify: **[gateway/4-6-to-do-jobs.md](./gateway/4-6-to-do-jobs.md)**. Vận hành: **[gateway/gateway_setup.md](./gateway/gateway_setup.md)**.
+> Kế hoạch + verify (LEGACY, ZeroTier-era): **[gateway/legacy/4-6-to-do-jobs.md](./gateway/legacy/4-6-to-do-jobs.md)**. Vận hành: **[gateway/gateway_setup.md](./gateway/gateway_setup.md)**. Overlay hiện hành: **[gateway/nebula-migration-va-trien-khai.md](./gateway/nebula-migration-va-trien-khai.md)**.
 
 Verify end-to-end trên Pi thật: NVR auto-scan subnet ZeroTier → phát hiện gateway (passive, **không push**) → admin approve → adopt camera: agent cấp cổng nginx-stream onvif/rtsp, NVR probe ONVIF qua proxy, rewrite RTSP host → ztIP, ghi Frigate/go2rtc, **live view OK**. Multi-NVR; Pi không giữ creds (admin gõ lúc approve); fleet token dùng chung (`secrets/edge_agent_token`).
 
@@ -296,8 +320,9 @@ curl -s -X POST "http://localhost:1984/api/webrtc?src=1_main" \
 | 5 | Frigate restart feedback to UI | ✅ |
 | 6 | Gmail OTP persistence (SQLite) | ✅ |
 | 7 | Docker secrets for GMAIL_APP_PASSWORD | ✅ |
-| 8 | Unified Cameras source of truth (drop CloudCameras drift) | ✅ (003) |
+| 8 | Unified Cameras source of truth (drop CloudCameras drift) | ✅ (003) — bảng `cloud_cameras` còn để rollback, xóa sau 1 release (xem constitution § Deferred cleanup) |
 | 9 | Passive edge gateway (multi-NVR, no creds on Pi, fleet token) | ✅ (4-6 Plan A) |
+| 10 | OTA 1 nguồn sự thật (`WRAPPER_TAG`, hết hardcode `staging`) | ✅ |
 
 > Gateway security backlog (G1–G7, PENDING) → `gateway/commercialization-security-notes.md`.
 

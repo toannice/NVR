@@ -4,7 +4,7 @@ How a field **gateway** (Raspberry Pi) lets one or more NVRs reach cameras on a 
 fully auto and with the Pi staying a dumb, low-RAM L4 proxy.
 
 > Companion to [`connection_to_server.md`](./connection_to_server.md) (cloud link) and
-> [`4-6-to-do-jobs.md`](./4-6-to-do-jobs.md) (the plan). Agent code: [`edge-agent/`](./edge-agent/).
+> [`4-6-to-do-jobs.md`](./legacy/4-6-to-do-jobs.md) (the plan). Agent code: [`edge-agent/`](./edge-agent/).
 
 ## Mental model
 
@@ -144,5 +144,5 @@ ONVIF/PTZ/live-view code works unchanged** — the gateway layer only computes t
 | `curl ZTip:9797/health` 401 from NVR host | `EDGE_AGENT_TOKEN` on the Pi ≠ `secrets/edge_agent_token` on the NVR. |
 | Adopt fails "agent did not allocate ports" | nginx not installed / `nginx -t` failing on the Pi. `nginx -t` on the Pi; ensure `stream{}` include present. |
 | Live view black for gateway camera | camera offline on field LAN, or RTSP not TCP. go2rtc uses `#tcp` already; check the camera is reachable from the Pi: `curl <localIp>:554`. |
-| PTZ d-pad missing on a real PTZ cam | known false-negative for cams that reject ONVIF `ContinuousMove` (e.g. OSSD2MPVF33XPTZAI). Set **Kiểu PTZ** manually in Edit Camera. See `4-6-to-do-jobs.md` risks. |
+| PTZ d-pad missing on a real PTZ cam | known false-negative for cams that reject ONVIF `ContinuousMove` (e.g. OSSD2MPVF33XPTZAI). Set **Kiểu PTZ** manually in Edit Camera. See `legacy/4-6-to-do-jobs.md` risks. |
 | Proxies gone after Pi reboot | should auto-restore from `/var/lib/nvr-edge-agent/state.json`; check `systemctl status nvr-edge-agent` and `nginx -t`. |

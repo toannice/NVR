@@ -488,7 +488,7 @@ object CameraService {
      * Best-effort empirical PTZ detection (4-6 Plan A). Sends one tiny PanTilt ContinuousMove + Stop
      * through the (proxied) ONVIF endpoint and inspects the SOAP response: a clean response ⇒ the
      * camera accepts ONVIF pan/tilt → ptz_mode="full"; a fault (e.g. "speed out of bounds") ⇒ "zoom".
-     * NEVER overrides a manual ptz_mode the user already set. Caveat documented in 4-6-to-do-jobs.md:
+     * NEVER overrides a manual ptz_mode the user already set. Caveat documented in gateway/legacy/4-6-to-do-jobs.md:
      * some hardware-PTZ cameras (e.g. OSSD2MPVF33XPTZAI) reject ONVIF ContinuousMove and get classified
      * zoom-only here — that is a known false-negative; the manual override remains the escape hatch.
      */

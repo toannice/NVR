@@ -1,73 +1,45 @@
-# React + TypeScript + Vite
+# NVR — Network Video Recorder
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Multi-service NVR for Ubuntu, deployed with Docker Compose. Frigate as the NVR engine,
+a Kotlin + React app (`nvr-wrapper`) on top, a self-healing watchdog with OTA, and an
+nginx HTTPS gateway. Cameras can be local (RTSP/ONVIF) or reached over a self-hosted
+**Nebula** overlay through passive edge gateways.
 
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```
+mosquitto (MQTT) → frigate (NVR engine) → nvr-wrapper (Kotlin/React app)
+                                                 ↑
+                        nvr-watchdog (OTA + self-heal) + nginx (HTTPS)
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Quick start
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+**Fresh machine (production):**
+```bash
+git clone https://github.com/toannice/NVR.git my-nvr && cd my-nvr
+sudo ./install.sh          # creates .env + TLS cert + secrets, logs into GHCR, pulls & starts
 ```
+Open `https://<host-ip>` (self-signed cert → accept the warning).
+
+**Developer loop (build from source):**
+```bash
+./run.sh --rebuild         # build nvr-wrapper locally, recreate, ensure nginx
+```
+
+## OTA channels
+
+The image tag is one variable, `WRAPPER_TAG` in `.env`:
+
+| `WRAPPER_TAG` | Channel | Built from |
+|---|---|---|
+| `latest` | stable (production default) | git `main` |
+| `staging` | beta / test boxes | git `staging` |
+| `vX.Y.Z` | pinned release | git tag `v*.*.*` |
+
+The watchdog auto-updates to (and rolls back within) this same tag — no hardcoded tags.
+
+## Documentation
+
+- **[docs/INDEX.md](docs/INDEX.md)** — full doc map
+- **[CLAUDE.md](CLAUDE.md)** — operational guide + codebase map + known issues
+- **[.specify/memory/constitution.md](.specify/memory/constitution.md)** — project principles & design gates
+- **[TONG_QUAN_DU_AN.md](TONG_QUAN_DU_AN.md)** — kiến trúc tổng quan (Vietnamese)

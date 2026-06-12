@@ -3,6 +3,12 @@
 > Mục đích: hiểu **toàn bộ** hệ thống — ai làm gì, bằng gì, công nghệ nào, viết bằng ngôn ngữ nào,
 > dữ liệu nào truyền đi đâu, edge case, sự cố, và khả năng port phần Pi sang phần cứng khác.
 > Cập nhật: 2026-06-06.
+>
+> ⚠️ **Lưu ý overlay:** tài liệu này mô tả tầng overlay theo **ZeroTier** (thời điểm 06/06). Từ
+> 2026-06-11 overlay đã chốt = **Nebula (MIT)** — ZeroTier chỉ còn là fallback dormant. Phần kiến trúc
+> overlay/gateway nên đọc kèm [`gateway/nebula-migration-va-trien-khai.md`](./gateway/nebula-migration-va-trien-khai.md)
+> và [`.specify/memory/constitution.md`](./.specify/memory/constitution.md) (§ P4). Tham chiếu nhanh
+> known-issues: bảng trong [`CLAUDE.md`](./CLAUDE.md).
 
 ---
 
@@ -391,10 +397,11 @@ bake để dành đến khi có phần cứng chính thức/phù hợp.
 
 - `CLAUDE.md` — chỉ dẫn dự án (chi tiết build/deploy, known issues).
 - `connection_to_server.md` — kết nối cloud + dc-bridge build steps + ONVIF/PTZ qua proxy.
-- `gateway/` — toàn bộ artifact phía gateway (agent Pi, app enroll, controller ZeroTier, docs); xem `gateway/README.md`.
+- `gateway/` — toàn bộ artifact phía gateway (agent Pi, app enroll, Nebula control plane, docs); xem `gateway/README.md`.
 - `gateway/gateway_setup.md` — hướng dẫn dựng gateway Pi.
-- `gateway/4-6-to-do-jobs.md` — kế hoạch Plan A + verify steps.
-- `specs/003-cloud-data-sync/plan.md`, `specs/004-gateway-onboarding/plan.md` — plan chi tiết.
+- `gateway/nebula-migration-va-trien-khai.md` — overlay hiện hành (Nebula) + runbook. (`gateway/legacy/` = docs ZeroTier cũ.)
+- `specs/003-cloud-data-sync/plan.md` — plan chi tiết. (`specs/legacy/004-gateway-onboarding-zerotier/` = plan ZeroTier cũ.)
+- `docs/INDEX.md` — bản đồ tài liệu · `.specify/memory/constitution.md` — nguyên tắc + design gates.
 - `gateway/edge-agent/README.md` — agent Go.
 - `claude_test.md` — test E2E.
 ```
