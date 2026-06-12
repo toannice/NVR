@@ -49,6 +49,11 @@ fun Route.gatewayRouting() {
             call.respond(GatewayService.listGateways())
         }
 
+        // Overlay control-plane (HQ) health for the tab banner — reachable? lighthouse? pending count?
+        get("/hq") {
+            call.respond(GatewayService.hqStatus())
+        }
+
         // Trigger an immediate subnet sweep (the scanner also runs periodically on its own).
         post("/scan") {
             val found = GatewayScanner.scanNow()
