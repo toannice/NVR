@@ -146,6 +146,7 @@ func (s *server) handleIdentity(w http.ResponseWriter, r *http.Request) {
 		"overlay":     "nebula",
 		"enrolled":    e.Token != "",
 		"signed":      e.Signed && st.hasCert,
+		"enrollOpen":  s.cfg.enrollWindowOpen(time.Since(startTime)),
 		"overlayIp":   st.overlayIP,
 		"nebulaUp":    st.serviceUp,
 		"lighthouse":  e.Lighthouse,
@@ -211,6 +212,16 @@ func (s *server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cur := s.state.enrollSnapshot()
+	// G3: only accept a NEW region within the post-boot window — stops someone on the field LAN from
+	// claiming a freshly-plugged, not-yet-adopted gateway. Re-submitting the SAME token (app retry) is
+	// always allowed; pointing at a different region after the window requires a reboot to reopen it.
+	sameToken := token == cur.Token && cur.Token != ""
+	if !sameToken && !s.cfg.enrollWindowOpen(time.Since(startTime)) {
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error": "enrollment window closed; reboot the gateway to enroll it",
+		})
+		return
+	}
 	// Safety valve (same as ZeroTier agent): refuse to re-point a gateway that already has cameras — the
 	// overlay IP would change and orphan the nginx proxies. Re-image / remove cameras first.
 	if token != cur.Token && len(s.state.snapshot()) > 0 {
