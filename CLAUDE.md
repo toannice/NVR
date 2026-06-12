@@ -2,12 +2,8 @@
 
 ## Repository
 - **GitHub:** https://github.com/toannice/NVR.git
-- **Main branch:** `main`
-- **Active feature branch:** `003-cloud-data-sync`
-- **Active feature plan:** `specs/003-cloud-data-sync/plan.md`
-<!-- SPECKIT START -->
-- **Plan:** `specs/003-cloud-data-sync/plan.md`
-<!-- SPECKIT END -->
+- **Main branch:** `main` · **Active feature branch:** `003-cloud-data-sync`
+- **Active plan:** `specs/003-cloud-data-sync/plan.md`
 - **Working directory on host:** `/home/toan/my-nvr`
 
 ---
@@ -22,12 +18,11 @@ mosquitto (MQTT) → frigate (NVR engine) → nvr-wrapper (Kotlin/React app)
                          nvr-watchdog (OTA + health) + nginx (HTTPS)
 ```
 
-### Services
 | Container | Image | Port | Ghi chú |
 |-----------|-------|------|---------|
 | `mosquitto` | `eclipse-mosquitto:2` | 1883, 9001 | MQTT broker |
 | `frigate` | `ghcr.io/blakeblackshear/frigate:0.16.3` | 5000, 8554, 1984 | NVR engine, chốt version, không OTA |
-| `nvr-wrapper` | `nvr-wrapper:latest` (override bởi docker-compose.override.yml) | 3000 (host) | App chính (Kotlin backend + React frontend) |
+| `nvr-wrapper` | `nvr-wrapper:latest` (override) | 3000 (host) | App chính (Kotlin backend + React frontend) |
 | `nvr-watchdog` | build local `./watchdog` | — | Self-healing + OTA |
 | `nvr-nginx` | `nginx:stable-alpine` | 443 (host) | HTTPS gateway |
 
@@ -37,7 +32,7 @@ mosquitto (MQTT) → frigate (NVR engine) → nvr-wrapper (Kotlin/React app)
 
 ### CRITICAL: docker-compose.override.yml
 `docker-compose.override.yml` auto-merges và override `nvr-wrapper` thành `image: nvr-wrapper:latest` + `build: .`.
-**LUÔN dùng `docker compose build`** — KHÔNG dùng `docker build -t ghcr.io/toannice/nvr:staging .` vì sẽ build sai tag.
+**LUÔN dùng `docker compose build`** — KHÔNG dùng `docker build -t ghcr.io/toannice/nvr:staging .` (build sai tag).
 
 ### Build image nvr-wrapper (app chính)
 ```bash
@@ -45,39 +40,25 @@ mosquitto (MQTT) → frigate (NVR engine) → nvr-wrapper (Kotlin/React app)
 ./run.sh --rebuild
 ```
 ```bash
-# Hoặc thủ công — phải chạy từ /home/toan/my-nvr (project root)
-# VÒNG LẶP THƯỜNG (nhanh): KHÔNG dùng --no-cache. Dockerfile đã tách copy deps trước,
-# copy source sau → đổi code sẽ tự bust đúng tầng cần; npm install + gradle deps tái dùng.
-# BuildKit cache mount (Dockerfile) giữ cache npm/gradle giữa các lần build → chỉ recompile.
+# Hoặc thủ công — phải chạy từ /home/toan/my-nvr (project root).
+# Vòng lặp thường (nhanh): KHÔNG dùng --no-cache. Dockerfile tách copy deps trước,
+# source sau → đổi code tự bust đúng tầng; npm install + gradle deps tái dùng (BuildKit cache mount).
 docker compose build nvr-wrapper
 docker compose up -d --force-recreate --no-deps nvr-wrapper
-docker compose up -d nginx   # nginx không tự start khi nvr-wrapper recreate
+docker compose up -d nginx   # nginx KHÔNG tự start khi nvr-wrapper recreate
 ```
-> Chỉ dùng `--no-cache` khi nghi cache bẩn thật sự: đổi base image, sửa Dockerfile, hoặc build ra
-> code cũ bất thường. Vòng lặp sửa code hằng ngày KHÔNG cần `--no-cache` (đó là đường chậm).
+> Chỉ dùng `--no-cache` khi cache bẩn thật: đổi base image, sửa Dockerfile, hoặc build ra code cũ bất thường.
 
-### Build watchdog
+### Khác
 ```bash
-docker compose up -d --build nvr-watchdog
+docker compose up -d --build nvr-watchdog        # build watchdog
+docker compose up -d && docker compose up -d nginx   # khởi động toàn bộ stack (nginx start riêng)
+curl -X POST http://localhost:5000/api/restart   # restart Frigate (áp config mới)
 ```
 
-### Khởi động toàn bộ stack
-```bash
-docker compose up -d
-docker compose up -d nginx   # nginx KHÔNG phụ thuộc watchdog, start riêng
+### Dockerfile (Multi-stage)
 ```
-
-### Restart Frigate (áp dụng config mới)
-```bash
-curl -X POST http://localhost:5000/api/restart
-```
-
----
-
-## Dockerfile (Multi-stage)
-
-```
-Stage 1: node:22-alpine       → build React frontend (npm run build → dist/)
+Stage 1: node:22-alpine                → build React frontend (npm run build → dist/)
 Stage 2: eclipse-temurin:21-jdk-alpine → build Kotlin backend (./gradlew installDist)
 Stage 3: eclipse-temurin:21-jre-alpine → runtime image
 ```
@@ -89,239 +70,173 @@ Stage 3: eclipse-temurin:21-jre-alpine → runtime image
 | Path | Mô tả |
 |------|-------|
 | `frontend/src/App.tsx` | Toàn bộ React UI (file lớn, ~3000+ dòng) |
-| `frontend/src/components/PatternLockScreen.tsx` | Pattern lock, setup, Gmail OTP flow (~442 dòng) |
-| `backend/src/main/kotlin/vn/aiview/nvr/routes/CameraRouting.kt` | Local Web UI camera CRUD endpoints; delegates persistence to `CameraService` |
-| `backend/src/main/kotlin/vn/aiview/nvr/services/CameraService.kt` | Unified add/update/remove path used by Web UI AND cloud handler (003) |
-| `backend/src/main/kotlin/vn/aiview/nvr/services/CameraConfigMutex.kt` | Shared mutex for all config.yml + Cameras DB writes |
-| `backend/src/main/kotlin/vn/aiview/nvr/cloud/Go2RtcClient.kt` | Sync PUT/DELETE against go2rtc REST API on 127.0.0.1:1984 |
-| `backend/src/main/kotlin/vn/aiview/nvr/cloud/DeviceConstants.kt` | Placeholder model/firmware/storage values returned to AIView cloud |
-| `backend/src/main/kotlin/vn/aiview/nvr/cloud/DcBridgeManager.kt` | Spawn `dc-bridge` Go sidecar; resolves binary from `DC_BRIDGE_PATH` env / `/app/data/dc-bridge` / `~/.aiview/dc-bridge` |
-| `backend/src/main/kotlin/vn/aiview/nvr/cloud/DataChannelManagerDesktop.kt` | Linux WebRTC DATA peer — HTTP client to dc-bridge on `127.0.0.1:8766` |
-| `backend/src/main/kotlin/vn/aiview/nvr/routes/CloudRouting.kt` | `POST /internal/dc/command` — dc-bridge callback into CommandDispatcher |
-| `data/dc-bridge` | Go Pion WebRTC sidecar binary (linux/amd64), required for device_service DATA queries |
-| `connection_to_server.md` | Full guide: how a Linux device connects to AIView cloud + dc-bridge build steps |
-| `gateway/` | **All gateway-side artifacts** (Pi agent, enroll app, ZeroTier controller, docs). See `gateway/README.md`. The NVR-side integration (below) stays in `backend/`/`frontend/` because it compiles into nvr-wrapper. |
-| `gateway/edge-agent/` | **Gateway (4-6 Plan A):** Go agent on Raspberry Pi — passive L4 proxy (nginx stream), WS-Discovery, field web page. HTTP server only; never calls NVR. |
-| `backend/.../gateway/EdgeAgentClient.kt` | NVR→agent HTTP client (bearer fleet token, timeout+retry) |
-| `backend/.../gateway/GatewayConfig.kt` | NVR gateway settings: scan subnet, agent port, fleet token (`/run/secrets/edge_agent_token`) |
-| `backend/.../services/GatewayScanner.kt` | Auto-scans `ZT_SCAN_SUBNET` /health to discover gateways (the "auto connect"; gateway never registers) |
-| `backend/.../services/GatewayService.kt` | Gateway approve + adopt camera (admin types creds; reuses `CameraService.applyAndPersistFromOnvif`) |
-| `backend/.../routes/GatewayRouting.kt` | `/api/gateways*` — list/scan/approve/discover/adoptable/adopt. No register/push endpoint. |
+| `frontend/src/components/PatternLockScreen.tsx` | Pattern lock, setup, Gmail OTP flow |
 | `frontend/src/components/GatewaysPanel.tsx` | Web UI "Gateway" tab: discover → approve → adopt |
-| `gateway/gateway_setup.md` | Full gateway setup guide (Pi agent install, ZeroTier authorize, NVR flow, troubleshooting) |
-| `backend/src/main/kotlin/vn/aiview/nvr/routes/LockRouting.kt` | Pattern lock API, OTP verify endpoint |
-| `backend/src/main/kotlin/vn/aiview/nvr/routes/OnvifRouting.kt` | Scan ONVIF, thêm camera qua ONVIF |
-| `backend/src/main/kotlin/vn/aiview/nvr/services/EmailService.kt` | Gmail SMTP, OTP send/peek/verify với SQLite |
-| `backend/src/main/kotlin/vn/aiview/nvr/models/Schema.kt` | DB schema: LockConfig, OtpTokens, AIEvents, ... |
-| `backend/src/main/kotlin/vn/aiview/nvr/plugins/Databases.kt` | SQLite init, createMissingTablesAndColumns |
-| `backend/src/main/kotlin/vn/aiview/nvr/plugins/Security.kt` | hashString (SHA-256), hashPattern (bcrypt), verifyPattern (bcrypt + legacy fallback) |
+| `backend/.../routes/CameraRouting.kt` | Local Web UI camera CRUD; delegates persistence to `CameraService` |
+| `backend/.../services/CameraService.kt` | Unified add/update/remove path (Web UI AND cloud handler) |
+| `backend/.../services/CameraConfigMutex.kt` | Shared mutex cho mọi config.yml + Cameras DB writes |
+| `backend/.../cloud/Go2RtcClient.kt` | Sync PUT/DELETE go2rtc REST API on 127.0.0.1:1984 |
+| `backend/.../cloud/DcBridgeManager.kt` | Spawn `dc-bridge` Go sidecar (`DC_BRIDGE_PATH` / `/app/data/dc-bridge`) |
+| `backend/.../cloud/DataChannelManagerDesktop.kt` | Linux WebRTC DATA peer — HTTP client to dc-bridge on `127.0.0.1:8766` |
+| `backend/.../routes/CloudRouting.kt` | `POST /internal/dc/command` — dc-bridge callback into CommandDispatcher |
+| `data/dc-bridge` | Go Pion WebRTC sidecar binary (linux/amd64), bắt buộc cho device_service DATA |
+| `backend/.../gateway/EdgeAgentClient.kt` | NVR→agent HTTP client (bearer fleet token, timeout+retry) |
+| `backend/.../gateway/GatewayConfig.kt` | NVR gateway settings: scan subnet, agent port, fleet token |
+| `backend/.../services/GatewayScanner.kt` | Auto-scan `ZT_SCAN_SUBNET` /health để phát hiện gateway |
+| `backend/.../services/GatewayService.kt` | Gateway approve + adopt camera (reuses `CameraService.applyAndPersistFromOnvif`) |
+| `backend/.../routes/GatewayRouting.kt` | `/api/gateways*` — list/scan/approve/discover/adoptable/adopt |
+| `backend/.../routes/LockRouting.kt` | Pattern lock API, OTP verify endpoint |
+| `backend/.../routes/OnvifRouting.kt` | Scan ONVIF, thêm camera qua ONVIF, PTZ |
+| `backend/.../services/EmailService.kt` | Gmail SMTP, OTP send/peek/verify với SQLite |
+| `backend/.../models/Schema.kt` | DB schema: LockConfig, OtpTokens, AIEvents, Cameras... |
+| `backend/.../plugins/Databases.kt` | SQLite init, createMissingTablesAndColumns |
+| `backend/.../plugins/Security.kt` | hashString (SHA-256), hashPattern (bcrypt), verifyPattern |
+| `gateway/` | All gateway-side artifacts (Pi agent, enroll app, ZeroTier controller, docs). Xem `gateway/README.md` |
+| `gateway/edge-agent/` | Go agent on Pi — passive L4 proxy (nginx stream), WS-Discovery, field web page |
 | `config/config.yml` | Frigate config (cameras, go2rtc, ffmpeg global) |
 | `config/watchdog.yml` | Watchdog config (thresholds, OTA, schedule) |
 | `watchdog/src/main/kotlin/...` | Watchdog: DockerApi, SelfHealingEngine, UpdateManager |
-| `docker-compose.yml` | Định nghĩa toàn bộ stack |
-| `docker-compose.override.yml` | QUAN TRỌNG: Override nvr-wrapper image → nvr-wrapper:latest |
+| `docker-compose.yml` / `docker-compose.override.yml` | Stack def / override nvr-wrapper image |
 | `.env` | Secrets (KHÔNG commit) |
-| `secrets/gmail_app_password` | Docker secret file cho Gmail (KHÔNG commit, git-ignored) |
+| `secrets/gmail_app_password` | Docker secret cho Gmail (git-ignored) |
 | `nginx/nginx.conf` | HTTPS reverse proxy config |
+| `connection_to_server.md` | Full guide: Linux device kết nối AIView cloud + dc-bridge build |
 
 ---
 
-## Gmail OTP Flow (Đã hoàn thiện)
+## Gmail OTP Flow
 
-Setup flow:
-1. Draw pattern → confirm pattern (2 lần khớp) → email entry screen
-2. Enter Gmail → POST `/api/lock/send-otp` → Email sent → OTP screen
-3. Enter 6-digit OTP → POST `/api/lock/verify-otp` (peek, not consume) → if valid → POST `/api/lock/setup`
-4. `verifyOtp()` consumes OTP on final submit
+**Setup:** Draw pattern → confirm (2 lần khớp) → email entry → `POST /api/lock/send-otp` → enter OTP → `POST /api/lock/verify-otp` (peek, not consume) → if valid → `POST /api/lock/setup` (verifyOtp consumes OTP on final submit).
 
-Reset flow:
-1. POST `/api/lock/reset-request` with email → OTP sent
-2. Enter OTP → POST `/api/lock/verify-otp` (peek) → if valid → draw new pattern screen
-3. Draw pattern twice → POST `/api/lock/reset-complete`
+**Reset:** `POST /api/lock/reset-request` (email) → OTP → `POST /api/lock/verify-otp` (peek) → draw new pattern twice → `POST /api/lock/reset-complete`.
 
-OTP stored in SQLite `otp_tokens` table (not in-memory). On fresh DB, must create manually:
+OTP stored in SQLite `otp_tokens`. On fresh DB phải tạo thủ công:
 ```sql
 CREATE TABLE IF NOT EXISTS otp_tokens (email VARCHAR(255) PRIMARY KEY, code VARCHAR(6) NOT NULL, expiry BIGINT NOT NULL);
 ```
+Gmail creds: `GMAIL_USER` env (`.env`), `GMAIL_APP_PASSWORD` via Docker secret `/run/secrets/gmail_app_password`.
 
-Gmail credentials:
-- `GMAIL_USER` env var (not sensitive, in `.env`)
-- `GMAIL_APP_PASSWORD` via Docker secret at `/run/secrets/gmail_app_password`
-
----
-
-## Password Hashing (Security)
-
-Pattern hash uses **bcrypt** (cost 12, ~300ms). Legacy SHA-256 hashes auto-upgrade on first successful login (transparent migration — no re-setup required).
-
-- `hashPattern(pattern)` → bcrypt hash (for new setup/reset)
-- `verifyPattern(input, stored)` → `(Boolean, Boolean)` = (matched, needsRehash)
-- `hashString(input)` → SHA-256+salt (still used for email/gmail hash comparison)
-
----
+## Password Hashing
+Pattern hash dùng **bcrypt** (cost 12, ~300ms). Legacy SHA-256 auto-upgrade khi login thành công lần đầu (transparent, không re-setup).
+- `hashPattern(pattern)` → bcrypt · `verifyPattern(input, stored)` → `(matched, needsRehash)` · `hashString(input)` → SHA-256+salt (email/gmail compare).
 
 ## RTSP URL Validation (SSRF Prevention)
-
-`validateRtspUrl()` in `CameraRouting.kt` blocks:
-- Non-`rtsp://` / `rtsps://` schemes (e.g., `http://`, `file://`)
-- Loopback: `127.x.x.x`, `localhost`
-- Link-local: `169.254.x.x` (cloud metadata endpoints)
-- `host.docker.internal`
-
-Private LAN ranges (`192.168.x.x`, `10.x.x.x`) are **allowed** — cameras legitimately live there.
-
----
+`validateRtspUrl()` (`CameraRouting.kt`) chặn: non-`rtsp(s)://` schemes, loopback (`127.x`, `localhost`), link-local (`169.254.x` — cloud metadata), `host.docker.internal`. Private LAN (`192.168.x`, `10.x`) **được phép** (camera ở đó).
 
 ## Config File Mutex
-
-A `kotlinx.coroutines.sync.Mutex` (`configMutex`) in `CameraRouting.kt` wraps all `config.yml` read-modify-write blocks. Prevents race conditions when multiple clients add/delete cameras or update AI config concurrently.
-
----
+`configMutex` (`kotlinx.coroutines.sync.Mutex` trong `CameraRouting.kt`) wrap mọi `config.yml` read-modify-write → tránh race khi nhiều client add/delete camera.
 
 ## Frigate Config Notes
-
-- **Global hwaccel:** `preset-intel-qsv-h264` — chỉ hoạt động nếu host có Intel GPU.
-- **RTSP camera thêm thủ công:** phải ghi đè `hwaccel_args: []` ở cấp camera để tránh crash trên máy không có Intel GPU (ví dụ: máy NVIDIA).
-- **go2rtc streams:** mỗi camera RTSP được thêm vào `go2rtc.streams` với `#tcp` để tránh UDP drop/lag.
+- **Global hwaccel:** `preset-intel-qsv-h264` — chỉ chạy nếu host có Intel GPU.
+- **RTSP camera thủ công:** phải override `hwaccel_args: []` ở cấp camera để tránh crash trên máy không Intel GPU (vd NVIDIA).
+- **go2rtc streams:** mỗi camera RTSP thêm `#tcp` để tránh UDP drop/lag.
 - **Frigate version:** chốt cứng `0.16.3`, watchdog không OTA Frigate.
 
 ---
 
 ## Thêm Camera: Luồng dữ liệu (003 — unified)
 
-Cả Web UI lẫn cloud dashboard giờ đi qua **một** code path: `CameraService.applyAndPersist*`.
+Cả Web UI lẫn cloud dashboard đi qua **một** code path: `CameraService.applyAndPersist*`.
 
-1. User nhập thông tin (Web UI tab ONVIF/RTSP, hoặc cloud dashboard `post_channels`)
-2. `CameraRouting.kt#addCamera` (Web UI) hoặc `CameraCommandHandler.kt#postOrPutChannels` (cloud) parse request
-3. → `CameraService.applyAndPersistFromRtsp` (Web UI, RTSP URL đã có) hoặc `applyAndPersistFromOnvif` (cloud, ONVIF probe trước)
-4. `CameraService` acquire `CameraConfigMutex.mutex`, làm tuần tự:
+1. User nhập (Web UI tab ONVIF/RTSP, hoặc cloud `post_channels`)
+2. `CameraRouting#addCamera` (Web UI) / `CameraCommandHandler#postOrPutChannels` (cloud) parse request
+3. → `CameraService.applyAndPersistFromRtsp` (RTSP có sẵn) / `applyAndPersistFromOnvif` (cloud, ONVIF probe trước)
+4. `CameraService` acquire `CameraConfigMutex.mutex`, tuần tự:
    - UPSERT row vào bảng `Cameras` (unified — không còn `CloudCameras`); gán `channel_id` nếu mới
-   - Ghi `config/config.yml` (cameras + go2rtc.streams entry)
-   - `Go2RtcClient.registerStreamSync("${channelId}_main", ...)` — chờ go2rtc PUT 200 OK (5s timeout)
-5. Trigger `POST http://localhost:5000/api/restart` → trả `frigateRestarted: true/false`
-6. Web UI hiện toast warning nếu `frigateRestarted === false`; cloud trả về `body.data.frigate_restarted`
-7. Cloud `get_channels` đọc cùng bảng `Cameras` → cloud và Web UI luôn thấy danh sách giống nhau
+   - Ghi `config/config.yml` (cameras + go2rtc.streams)
+   - `Go2RtcClient.registerStreamSync("${channelId}_main", ...)` — chờ go2rtc PUT 200 (5s timeout)
+5. Trigger `POST localhost:5000/api/restart` → trả `frigateRestarted: true/false`
+6. Web UI toast warning nếu `frigateRestarted === false`; cloud trả `body.data.frigate_restarted`
+7. Cloud `get_channels` đọc cùng bảng `Cameras` → cloud và Web UI luôn thấy giống nhau
 
-Delete đi qua `CameraService.removeAndPersist(slugOrChannelId)` — idempotent, xóa DB + YAML + go2rtc stream + trigger Frigate restart.
+Delete qua `CameraService.removeAndPersist(slugOrChannelId)` — idempotent (DB + YAML + go2rtc stream + Frigate restart).
 
 ---
 
 ## Cloud Connection — Linux Device
 
-Chi tiết đầy đủ: **[connection_to_server.md](./connection_to_server.md)**.
-
-Tóm tắt 3 đường data đi tới cloud:
+Chi tiết đầy đủ: **[connection_to_server.md](./connection_to_server.md)**. 3 đường data tới cloud:
 
 | Kênh | Vận chuyển | Loại dữ liệu | Phụ thuộc |
 |---|---|---|---|
-| MQTT | tcp 1883 | Camera CRUD (`channel_service`), heartbeat | mosquitto broker reach được cloud |
-| WebRTC LIVE | UDP/TCP qua ICE | Stream video camera | `go2rtc` ở `127.0.0.1:1984` |
-| WebRTC DATA | UDP/TCP qua ICE | **Device info, ethernet, time** (`device_service`) | **Binary `dc-bridge`** ở `data/dc-bridge` |
+| MQTT | tcp 1883 | Camera CRUD (`channel_service`), heartbeat | mosquitto reach cloud |
+| WebRTC LIVE | UDP/TCP qua ICE | Stream video | `go2rtc` @ `127.0.0.1:1984` |
+| WebRTC DATA | UDP/TCP qua ICE | **Device info, ethernet, time** (`device_service`) | **Binary `dc-bridge`** @ `data/dc-bridge` |
 
 ### dc-bridge (BẮT BUỘC để dashboard hiện Device info)
-
-Cloud KHÔNG hỏi `get_information / get_ethernet / get_time` qua MQTT — chỉ qua WebRTC DATA channel. JVM `dev.onvoid.webrtc` không chạy được headless Linux, nên cần sidecar Go (Pion).
-
-**Build cho linux/amd64:**
+Cloud chỉ hỏi `get_information/get_ethernet/get_time` qua WebRTC DATA, KHÔNG qua MQTT. JVM `dev.onvoid.webrtc` không chạy headless Linux → cần sidecar Go (Pion).
 ```bash
 SRC=~/Documents/1CodeBkav/B02/aiview_b02_box/dc-bridge
 mkdir -p /tmp/dc-bridge-build && cp "$SRC"/{main.go,go.mod,go.sum} /tmp/dc-bridge-build/
-# Patch port JVM (8080 → 3000 vì backend NVR ở 3000)
+# Patch JVM port 8080 → 3000 (backend NVR ở 3000)
 sed -i 's|127.0.0.1:8080/internal/dc/command|127.0.0.1:3000/internal/dc/command|' /tmp/dc-bridge-build/main.go
 cd /tmp/dc-bridge-build
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /home/toan/my-nvr/data/dc-bridge -ldflags='-s -w' .
-chmod +x /home/toan/my-nvr/data/dc-bridge
-docker compose restart nvr-wrapper
+chmod +x /home/toan/my-nvr/data/dc-bridge && docker compose restart nvr-wrapper
 ```
-
-Verify ở log: `DC_BRIDGE_STARTED | dc-bridge started from /app/data/dc-bridge`.
-
-`DcBridgeManager` spawn binary tự động khi backend khởi động. Reference source + binary arm64 ở `~/Documents/1CodeBkav/B02/aiview_b02_box/dc-bridge/`.
+Verify log: `DC_BRIDGE_STARTED | dc-bridge started from /app/data/dc-bridge`. `DcBridgeManager` spawn tự động khi backend khởi động. Reference source + arm64 binary: `~/Documents/1CodeBkav/B02/aiview_b02_box/dc-bridge/`.
 
 ---
 
-## PTZ / ONVIF (kể cả camera qua socat proxy)
+## PTZ / ONVIF (kể cả camera qua socat/gateway proxy)
 
-Web UI điều khiển PTZ qua `/api/cameras/{slug}/ptz/{capabilities,move,stop}` (`OnvifRouting.kt` + `OnvifSoapClient`). **Một code path cho cả camera LAN trực tiếp lẫn camera sau proxy** — vì `OnvifSoapClient` rewrite authority của ONVIF Media/PTZ XAddr về `ip:onvifPort`.
+Web UI điều khiển PTZ qua `/api/cameras/{slug}/ptz/{capabilities,move,stop}` (`OnvifRouting.kt` + `OnvifSoapClient`). **Một code path cho camera LAN trực tiếp lẫn camera sau proxy** — `OnvifSoapClient` rewrite authority của ONVIF Media/PTZ XAddr về `ip:onvifPort`.
 
-`getCameraOnvifConfig` resolve creds: **ưu tiên `user:pass` nhúng trong URL RTSP của `config.yml`** (camera LAN), **fallback `Cameras.username` + giải mã `passwordEncrypted`** (camera proxy/cloud có URL RTSP không kèm creds).
+`getCameraOnvifConfig` resolve creds: **ưu tiên `user:pass` nhúng trong RTSP URL của `config.yml`** (camera LAN), fallback `Cameras.username` + giải mã `passwordEncrypted` (camera proxy/cloud).
 
-**Cấu hình camera qua proxy (Web UI → Sửa Camera):**
-- **Cổng ONVIF** = cổng socat proxy (vd `8080`, `8081`...). Mỗi camera field thường có 1 cổng proxy riêng trên gateway.
-- **ONVIF Username / Password** (để trống = giữ creds cũ).
-- **Kiểu PTZ**: `Tự động` (theo ONVIF `GetNodes`) | `Toàn phần` (ép Pan/Tilt/Zoom) | `Chỉ Zoom`. Lưu ở cột `cameras.ptz_mode`.
-- Bật toggle PTZ.
+**Cấu hình camera qua proxy (Web UI → Sửa Camera):** Cổng ONVIF = cổng socat/nginx proxy (vd `8080`). ONVIF User/Pass (trống = giữ creds cũ). **Kiểu PTZ**: `Tự động` (theo ONVIF `GetNodes`) | `Toàn phần` (ép Pan/Tilt/Zoom) | `Chỉ Zoom`. Lưu ở `cameras.ptz_mode`.
 
-**Vì sao có override "Kiểu PTZ":** một số camera PTZ rẻ **chỉ quảng cáo `ContinuousZoomVelocitySpace` trong `GetNodes`** (không có PanTilt space) dù phần cứng *có thể* pan/tilt qua API riêng → auto-detect ẩn d-pad. Nếu camera thật sự nhận ONVIF PanTilt thì chọn **Toàn phần** để ép hiện d-pad. `/ptz/capabilities` ưu tiên override → trả ngay, không cần probe camera (chạy cả khi proxy/link tạm down). ⚠️ Có camera phần cứng PTZ thật nhưng **không lái pan/tilt bằng ONVIF `ContinuousMove`/GenericSpace** (vd `OSSD2MPVF33XPTZAI`, xem dưới) → ép `full` thì d-pad hiện nhưng lệnh PanTilt vẫn fault "speed out of bounds". Cần tìm đúng phương thức (AbsoluteMove/RelativeMove/space riêng/API riêng).
+**Vì sao có override "Kiểu PTZ":** một số camera PTZ rẻ chỉ quảng cáo `ContinuousZoomVelocitySpace` trong `GetNodes` (không có PanTilt) dù phần cứng pan/tilt qua API riêng → auto-detect ẩn d-pad. Chọn **Toàn phần** để ép hiện d-pad. `/ptz/capabilities` ưu tiên override → trả ngay không cần probe. ⚠️ Có camera PTZ thật nhưng KHÔNG lái pan/tilt bằng ONVIF `ContinuousMove` (vd `OSSD2MPVF33XPTZAI`) → ép `full` thì lệnh PanTilt vẫn fault "speed out of bounds". `PtzControls` (frontend) ẩn d-pad khi `hasPanTilt=false`, ẩn zoom khi `hasZoom=false`.
 
-`PtzControls` (frontend) fetch `/ptz/capabilities` khi mở panel, ẩn d-pad khi `hasPanTilt=false`, ẩn zoom khi `hasZoom=false`.
-
-> Camera zoom-only thật (Bkav P200-0802N): để `Tự động` hoặc `Chỉ Zoom`. Gửi PanTilt cho nó → fault "speed out of bounds".
-
-Chi tiết: **[connection_to_server.md](./connection_to_server.md)** § "ONVIF / PTZ camera field qua socat proxy".
+> Camera zoom-only thật (Bkav P200-0802N): để `Tự động` hoặc `Chỉ Zoom`. Gửi PanTilt → fault.
 
 ### Gateway Camera Provisioning (Plan A) — ✅ DONE 2026-06-04
+> Kế hoạch + verify: **[gateway/4-6-to-do-jobs.md](./gateway/4-6-to-do-jobs.md)**. Vận hành: **[gateway/gateway_setup.md](./gateway/gateway_setup.md)**.
 
-> Kế hoạch đầy đủ + verify steps: **[gateway/4-6-to-do-jobs.md](./gateway/4-6-to-do-jobs.md)**. Hướng dẫn vận hành: **[gateway/gateway_setup.md](./gateway/gateway_setup.md)**.
+Verify end-to-end trên Pi thật: NVR auto-scan subnet ZeroTier → phát hiện gateway (passive, **không push**) → admin approve → adopt camera: agent cấp cổng nginx-stream onvif/rtsp, NVR probe ONVIF qua proxy, rewrite RTSP host → ztIP, ghi Frigate/go2rtc, **live view OK**. Multi-NVR; Pi không giữ creds (admin gõ lúc approve); fleet token dùng chung (`secrets/edge_agent_token`).
 
-**Đã hoàn thành & verify end-to-end trên Pi thật** (gateway-nha-A @ ZT `10.34.24.12`, RAM agent ~4MB): NVR auto-scan subnet ZeroTier → phát hiện gateway (passive, **không push**) → admin approve → adopt camera (`192.168.2.64` → slug `cam_6`): agent cấp cổng nginx-stream onvif 8080 / rtsp 8081, NVR probe ONVIF qua proxy, rewrite RTSP host → `10.34.24.12:8081`, ghi Frigate/go2rtc, **live view lên hình OK**. Multi-NVR ready; Pi không giữ creds (admin gõ lúc approve); fleet token dùng chung (`secrets/edge_agent_token`).
+Code: `gateway/edge-agent/` (Go), `backend/.../gateway/*`, `services/{GatewayScanner,GatewayService}.kt`, `routes/GatewayRouting.kt`, `CameraService.rewriteRtspHost`+`autoDetectPtz`, `GatewaysPanel.tsx`.
 
-Code: `gateway/edge-agent/` (Go), `backend/.../gateway/*`, `services/{GatewayScanner,GatewayService}.kt`, `routes/GatewayRouting.kt`, `CameraService.rewriteRtspHost`+`autoDetectPtz`, `frontend/.../GatewaysPanel.tsx` (tab "Gateway").
+**Auto-PTZ:** sau adopt gửi 1 `ContinuousMove` PanTilt nhỏ (x=0.05) + `Stop`, xem SOAP fault → set `ptz_mode` = `full` (no fault) / `zoom` (fault). KHÔNG đè lựa chọn thủ công. (`OnvifSoapClient.probePanTiltSupported`, `CameraService.autoDetectPtz`.)
 
-**Auto-PTZ (đã hiện thực):** sau adopt, gửi 1 `ContinuousMove` PanTilt nhỏ (x=0.05) + `Stop`, xem SOAP fault → set `cameras.ptz_mode` = `full` (no fault) hoặc `zoom` (fault). KHÔNG đè lựa chọn thủ công. (`OnvifSoapClient.probePanTiltSupported`, `CameraService.autoDetectPtz`.)
+**Multi-region enroll (cách A) — ✅ DONE (code, chưa test Pi thật):** 1 image Pi dùng chung (không bake network id). App điện thoại (`gateway/android-app/`) quét gateway qua `/identity` → nhập **Network ID 16-hex** → `POST /enroll` → agent `zerotier join` + persist `state.json` (reboot tự join). Sau đó admin "Cấp phép" trên NVR. Van an toàn: `/enroll` no-auth nhưng từ chối đổi network nếu gateway đã có camera. **TODO test:** cài mới Pi → enroll → cấp phép → adopt.
 
-**App mobile "Thêm Gateway" + multi-region enroll — ✅ DONE (code, chưa test trên Pi thật):**
-> **Cách A (1 controller, nhiều ZeroTier network/khu vực, 1 image dùng chung):** image Pi KHÔNG bake network id. App điện thoại (`gateway/android-app/`) quét gateway qua `/identity` → FW nhập **Network ID 16-hex** của khu vực → `POST /enroll` → agent `zerotier join` đúng mạng đó + persist vào `state.json` (reboot tự join lại). Sau đó admin "Cấp phép" trên NVR như Plan A. Mỗi NVR khu vực: cùng `ZT_CONTROLLER_URL`, khác `ZT_NETWORK_ID` + `ZT_SCAN_SUBNET`. Network id KHÔNG phải secret (node vẫn cần admin cấp phép). Code: `gateway/edge-agent/{main.go (handleEnroll, ztJoinLoop, currentNetworkID), state.go (NetworkID), zerotier.go (ztJoin/ztLeave/validNetworkID)}`, app `net/{AgentClient.enroll, Models}`, `ui/AddScreen.kt (EnrollSection)`, `OnboardViewModel.submitEnroll`. `install.sh` giờ cài cả ZeroTier. **Van an toàn:** `/enroll` no-auth (Tier 0) nhưng từ chối đổi network nếu gateway đã có camera (tránh hijack + orphan proxy). **TODO test:** cài mới Pi .71 + cài lại app → enroll → cấp phép → adopt camera.
+**Known limitations:**
+- ⚠️ `OSSD2MPVF33XPTZAI` là PTZ thật nhưng không nhận pan/tilt qua ONVIF `ContinuousMove` (`GetNodes` chỉ Zoom) → auto-PTZ phân loại `zoom` (false-negative đã biết). Cần tìm phương thức pan thật (`AbsoluteMove`/space riêng/API vendor) — chưa làm.
+- **G8 (nice-to-have):** agent chỉ forward 80 (onvif) + 554 (rtsp). Camera để Web UI ở cổng khác (vd 443) → phải thêm tay `stream{}` trên Pi (`/etc/nginx/stream.d/webui-extra.conf`, NGOÀI tầm agent). **SSH Pi:** user `pi3`, key `~/.ssh/pi_gateway`, chỉ mở SSH ở field LAN (`192.168.2.71:22`).
+- Link ZeroTier chập chờn → mọi call agent có timeout ngắn + retry 1 lần.
 
-**Còn lại / known limitations:**
-- ⚠️ **Camera under-report (verified):** `OSSD2MPVF33XPTZAI` (`.64`) là PTZ thật nhưng **không nhận pan/tilt qua ONVIF `ContinuousMove`** (`GetNodes` chỉ có Zoom; PanTilt → fault "speed out of bounds"; Zoom → OK). → auto-PTZ phân loại nó `zoom` (false-negative đã biết). Cần tìm phương thức pan thật (`AbsoluteMove`/`RelativeMove`/space riêng/API vendor) — **chưa làm**.
-- **Chưa làm (nice-to-have):** auto-dò `onvifPort` (thử nhiều cổng), tái dùng creds giữa camera cùng gateway, classifier PTZ thử thêm move-type.
-- Link ZeroTier chập chờn → mọi call agent đã có timeout ngắn + retry 1 lần.
+> **Golden image bake (A1):** đã làm PoC nhưng **DECISION 2026-06-06: KHÔNG bake cho PoC này** (chạy trên phần cứng có sẵn, hoãn bake đến khi có phần cứng chính thức). Chi tiết tham chiếu: **[gateway/commercialization-security-notes.md](./gateway/commercialization-security-notes.md)**.
 
-### Golden image gateway (A1) — ✅ DONE (PoC, 2026-06-05)
+### Băng thông & sức chứa camera qua gateway
+**Luồng:** `Camera → Gateway(Pi) → [UPLOAD gateway] → internet → [DOWNLOAD NVR] → NVR`. Mỗi camera kéo 2 luồng (main=record, sub=detect) 24/7.
 
-> **DECISION 2026-06-06 (user): KHÔNG cần baked golden image cho PoC này.** PoC chạy trên phần cứng đang có sẵn. Việc bake image hoãn lại đến khi có phần cứng phù hợp/chính thức — lúc đó mới bake cho đúng phần cứng đó. Hiện tại đừng đầu tư vào image/bake automation. (Phần A1 dưới đây giữ làm tham chiếu cho lần bake sau.)
+**Nút thắt = DOWNLOAD của NVR, là TỔNG camera toàn hệ thống** (không phải mỗi gateway — download NVR là 1 ống chung, cắm thêm gateway không mở rộng). Gateway chỉ proxy L4 (nginx `stream{}`) — không decode/buffer → RAM ~const (~4MB), không phụ thuộc resolution.
 
-> **SCOPE: đây là PoC, chỉ 2 Pi** (1 production `gateway-nha-A` @ `10.147.20.12` + 1 master spare). KHÔNG triển khai fleet lớn — đừng over-engineer phần image/onboarding.
+Bitrate/camera (H.265, 30fps, ước lượng): **Config A (4K main + FullHD sub) ≈ 12–16 Mbps**; **Config B (FullHD main + 720p sub) ≈ 4–5.5 Mbps**.
+Hạ tầng hiện tại (đo 2026-06-06): NVR download 68 / upload 99 Mbps; chừa ~30% headroom → ~48 Mbps thực → **~3 cam Config A** hoặc **~9–10 cam Config B**. Điểm ngọt: main FullHD + sub 720p. Muốn nhiều 4K hơn → **chỉ có cách nâng gói DOWNLOAD của NVR**.
 
-> Thuộc 004 (self-host ZeroTier — fleet `nvr-fleet` ID `efb242bde2f3e856`, pool `10.147.20.0/24`).
-> **Đã dựng golden master end-to-end trên Pi spare (2026-06-05):** flash Pi OS Lite 64-bit (Debian 13 trixie, aarch64) → cài `edge-agent` + ZeroTier + nginx → join + authorize ztncui → **NVR scanner tự thấy** (verify `gw-b34bf17c9e89` @ `10.147.20.72`) → hardened **key-only SSH** (password auth off + password locked, NOPASSWD sudo giữ vì chỉ vào bằng SSH key của NVR `~/.ssh/pi_gateway`) → `bake-prep.sh` → poweroff. Image nén đang chụp: `/home/toan/gateway-golden.img.gz` (full-card, flash sang thẻ **≥32GB cùng cỡ**; chưa auto-expand vì PoC).
-> **Gotchas đã gặp khi flash (ghi để khỏi lặp):** (1) rpi-imager OS-customisation đôi khi KHÔNG áp → bootfs trống `firstrun`/`ssh`/user; fix bằng tạo tay cờ `ssh` + `userconf.txt` trên bootfs, HOẶC sửa thẳng rootfs khi cắm thẻ vào PC. (2) Pi OS trixie tạo user theo username gõ trong Imager (vd `pi3`), KHÔNG phải `pi` mặc định. (3) Khung chat Claude không có TTY → `sudo`/`ssh` nhập-pass phải chạy ở **Terminal thật**, hoặc dùng `sudo -S` pipe pass / SSH key.
-> **Dọn sau bake:** xoá member test `15df2d5dc5` khỏi ztncui; entry gateway test trên NVR đã xoá bằng nút DELETE (Phase 3).
+Đổi resolution làm trên **chính camera** (web cam / ONVIF `SetVideoEncoderConfiguration`), không trên gateway/NVR.
+**Triệu chứng quá tải** (RTSP-over-TCP qua ZT chập chờn → kẹt→đơ→rớt, không vỡ hạt): live lag/freeze/đen; record thủng đoạn; camera flapping; log Frigate `Unable to read frames`/go2rtc reconnect loop → dây chuyền retransmit → buffer đầy → Frigate restart stream → càng tải càng sập.
 
-**Cách hoàn tất A1 khi có Pi spare (đã làm, giữ làm tham chiếu):**
-1. Trên Pi spare: copy thư mục `gateway/edge-agent/` sang, `sudo ./install.sh` (đã có sẵn fix nginx boot-race: `ip_nonlocal_bind=1` + systemd drop-in `After=zerotier-one`).
-2. Sửa `/etc/nvr-edge-agent/agent.env`: đặt `EDGE_AGENT_TOKEN` = fleet token (khớp `secrets/edge_agent_token` trên NVR). `ZT_NETWORK_ID` đã được `bake-prep.sh` bake = `efb242bde2f3e856`.
-3. `sudo ./bake-prep.sh` — xoá ZT identity/peers/state + machine-id + ssh host keys + log để mỗi Pi clone **tự sinh node-id riêng** ở boot đầu; giữ `agent.env`; reset nginx cams về rỗng.
-4. `sudo poweroff` → tháo thẻ SD → Pi Imager/dd chụp image. Mỗi Pi flash ra: boot đầu tự sinh identity → agent tự `zerotier join efb242bde2f3e856` → hiện member CHỜ trên ztncui → admin authorize → NVR scanner tự thấy.
+---
 
-Code liên quan: `gateway/edge-agent/bake-prep.sh` (prep golden image), `gateway/edge-agent/install.sh` (đã bake nginx boot-race fix).
+## 🚨 Thương mại hoá — overlay ĐÃ CHỐT = Nebula (2026-06-11)
+**QUYẾT ĐỊNH:** bỏ **ZeroTier** (BSL 1.1, nhúng-bán cần OEM license) → **chạy Nebula (MIT)** cho bản bán được. Việc này giải quyết luôn trục **chủ quyền** (lighthouse tự host, hết phụ thuộc planet roots ngoại). **HQ (lighthouse + signing service) và NVR đã dựng + verify chạy** (`http://192.168.2.106:9443/healthz` → ok, lighthouse `192.168.2.106:4242`; `.env` có `NEBULA_CA_URL`/`NEBULA_OVERLAY_SUBNET`, secret `nebula_sign_token`).
 
-### Băng thông & sức chứa camera qua gateway (capacity planning)
+**Còn lại trước khi bán:** (1) **test Pi thật A→Z** trên Nebula (runbook §5 — xem dưới); (2) **An ninh sản phẩm G1–G7** (G1 pivot `/camera` whitelist field subnet, G2 per-gateway token/rotate, G3 chống hijack `/enroll`).
 
-**Luồng dữ liệu:** `Camera → Gateway(Pi) → [UPLOAD site gateway] → internet → [DOWNLOAD site NVR] → NVR`.
-Mỗi camera kéo **2 luồng** (main=`record`, sub=`detect`) chạy 24/7 (xem § "Thêm Camera").
+> Thiết kế + runbook Nebula: **[gateway/nebula-migration-va-trien-khai.md](./gateway/nebula-migration-va-trien-khai.md)** · code: **[gateway/nebula/README.md](./gateway/nebula/README.md)**. Audit bảo mật G1–G7 + bảng so sánh overlay: **[gateway/commercialization-security-notes.md](./gateway/commercialization-security-notes.md)**.
 
-**Nút thắt = DOWNLOAD của NVR**, KHÔNG phải RAM/CPU Pi:
-- Gateway chỉ là **proxy L4 (nginx `stream{}`)** — forward byte TCP, **không decode/transcode/buffer frame** → RAM ~const (~4MB), **không phụ thuộc độ phân giải**. Hạ res KHÔNG giảm RAM gateway; chỉ giảm **băng thông** + tải Frigate (detect) + đĩa (record 4K ngốn ~100–250 GB/cam/ngày).
-- Video đi **ra** ở gateway (ăn UPLOAD), đi **vào** ở NVR (ăn DOWNLOAD). Download NVR thường thấp hơn + **gánh tất cả gateway cộng lại** → đó là trần cứng.
-
-**Trần là TỔNG camera toàn hệ thống, KHÔNG phải mỗi gateway.** Download NVR là 1 ống chung; cắm thêm gateway KHÔNG mở rộng được (mọi camera vẫn chen qua cùng ống). Đếm tổng camera, đừng đếm theo gateway.
-
-Bitrate/camera (H.265, 30fps, ước lượng — cảnh động đẩy cao hơn):
-- **Config A (Full):** 4K main + FullHD sub ≈ **12–16 Mbps/cam**
-- **Config B (Low):** FullHD main + 720p sub ≈ **4–5.5 Mbps/cam** (nhẹ hơn ~3×)
-
-**Ví dụ hạ tầng hiện tại (đo 2026-06-06): NVR download 68 Mbps / upload 99 Mbps.** Chừa ~30% headroom cho ZeroTier chập chờn + RTSP-over-TCP retransmit → dùng thực ~48 Mbps:
-| Config | Max camera (TỔNG hệ thống) |
-|---|---|
-| A — Full (4K) | **~3 camera** |
-| B — Low (FullHD/720p) | **~9–10 camera** |
-→ "Điểm ngọt" cho link này: **main FullHD + sub 720p**. Muốn nhiều cam 4K hơn → **chỉ có cách nâng gói DOWNLOAD của NVR** (nâng đường gateway vô ích vì upload 99 đã thừa).
-
-**Đổi resolution làm trên CHÍNH camera** (web cam / ONVIF `SetVideoEncoderConfiguration`), không phải trên gateway/NVR; RTSP URL/profile thường giữ nguyên nên config NVR không cần sửa (verify lại camera vẫn trả đúng 2 profile sau khi đổi).
-
-**Triệu chứng QUÁ TẢI băng thông** (vì RTSP-over-TCP qua ZT chập chờn → KHÔNG vỡ hình kiểu nhiễu hạt mà **kẹt → đơ → rớt**): live view lag/freeze/màn đen-xám; record **thủng đoạn**/segment hỏng; camera flapping online↔offline; detect trễ; log Frigate `Unable to read frames`/`No frames received`/go2rtc reconnect loop. **Hiệu ứng dây chuyền:** 1 luồng nghẽn → TCP retransmit → buffer ffmpeg đầy → Frigate restart stream → thêm tải reconnect → **càng tải càng sập**, kéo đứt cả camera đang ổn. (Giống triệu chứng camera offline gây `stream.mp4 500` + live đen ở § Known Issues.)
+### Chạy Nebula — bring up NVR + test Pi
+```bash
+# 1) Bring up nvr-wrapper với NEBULA_* env (Nebula active khi NEBULA_CA_URL set; ZeroTier tự nhường)
+docker compose build nvr-wrapper            # nếu image cũ hơn commit Nebula 5922f55
+docker compose up -d --force-recreate --no-deps nvr-wrapper
+docker compose up -d nginx
+docker logs nvr-wrapper | grep -i gateway   # chờ SCAN ... DISCOVERED_AUTOAPPROVED
+```
+Test Pi (runbook §5 B0–B6): cài tươi Pi (build `gateway/nebula/edge-agent` → `./build.sh`) → app nhập **mã khu vực = signing URL + token** → agent keygen + `/enroll` (gửi pubkey) → NVR tab Gateway **"Cấp phép"** → signing service ký cert → Pi lên overlay `10.10.20.0/24` → scanner phát hiện → adopt camera → live view. Đo NAT traversal để quyết có cần relay.
 
 ---
 
@@ -329,67 +244,43 @@ Bitrate/camera (H.265, 30fps, ước lượng — cảnh động đẩy cao hơn
 
 | Vấn đề | Nguyên nhân | Fix |
 |--------|-------------|-----|
-| Camera offline ngay sau khi thêm RTSP | Global `hwaccel_args: preset-intel-qsv-h264` không tương thích GPU NVIDIA | Thêm `hwaccel_args: []` vào camera-level config |
-| Site unreachable sau deploy nvr-wrapper | nginx không phụ thuộc nvr-wrapper, không tự start | `docker compose up -d nginx` |
-| Container dùng image cũ | `docker-compose.override.yml` override image + Docker cache | `docker compose build --no-cache nvr-wrapper` |
-| Adopt camera qua tab Gateway nhưng KHÔNG thấy trên NVR | List camera của App chỉ fetch lúc tải trang; adopt ở tab Gateway không tự kích hoạt fetch lại | Đã fix: `GatewaysPanel` gọi `onCamerasChanged` (=`fetchCameras`) sau adopt. Camera vẫn được lưu đúng (DB+config.yml); F5 cũng thấy ngay |
-| Gateway không hiện trong tab Gateway dù Pi chạy | `ZT_SCAN_SUBNET` chưa set / sai; Pi chưa authorize ở ZeroTier Central; fleet token Pi ≠ `secrets/edge_agent_token` | Xem `docker logs nvr-wrapper \| grep GATEWAY`; chi tiết ở `gateway/gateway_setup.md` |
-| Build không lấy code mới | Docker layer cache | `docker compose build --no-cache nvr-wrapper` |
+| Camera offline ngay sau khi thêm RTSP | Global `hwaccel_args: preset-intel-qsv-h264` không hợp GPU NVIDIA | Thêm `hwaccel_args: []` cấp camera |
+| Site unreachable sau deploy nvr-wrapper | nginx không phụ thuộc nvr-wrapper | `docker compose up -d nginx` |
+| Container dùng image cũ / build không lấy code mới | `docker-compose.override.yml` override + Docker cache | `docker compose build --no-cache nvr-wrapper` |
+| Adopt camera qua tab Gateway nhưng KHÔNG thấy trên NVR | List camera chỉ fetch lúc tải trang | Đã fix: `GatewaysPanel` gọi `onCamerasChanged` sau adopt (F5 cũng thấy) |
+| Gateway không hiện trong tab Gateway dù Pi chạy | `ZT_SCAN_SUBNET` sai; Pi chưa authorize; fleet token Pi ≠ `secrets/edge_agent_token` | `docker logs nvr-wrapper \| grep GATEWAY`; xem `gateway/gateway_setup.md` |
 | GHCR pull fail | GitHub token hết hạn | `echo <token> \| docker login ghcr.io -u toannice --password-stdin` |
-| OTP input bị browser validate như email | `renderInput()` dùng `title.includes('Mã')` — fragile | Dùng `isOtp?: boolean` param tường minh |
+| OTP input bị browser validate như email | `renderInput()` dùng `title.includes('Mã')` | Dùng `isOtp?: boolean` param tường minh |
 | `otp_tokens` table không tự tạo trên DB cũ | Exposed WAL behavior | Tạo thủ công bằng sqlite3 |
-| Dashboard cloud online nhưng KHÔNG có Device info / Ethernet / Time | DATA channel fail vì thiếu binary `dc-bridge` | Build dc-bridge linux/amd64 với JVM port=3000, drop vào `data/dc-bridge` — xem `connection_to_server.md` |
-| `DC_OFFER_FAIL Connection refused` trong log | dc-bridge chưa start hoặc port 8766 bị chiếm | `docker compose logs nvr-wrapper \| grep dc-bridge`; kiểm tra `DC_BRIDGE_STARTED` |
-| dc-bridge start nhưng cloud không nhận response | `jvmCommandURL` trong `main.go` hardcode port 8080, backend NVR ở 3000 | Patch `sed` rồi build lại |
-| Cloud dashboard chỉ hiện 2/N cameras dù local UI có nhiều hơn | Cloud server chỉ đếm cameras được thêm qua `post_channels` (cloud dashboard). Cameras thêm qua local Web UI không được cloud server biết đến | Thêm camera từ cloud dashboard; không phải bug trong device code |
-| Cloud live view không hoạt động — stream.mp4 500 liên tục | Cameras offline (10.34.24.12 — no route to host) gây go2rtc retry liên tục | Xóa hoặc tắt cameras offline; đây không ảnh hưởng đến cameras online |
-| Cloud live view không hoạt động — SDP có `{FRIGATE_HOST_IP}` literal | Frigate 0.16.3 KHÔNG substitute `{FRIGATE_HOST_IP}` trong go2rtc config khi truyền cho go2rtc process. ICE candidate ghi `{FRIGATE_HOST_IP}` thay vì IP thực → cloud browser không parse được | `CloudService.applyIceServersToGo2Rtc()` detect LAN IP qua `detectLanIp()` và replace placeholder; `CameraService.writeYaml()` dùng IP thực từ đầu |
-| `GO2RTC REGISTER ok=false` khi MQTT reconnect | Streams đã tồn tại trong go2rtc (load từ config.yml khi Frigate start) nên go2rtc reject PUT → bình thường, streams vẫn hoạt động | Không cần fix — benign |
-| Live view ĐEN toàn bộ + site thỉnh thoảng 502 (degrade dần dưới tải live) | `FrigateProxy.kt` `proxyClient` (CIO) đặt `socketTimeout = 0`. Ktor 3.0.1 `io.ktor.network.util.Timeout` CHỈ coi `Long.MAX_VALUE` là vô hạn; `0` → coroutine timeout **busy-spin** (runnable). Mỗi luồng live tạo 1 job spin → bão hòa 64 thread `DefaultDispatcher` → mọi response ghi body (file tĩnh + proxy stream) treo. Triệu chứng đánh lừa: `/api/*` (JSON nhỏ) vẫn 200, `GET /` + stream.mp4 trả empty/000 | Đổi `socketTimeout = Long.MAX_VALUE` (KHÔNG dùng 0). Chẩn đoán: `docker exec nvr-wrapper kill -3 1` → 64 thread kẹt ở `io.ktor.network.util.Timeout$initTimeoutJob`; CPU ~300% |
+| Dashboard cloud online nhưng KHÔNG có Device info/Ethernet/Time | DATA channel fail vì thiếu `dc-bridge` | Build dc-bridge linux/amd64 port=3000 → `data/dc-bridge` (xem `connection_to_server.md`) |
+| `DC_OFFER_FAIL Connection refused` / cloud không nhận response | dc-bridge chưa start hoặc `main.go` hardcode port 8080 | `docker compose logs nvr-wrapper \| grep dc-bridge`; check `DC_BRIDGE_STARTED`; patch sed port 3000 |
+| Cloud dashboard chỉ hiện 2/N cameras | Cloud chỉ đếm cameras thêm qua `post_channels` | Thêm từ cloud dashboard; không phải bug device code |
+| Cloud live view không chạy — stream.mp4 500 liên tục | Cameras offline gây go2rtc retry liên tục | Xóa/tắt cameras offline |
+| Cloud live view — SDP có `{FRIGATE_HOST_IP}` literal | Frigate 0.16.3 không substitute placeholder cho go2rtc subprocess | `CloudService.applyIceServersToGo2Rtc()` + `CameraService.writeYaml()` dùng `detectLanIp()` |
+| `GO2RTC REGISTER ok=false` khi MQTT reconnect | Streams đã tồn tại trong go2rtc (load từ config.yml) → reject PUT | Benign, không cần fix |
+| Live view ĐEN toàn bộ + 502 dưới tải | `FrigateProxy.kt` `proxyClient` (CIO) `socketTimeout = 0` → Ktor 3.0.1 busy-spin 64 thread `DefaultDispatcher` → mọi response ghi body treo | Đổi `socketTimeout = Long.MAX_VALUE`. Chẩn: `docker exec nvr-wrapper kill -3 1` → 64 thread kẹt `Timeout$initTimeoutJob`, CPU ~300% |
+| Web UI camera qua gateway `ERR_EMPTY_RESPONSE` (RTSP vẫn chạy) | Cổng onvif proxy trỏ camera :80 (chỉ ONVIF SOAP), web UI ở 443; gateway chỉ forward 80+554 | Thêm tay `stream{}` `listen <ztIP>:<port> → <cam_ip>:443` (G8). Hoặc vào LAN field `https://<cam_ip>` |
 
 ---
 
 ## Cloud Live View — Root Cause & Fix (003)
 
 ### Luồng LIVE WebRTC (cloud → device → go2rtc → cloud browser)
-
 1. Cloud browser click Live → MQTT LIVE offer → `SignalingManager.handleLiveOffer()`
-2. Resolve `profileToken` → `{chId}_main` stream name (via `resolveStreamId()`)
-3. POST SDP offer đến `http://127.0.0.1:1984/api/webrtc?src={chId}_main`
-4. go2rtc trả về SDP answer (HTTP 201)
-5. Device publish answer về cloud browser qua MQTT
-6. Cloud browser + go2rtc negotiate ICE → video flow
+2. Resolve `profileToken` → `{chId}_main` stream name (`resolveStreamId()`)
+3. POST SDP offer → `http://127.0.0.1:1984/api/webrtc?src={chId}_main`
+4. go2rtc trả SDP answer (HTTP 201) → device publish answer về cloud browser qua MQTT → negotiate ICE → video
 
-### Vấn đề đã phát hiện & fix
+### Fix đã làm
+1. **Thiếu TURN credentials trong go2rtc** — `CloudService.applyIceServersToGo2Rtc()` (1 lần khi startup, guard `iceServersApplied`): fetch ICE từ cloud → ghi `config.yml` `go2rtc.webrtc.ice_servers` → restart Frigate → `registerAllStreams()`.
+2. **`{FRIGATE_HOST_IP}` literal trong SDP** — Frigate 0.16.3 không replace khi pass cho go2rtc subprocess. `detectLanIp()` (skip docker/br-/veth) replace placeholder khi write config.yml (cả `applyIceServersToGo2Rtc` + `CameraService.writeYaml`). `FRIGATE_HOST_IP` env KHÔNG pass vào nvr-wrapper container.
+3. **`registerAllStreams()` dùng direct RTSP** thay vì internal restream — config.yml đúng có `{chId}_main: [rtsp://127.0.0.1:8554/{slug}]`. Sau Frigate start go2rtc load config.yml nên streams đúng; PUT bị reject (ok=false) nhưng không hỏng. TODO: đổi dùng `rtsp://127.0.0.1:8554/{slug}`.
 
-**1. Thiếu TURN credentials trong go2rtc** (đã fix trong `CloudService.kt`)
-- `CloudService.applyIceServersToGo2Rtc()` chạy 1 lần khi startup (guard bởi `iceServersApplied`)
-- Fetch ICE servers từ cloud → ghi vào `config/config.yml` → `go2rtc.webrtc.ice_servers`
-- Restart Frigate → wait go2rtc ready → `registerAllStreams()`
-- Verify: `config/config.yml` phải có `ice_servers: [- urls: [turn:...]...]`
-
-**2. `{FRIGATE_HOST_IP}` literal trong SDP ICE candidates** (fix đang pending build)
-- Frigate 0.16.3 KHÔNG replace `{FRIGATE_HOST_IP}` khi pass config cho go2rtc subprocess
-- go2rtc puts literal `{FRIGATE_HOST_IP}` vào SDP answer → cloud browser parse fail
-- Fix: `detectLanIp()` trong `CloudService` (filter network interfaces, skip docker/br-/veth) → replace placeholder khi write config.yml
-- `FRIGATE_HOST_IP` env var KHÔNG được pass vào nvr-wrapper container (chỉ có trong Frigate env)
-- Fix trong cả `CloudService.applyIceServersToGo2Rtc()` và `CameraService.writeYaml()`
-
-**3. `registerAllStreams()` dùng direct RTSP thay vì internal restream**
-- Code hiện tại: `registerStreamSync("${chId}_main", "$rtspUrl#backchannel=0")` → go2rtc tạo connection mới trực tiếp tới camera
-- Config.yml đúng có: `{chId}_main: [rtsp://127.0.0.1:8554/{slug}]` (qua Frigate restreamer)
-- Sau khi Frigate start, go2rtc load config.yml nên streams đúng; `registerAllStreams()` PUT bị reject (ok=false) nhưng không làm hỏng streams
-- TODO: đổi `registerAllStreams()` dùng `rtsp://127.0.0.1:8554/{slug}` thay vì direct RTSP URL
-
-### Verify live view
+### Verify
 ```bash
-# SDP answer phải có relay candidate và IP thực (không phải {FRIGATE_HOST_IP})
+# SDP answer phải có relay candidate + IP thực (không phải {FRIGATE_HOST_IP})
 curl -s -X POST "http://localhost:1984/api/webrtc?src=1_main" \
   -H "Content-Type: application/sdp" --data 'v=0...' | grep "candidate"
-
-# Expected: relay candidate với TURN IP, host candidate với IP thực
-# a=candidate:... typ relay raddr ...
-# a=candidate:... 192.168.x.x 8555 typ host   ← không được là {FRIGATE_HOST_IP}
 ```
 
 ---
@@ -398,36 +289,34 @@ curl -s -X POST "http://localhost:1984/api/webrtc?src=1_main" \
 
 | # | Item | Status |
 |---|------|--------|
-| 1 | Remove test@test.com bypass | ✅ Done |
-| 2 | RTSP URL validation (SSRF) | ✅ Done |
-| 3 | File lock on config read-write | ✅ Done |
-| 4 | bcrypt/Argon2 password hashing | ✅ Done |
-| 5 | Frigate restart feedback to UI | ✅ Done |
-| 6 | Gmail OTP persistence (SQLite) | ✅ Done |
-| 7 | Docker secrets for GMAIL_APP_PASSWORD | ✅ Done |
-| 8 | Unified Cameras source of truth (drop CloudCameras drift) | ✅ Done (003) |
-| 9 | Passive edge gateway (multi-NVR, no creds on Pi, fleet token) | ✅ Done (4-6 Plan A) |
+| 1 | Remove test@test.com bypass | ✅ |
+| 2 | RTSP URL validation (SSRF) | ✅ |
+| 3 | File lock on config read-write | ✅ |
+| 4 | bcrypt/Argon2 password hashing | ✅ |
+| 5 | Frigate restart feedback to UI | ✅ |
+| 6 | Gmail OTP persistence (SQLite) | ✅ |
+| 7 | Docker secrets for GMAIL_APP_PASSWORD | ✅ |
+| 8 | Unified Cameras source of truth (drop CloudCameras drift) | ✅ (003) |
+| 9 | Passive edge gateway (multi-NVR, no creds on Pi, fleet token) | ✅ (4-6 Plan A) |
+
+> Gateway security backlog (G1–G7, PENDING) → `gateway/commercialization-security-notes.md`.
 
 ---
 
 ## Environment Variables (.env)
-
-NEVER commit `.env`. Các biến quan trọng:
-- `FRIGATE_HOST_IP` — IP của host Ubuntu (dùng cho WebRTC candidates)
+NEVER commit `.env`. Quan trọng:
+- `FRIGATE_HOST_IP` — IP host Ubuntu (WebRTC candidates)
 - `TZ=Asia/Ho_Chi_Minh`
-- `WRAPPER_TAG` — tag image nvr-wrapper (thực tế override bởi docker-compose.override.yml → `nvr-wrapper:latest`)
+- `WRAPPER_TAG` — tag image (thực tế override → `nvr-wrapper:latest`)
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — Watchdog alert
-- `GITHUB_TOKEN` — Pull image từ GHCR (cần refresh khi hết hạn)
+- `GITHUB_TOKEN` — Pull image từ GHCR (refresh khi hết hạn)
 - `GMAIL_USER` — Gmail address (not sensitive)
-- `GMAIL_APP_PASSWORD` — **Moved to `secrets/gmail_app_password` Docker secret** (NOT in .env)
-
----
+- `GMAIL_APP_PASSWORD` — **moved to `secrets/gmail_app_password` Docker secret** (NOT in .env)
 
 ## Network
-
-- `nvr-wrapper`, `nginx`, `nvr-watchdog` dùng `network_mode: host` (cần cho ONVIF multicast và RTSP)
+- `nvr-wrapper`, `nginx`, `nvr-watchdog` dùng `network_mode: host` (cần cho ONVIF multicast + RTSP)
 - `mosquitto`, `frigate` dùng bridge network `nvr-backend`
-- Frigate có thể reach Tailscale/VPN IPs (100.64.x.x) từ trong container
+- Frigate reach Tailscale/VPN IPs (100.64.x.x) từ trong container
 
 ## Test E2E
-- `for run test E2E information, read claude_test.md.
+- Thông tin chạy test E2E: đọc `claude_test.md`.

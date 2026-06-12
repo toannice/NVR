@@ -1,14 +1,13 @@
 import { useState, useEffect, useCallback } from 'react'
 
 // Edge gateway management (4-6 Plan A). Gateways are passive L4 proxies the NVR auto-discovers
-// on the ZeroTier subnet. Flow: discover → approve → adopt camera (admin types ONVIF creds here;
+// on the Nebula overlay subnet. Flow: discover → approve → adopt camera (admin types ONVIF creds here;
 // the gateway never stores them). Adopted cameras then appear as normal cameras everywhere.
 
 type Gateway = {
   id: string
   name: string
-  zerotierIp: string | null
-  ztAddress: string | null
+  zerotierIp: string | null   // overlay IP (API keeps the historical key; holds the Nebula overlay IP)
   agentPort: number
   status: string        // discovered | approved
   online: boolean
@@ -19,8 +18,8 @@ type Gateway = {
   cameraCount: number
 }
 
-// Unified across overlays: `id` is what /authorize takes (ZeroTier nodeId OR Nebula enrollment token),
-// `label` the display name, `detail` the IP assignment(s).
+// A gateway awaiting "Cấp phép": `id` is what /authorize takes (the Nebula enrollment token),
+// `label` the display name, `detail` the overlay IP assignment(s).
 type PendingMember = {
   id: string
   label: string
@@ -283,7 +282,7 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-xl font-bold text-gray-800">Gateway biên</h1>
-          <p className="text-sm text-gray-500">Tự phát hiện trên ZeroTier. Duyệt gateway rồi thêm camera (nhập tài khoản ONVIF tại đây).</p>
+          <p className="text-sm text-gray-500">Tự phát hiện trên mạng Nebula. Duyệt gateway rồi thêm camera (nhập tài khoản ONVIF tại đây).</p>
         </div>
         <button onClick={scanNow} disabled={scanning}
           className="flex items-center gap-1 bg-[#EF4444] text-white px-4 py-2 rounded-lg text-sm disabled:opacity-50">
@@ -298,7 +297,7 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
             <h2 className="font-semibold text-amber-800 text-sm">Thiết bị mới chờ cấp phép ({pending.length})</h2>
           </div>
           <p className="text-xs text-amber-700/80 mb-3">
-            Gateway vừa cắm điện đã liên hệ controller nhưng chưa được vào mạng. Cấp phép để NVR thấy và quản lý.
+            Gateway vừa cắm điện đã enroll nhưng chưa được cấp phép vào mạng Nebula. Cấp phép để NVR thấy và quản lý.
           </p>
           <div className="space-y-2">
             {pending.map(p => (
@@ -323,7 +322,7 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
         <p className="text-gray-500">Đang tải…</p>
       ) : gateways.length === 0 ? (
         <div className="bg-gray-50 border border-dashed border-gray-300 rounded-xl p-8 text-center text-gray-500">
-          Chưa phát hiện gateway nào. Đảm bảo Pi đã chạy agent + join ZeroTier, rồi bấm “Quét ngay”.
+          Chưa phát hiện gateway nào. Đảm bảo Pi đã chạy agent + đã enroll vào mạng Nebula (đã “Cấp phép”), rồi bấm “Quét ngay”.
         </div>
       ) : (
         <div className="space-y-3">
@@ -337,7 +336,6 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
                   </div>
                   <div className="text-xs text-gray-500 mt-0.5">
                     {g.zerotierIp || '(chưa có IP)'} :{g.agentPort}
-                    {g.ztAddress ? ` · ZT ${g.ztAddress}` : ''}
                     {g.fieldSubnet ? ` · LAN ${g.fieldSubnet}` : ''} · {g.cameraCount} camera
                   </div>
                   {(g.installer || g.location) && (

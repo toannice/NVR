@@ -263,6 +263,29 @@ Kiến trúc **không khoá vào Raspberry Pi**. Thiết bị nào thoả là ch
 - **Network id KHÔNG phải bí mật** (node vẫn cần admin cấp phép) → đưa cho FW thoải mái.
 - App field **không bao giờ** tới được NVR và **không** giữ ZeroTier API token.
 
+### 13b. Bề mặt tấn công còn lại (audit 08/06 — chi tiết G1–G7 ở CLAUDE.md)
+
+Thiết kế kín ở: creds camera không ở Pi, video mã hoá ZeroTier (Salsa20), proxy bind ztIP, node lạ phải cấp phép. Lỗ còn:
+- 🔴 **G1 — `/camera` = port-forward tùy ý vào LAN field:** `localIp` không bắt buộc thuộc field subnet → ai có fleet token + trên overlay reach được bất kỳ host:80/:554 (router, NAS) của LAN khách. Vá: whitelist `localIp ∈ FieldSubnet`.
+- 🔴 **G2 — fleet token dùng chung cả fleet:** trộm 1 Pi = điều khiển mọi gateway. Vá: per-gateway token / rotate.
+- 🔴 **G3 — `/enroll` no-auth → hijack gateway chưa adopt** (van 409 chỉ chặn khi đã có camera).
+- 🟠 G4 agent chạy root; G5 API bind `0.0.0.0` rò `/identity`; G6 nginx config-injection qua tên camera; G7 gateway nới rộng bề mặt tấn công của chính camera (web UI/RTSP/ONVIF của camera giờ với tới từ cả overlay — vd web UI `https://<ztIP>:<port>` nếu mở proxy 443).
+
+---
+
+## 14. 🚨 Chủ quyền + Thương mại hoá — CẦN QUYẾT (08/06)
+
+> Phần việc GẤP. To-do đầy đủ + bảng "mất/đổi/giữ/được" ở **CLAUDE.md § "GẤP — Chốt kế hoạch thương mại hoá"** + **§ "Overlay alternatives & License"**.
+
+**Vấn đề 1 — License (bán):** ZeroTier One = **BSL 1.1** (không phải copyleft; phép thử là *Additional Use Grant* chống cạnh tranh). Nhúng-bán cho bên thứ ba = **vùng cần OEM/commercial license**. Hai đường: (a) mua OEM ZeroTier (giữ code), (b) đổi overlay license-sạch — **Nebula (MIT)** / OpenZiti (Apache) / Netbird (BSD).
+
+**Vấn đề 2 — Chủ quyền (cắt cáp quốc tế):** planet roots do **ZeroTier Inc. vận hành, đặt NGOÀI VN** (có IP public, baked trong binary). Cắt quốc tế → định vị peer + đục NAT chết (link P2P *đang chạy* còn sống; reboot/join mới/nối lại = fail). Gỡ:
+- **Moon** (root tự host nội địa) — dễ (`zerotier-idtool initmoon`/`genmoon` + `orbit`, không compile), chịu được cắt quốc tế. Source ZeroTier mở (BSL). Đủ 99% nhu cầu.
+- **Custom planet** (`mkworld`, phải compile + thay file `planet` mọi node) — air-gap tuyệt đối, zero root ngoại.
+- Đổi **Nebula** → hết phụ thuộc root ngoại luôn (lighthouse tự host = chủ quyền mặc định).
+
+> Mấu chốt: **moon giải quyết kỹ thuật (cắt quốc tế), KHÔNG giải quyết license (BSL khi bán).** Đổi Nebula giải quyết cả hai nhưng phải viết lại control plane + onboarding (data path L4 giữ nguyên). → Owner cần chốt đường license TRƯỚC, rồi mới định overlay + onboarding.
+
 ---
 
 *Tài liệu mô tả công nghệ Gateway của hệ NVR Fleet tới 08/06/2026. Tham chiếu code: `edge-agent/`, `backend/.../gateway/`, `hq-controller/`, `android-app/`; kế hoạch: `specs/004-gateway-onboarding/plan.md`; vận hành: `gateway_setup.md`, `controller_hq_setup.md`. Bản trước: `Cong-nghe-Gateway-5-6.md`.*
