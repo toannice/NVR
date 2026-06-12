@@ -36,7 +36,25 @@ NVR-side (edited in place under `backend/.../gateway/`):
 | HQ install scripts + systemd + lighthouse | ✅ written, `bash -n` clean (not yet run on a real box) |
 | NVR `NebulaCaClient` + config + service methods | ✅ compiles (`./gradlew compileKotlin`); additive, ZeroTier untouched |
 | Routes + scanner + frontend + Android app wiring | ✅ done & compiles (see below) |
-| **Real-Pi end-to-end test** | ⏳ pending hardware |
+| **Real-Pi end-to-end test** | ✅ passed (same-LAN; real cross-internet NAT still untested — see memory) |
+
+### Post-migration hardening / lifecycle (2026-06-12, code + offline-verified)
+
+| Item | What | State |
+|---|---|---|
+| G1 | `/camera` refuses localIp outside `EDGE_AGENT_FIELD_SUBNET` | ✅ tested |
+| G3 | `/enroll` only accepts a new region within `EDGE_AGENT_ENROLL_WINDOW_MIN` of boot | ✅ tested |
+| G6 | camera name sanitized before nginx conf (config-injection) | ✅ tested |
+| G2:C | cert/group auth: `NEBULA_FW_NVR_GROUP` → firewall admits only NVR group, agent trusts overlay w/o token | ✅ tested (needs NVR cert `-groups nvr`) |
+| Cert R1 | agent auto-renews within `NEBULA_RENEW_THRESHOLD_DAYS`; HQ `/renew` re-signs same pubkey, no admin | ✅ smoke-tested |
+| Cert V3 | short certs (`NEBULA_CERT_DURATION` 90d) + HQ `/revoke` denylist + `NEBULA_BLOCKLIST_FILE` fingerprint | ✅ smoke-tested |
+| Watchdog | NVR polls HQ `/healthz`, cert-expiry per gateway, Telegram on offline/cert/HQ-down, tab banner | ✅ compiles + live HQ |
+| HQ backup | daily `nvr-hq-backup.timer` snapshots CA key + signing state | ✅ verified |
+
+**Follow-ups (need real Pi/HQ or a decision):** revoke-from-NVR button (needs gatewayId→token mapping
+stored on approve — today `/revoke` is called by admin with the token directly); G4 (drop agent root) +
+G5 (trim `/identity`) need a Pi to verify / an app change; wiring `NEBULA_BLOCKLIST_FILE` into the live
+lighthouse `pki.blocklist` + reload; real cross-internet NAT/relay test.
 
 ### Wiring DONE (commit `5922f55`) — overlay-aware, ZeroTier untouched when Nebula env unset
 1. **Routes** (`GatewayRouting.kt`): `/pending` + `/authorize` pick `NebulaCaClient` vs `ZtControllerClient`
