@@ -37,10 +37,33 @@ fun Application.configureDatabases() {
             AIEvents,
             CloudConfig,
             CloudCameras,
-            Gateways
+            Gateways,
+            IntegrationSettings
         )
 
         migrateCloudCamerasIntoCameras()
+        seedIntegrationSettings()
+    }
+}
+
+/**
+ * Ensure the single-row integration_settings row (id=1) exists, defaulting to disabled.
+ * Idempotent — only inserts when the row is missing.
+ */
+private fun seedIntegrationSettings() {
+    try {
+        val exists = IntegrationSettings.selectAll().where { IntegrationSettings.id eq 1 }.firstOrNull() != null
+        if (!exists) {
+            IntegrationSettings.insert {
+                it[id] = 1
+                it[enabled] = false
+                it[username] = ""
+                it[passwordHash] = ""
+            }
+            AppLogger.info(AppLogger.Module.SYSTEM, "DB", "INTEGRATION_SEED", "integration_settings row id=1 created (disabled)")
+        }
+    } catch (e: Exception) {
+        AppLogger.warn(AppLogger.Module.SYSTEM, "DB", "INTEGRATION_SEED_FAIL", e.message ?: "", e)
     }
 }
 
