@@ -39,6 +39,14 @@ type Config struct {
 	// `nebula-cert sign`). Without this, the first gateway of a pool collides with the NVR. Comma-list,
 	// from NEBULA_RESERVED_IPS. The lighthouse (.1), network (.0) and broadcast (.255) are always skipped.
 	ReservedIPs []string // NEBULA_RESERVED_IPS, e.g. "10.10.20.2"
+
+	// CertDuration is passed to `nebula-cert sign -duration` (V3 short-lived certs). e.g. "2160h" (90d).
+	// Empty = nebula-cert default (1 year). Shorter → faster revoke via expiry, more renewal traffic.
+	CertDuration string // NEBULA_CERT_DURATION
+
+	// BlocklistFile is where /revoke appends a revoked cert's fingerprint (V3 fast-cut). The operator
+	// wires these into the lighthouse pki.blocklist and reloads it. Empty disables the file write.
+	BlocklistFile string // NEBULA_BLOCKLIST_FILE, e.g. /etc/nebula-hq/blocklist.txt
 }
 
 func loadConfig() Config {
@@ -51,6 +59,8 @@ func loadConfig() Config {
 		Lighthouse:          os.Getenv("NEBULA_LIGHTHOUSE"),
 		LighthouseOverlayIP: envOr("NEBULA_LIGHTHOUSE_OVERLAY_IP", "10.10.20.1"),
 		ReservedIPs:         splitCSV(os.Getenv("NEBULA_RESERVED_IPS")),
+		CertDuration:        envOr("NEBULA_CERT_DURATION", "2160h"),
+		BlocklistFile:       os.Getenv("NEBULA_BLOCKLIST_FILE"),
 	}
 	if c.AdminToken == "" {
 		log.Println("WARN: NEBULA_SIGN_TOKEN empty — admin endpoints (mint/approve) will reject every call")

@@ -409,7 +409,8 @@ func (s *server) nebulaEnrollLoop() {
 		}
 		if e.Signed && serviceActive("nebula") {
 			loggedWait = false
-			time.Sleep(5 * time.Second)
+			s.maybeRenew(e)
+			time.Sleep(30 * time.Second)
 			continue
 		}
 
@@ -442,6 +443,39 @@ func (s *server) nebulaEnrollLoop() {
 	}
 }
 
+// maybeRenew auto-renews the cert (R1) when it's within RenewThresholdDays of expiry. The HQ re-signs
+// the SAME pubkey (proof of being the original holder), so no admin step. Rate-limited to one attempt
+// per hour so a refusing/unreachable HQ near expiry doesn't spin. On success it rewrites cert + config
+// and restarts nebula.
+func (s *server) maybeRenew(e Enroll) {
+	if s.cfg.RenewThresholdDays <= 0 || s.cfg.certDaysLeft() > s.cfg.RenewThresholdDays {
+		return
+	}
+	if time.Since(lastRenewAttempt) < time.Hour {
+		return
+	}
+	lastRenewAttempt = time.Now()
+
+	pub, err := s.cfg.ensureKeypair()
+	if err != nil {
+		log.Printf("renew: keypair: %v", err)
+		return
+	}
+	body, code, err := s.signingRenew(e.SigningURL, e.Token, pub)
+	if err != nil || code >= 400 {
+		log.Printf("renew: HQ refused (code=%d err=%v) — will retry", code, err)
+		return
+	}
+	if str(body["status"]) != "signed" {
+		return
+	}
+	if err := s.applySignedCert(body); err != nil {
+		log.Printf("renew: apply cert failed: %v", err)
+		return
+	}
+	log.Printf("renew: cert renewed (daysLeft was <= %d), nebula restarted", s.cfg.RenewThresholdDays)
+}
+
 // applyEnrollBody records the overlay IP + lighthouse the signing service assigned (still pending).
 func (s *server) applyEnrollBody(body map[string]any) {
 	s.state.applyAssignment(str(body["overlayIp"]), str(body["lighthouse"]), str(body["lighthouseOverlayIp"]))
@@ -464,9 +498,17 @@ func (s *server) applySignedCert(body map[string]any) error {
 
 // --- signing service client -------------------------------------------------
 
+// lastRenewAttempt rate-limits R1 auto-renew to one HQ call per hour (see maybeRenew).
+var lastRenewAttempt time.Time
+
 func (s *server) signingEnroll(base, token, name, pubPem string) (map[string]any, int, error) {
 	payload, _ := json.Marshal(map[string]string{"token": token, "name": name, "pubPem": pubPem})
 	return s.signingCall(http.MethodPost, base+"/enroll", payload)
+}
+
+func (s *server) signingRenew(base, token, pubPem string) (map[string]any, int, error) {
+	payload, _ := json.Marshal(map[string]string{"token": token, "pubPem": pubPem})
+	return s.signingCall(http.MethodPost, base+"/renew", payload)
 }
 
 func (s *server) signingStatus(base, token string) (map[string]any, int, error) {

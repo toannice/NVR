@@ -15,6 +15,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -37,10 +38,12 @@ func main() {
 	mux.HandleFunc("/healthz", s.handleHealthz)              // no auth — for watchdog/NVR poll
 	mux.HandleFunc("/enroll", s.handleEnroll)                // gateway, token-gated
 	mux.HandleFunc("/enroll/status", s.handleEnrollStatus)   // gateway, token-gated
+	mux.HandleFunc("/renew", s.handleRenew)                  // gateway, token+pubkey-gated: auto re-sign (R1)
 	mux.HandleFunc("/tokens", s.adminOnly(s.handleTokens))   // admin: GET list / POST mint
 	mux.HandleFunc("/pending", s.adminOnly(s.handlePending)) // admin: list awaiting "Cấp phép"
 	mux.HandleFunc("/approve", s.adminOnly(s.handleApprove)) // admin: sign cert
 	mux.HandleFunc("/reject", s.adminOnly(s.handleReject))   // admin: drop a pending request
+	mux.HandleFunc("/revoke", s.adminOnly(s.handleRevoke))   // admin: revoke a gateway (V3)
 
 	srv := &http.Server{Addr: cfg.Listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("nvr-nebula-signing on %s (caDir=%s lighthouse=%s)", cfg.Listen, cfg.CADir, cfg.Lighthouse)
@@ -169,22 +172,102 @@ func (s *server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no request for token"})
 		return
 	}
+	if rq.Revoked {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "gateway revoked"})
+		return
+	}
 	if rq.Status == "signed" {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "overlayIp": rq.OverlayIP, "note": "already signed"})
 		return
 	}
-	certPem, caPem, err := s.signCert(t.CaName, rq.Name, rq.OverlayIP, maskOf(t.IPCidr), t.Groups, rq.PubPem)
+	certPem, caPem, fp, err := s.signCert(t.CaName, rq.Name, rq.OverlayIP, maskOf(t.IPCidr), t.Groups, rq.PubPem)
 	if err != nil {
 		log.Printf("approve sign failed token=%s..: %v", safePrefix(rq.Token), err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	if err := s.store.markSigned(rq.Token, certPem, caPem); err != nil {
+	if err := s.store.markSigned(rq.Token, certPem, caPem, fp); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
 	log.Printf("approved + signed token=%s.. name=%q ip=%s", safePrefix(rq.Token), rq.Name, rq.OverlayIP)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "overlayIp": rq.OverlayIP, "name": rq.Name})
+}
+
+// handleRenew (gateway, token-gated — no admin): POST {token, pubPem}. Auto re-signs an ALREADY-APPROVED
+// gateway's cert so the fleet never lapses (R1). Safe without admin re-approval because we only sign the
+// SAME pubkey that was originally approved — a cert minted for that key is useless to anyone without the
+// matching private key (which never left the Pi). Refuses revoked gateways.
+func (s *server) handleRenew(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method"})
+		return
+	}
+	var req struct {
+		Token  string `json:"token"`
+		PubPem string `json:"pubPem"`
+	}
+	if err := readJSON(r, &req); err != nil || req.Token == "" || req.PubPem == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "token and pubPem required"})
+		return
+	}
+	rq, t := s.store.getRequest(strings.TrimSpace(req.Token))
+	if rq == nil || t == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no request for token"})
+		return
+	}
+	if rq.Revoked {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "gateway revoked"})
+		return
+	}
+	if rq.Status != "signed" {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "not yet approved — cannot renew"})
+		return
+	}
+	// Bind renewal to the originally-approved key: only re-sign the same pubkey.
+	if normPem(req.PubPem) != normPem(rq.PubPem) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "pubkey does not match the approved gateway"})
+		return
+	}
+	certPem, caPem, fp, err := s.signCert(t.CaName, rq.Name, rq.OverlayIP, maskOf(t.IPCidr), t.Groups, rq.PubPem)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if err := s.store.markSigned(rq.Token, certPem, caPem, fp); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	log.Printf("renewed token=%s.. name=%q ip=%s", safePrefix(rq.Token), rq.Name, rq.OverlayIP)
+	writeJSON(w, http.StatusOK, s.statusBody(rq))
+}
+
+// handleRevoke (admin): POST {token}. Marks the gateway revoked (blocks renew + re-enroll → its
+// short-lived cert lapses, V1) and appends its cert fingerprint to the blocklist file for the operator
+// to wire into the lighthouse pki.blocklist + reload (V2 fast-cut).
+func (s *server) handleRevoke(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method"})
+		return
+	}
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := readJSON(r, &req); err != nil || req.Token == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "token required"})
+		return
+	}
+	fp, ok := s.store.markRevoked(strings.TrimSpace(req.Token))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no request for token"})
+		return
+	}
+	blocklisted := false
+	if fp != "" {
+		blocklisted = s.appendBlocklist(fp)
+	}
+	log.Printf("revoked token=%s.. fingerprint=%q blocklisted=%v", safePrefix(strings.TrimSpace(req.Token)), fp, blocklisted)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "fingerprint": fp, "blocklisted": blocklisted})
 }
 
 func (s *server) handleReject(w http.ResponseWriter, r *http.Request) {
@@ -222,11 +305,40 @@ func statusForErr(err error) int {
 	switch err {
 	case errBadToken:
 		return http.StatusUnauthorized
-	case errExpiredToken, errUsedToken:
+	case errExpiredToken, errUsedToken, errRevoked:
 		return http.StatusConflict
 	default:
 		return http.StatusBadRequest
 	}
+}
+
+// normPem normalises a PEM blob for comparison (trim + drop all whitespace) so cosmetic differences
+// (trailing newline, CRLF) don't break the renewal pubkey match.
+func normPem(s string) string {
+	return strings.Join(strings.Fields(s), "")
+}
+
+// appendBlocklist appends a revoked cert fingerprint to the configured blocklist file (one per line,
+// deduped best-effort). Returns true if written. The operator wires this file into the lighthouse
+// pki.blocklist and reloads nebula for the fast-cut (V2).
+func (s *server) appendBlocklist(fp string) bool {
+	if s.cfg.BlocklistFile == "" {
+		return false
+	}
+	if existing, err := os.ReadFile(s.cfg.BlocklistFile); err == nil && strings.Contains(string(existing), fp) {
+		return true // already present
+	}
+	f, err := os.OpenFile(s.cfg.BlocklistFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		log.Printf("blocklist append failed (%s): %v", s.cfg.BlocklistFile, err)
+		return false
+	}
+	defer f.Close()
+	if _, err := f.WriteString(fp + "\n"); err != nil {
+		log.Printf("blocklist write failed: %v", err)
+		return false
+	}
+	return true
 }
 
 func safePrefix(tok string) string {

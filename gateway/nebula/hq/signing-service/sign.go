@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +15,7 @@ var (
 	errExpiredToken = errors.New("enrollment token expired")
 	errUsedToken    = errors.New("enrollment token already used")
 	errNoRequest    = errors.New("no enrollment request for token")
+	errRevoked      = errors.New("gateway revoked")
 )
 
 // signCert runs `nebula-cert sign -in-pub` to sign the gateway's PUBLIC key (the private key never
@@ -22,22 +24,22 @@ var (
 //
 //	nebula-cert sign -ca-crt <ca>.crt -ca-key <ca>.key -in-pub <pub> \
 //	    -name <name> -ip <overlayIp>/<mask> -groups <groups> -out-crt <crt>
-func (s *server) signCert(caName, name, overlayIP, cidrMask, groups, pubPem string) (certPem, caPem string, err error) {
+func (s *server) signCert(caName, name, overlayIP, cidrMask, groups, pubPem string) (certPem, caPem, fingerprint string, err error) {
 	caCrt, caKey, caPemStr, err := s.caFiles(caName)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 
 	tmp, err := os.MkdirTemp("", "nebula-sign-")
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	defer os.RemoveAll(tmp)
 
 	pubPath := filepath.Join(tmp, "host.pub")
 	crtPath := filepath.Join(tmp, "host.crt")
 	if err := os.WriteFile(pubPath, []byte(ensureTrailingNL(pubPem)), 0o600); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 
 	ipArg := overlayIP + "/" + cidrMask // nebula wants ip/mask, e.g. 10.10.20.12/24
@@ -53,17 +55,38 @@ func (s *server) signCert(caName, name, overlayIP, cidrMask, groups, pubPem stri
 	if groups != "" {
 		args = append(args, "-groups", groups)
 	}
+	// V3: short-lived certs so a revoked gateway falls off the overlay within the cert lifetime even if
+	// the blocklist isn't pushed. Empty CertDuration falls back to nebula-cert's default (1 year).
+	if s.cfg.CertDuration != "" {
+		args = append(args, "-duration", s.cfg.CertDuration)
+	}
 
 	cmd := exec.Command(s.cfg.NebulaCert, args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", "", fmt.Errorf("nebula-cert sign failed: %v: %s", err, strings.TrimSpace(string(out)))
+		return "", "", "", fmt.Errorf("nebula-cert sign failed: %v: %s", err, strings.TrimSpace(string(out)))
 	}
 
 	crtBytes, err := os.ReadFile(crtPath)
 	if err != nil {
-		return "", "", fmt.Errorf("read signed cert: %w", err)
+		return "", "", "", fmt.Errorf("read signed cert: %w", err)
 	}
-	return string(crtBytes), caPemStr, nil
+	return string(crtBytes), caPemStr, s.certFingerprint(crtPath), nil
+}
+
+// certFingerprint returns the signed cert's fingerprint via `nebula-cert print -json` (best-effort, ""
+// on failure). Used to populate the lighthouse pki.blocklist on revoke (V3 fast-cut).
+func (s *server) certFingerprint(crtPath string) string {
+	out, err := exec.Command(s.cfg.NebulaCert, "print", "-json", "-path", crtPath).Output()
+	if err != nil {
+		return ""
+	}
+	var parsed struct {
+		Fingerprint string `json:"fingerprint"`
+	}
+	if json.Unmarshal(out, &parsed) != nil {
+		return ""
+	}
+	return parsed.Fingerprint
 }
 
 // caFiles resolves the cert/key paths for a CA name (default "default" for the PoC single-CA case)
