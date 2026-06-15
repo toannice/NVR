@@ -30,7 +30,7 @@ services:
     networks:
       - nvr-backend
     ports:
-      - "5000:5000" # Frigate Web UI & API (dev/admin access)
+      - "127.0.0.1:5000:5000" # Frigate Web UI & API — bind localhost only (nvr-wrapper proxies via FRIGATE_URL=localhost:5000). Không expose UI gốc Frigate ra LAN (trademark + security). Dev xa: dùng SSH tunnel.
       - "8554:8554" # RTSP re-stream feeds
       - "1984:1984" # go2rtc API & video streams
       - "8555:8555/udp" # go2rtc WebRTC UDP (cloud live view ICE candidates)
