@@ -196,7 +196,7 @@ const AIConfigView = ({ cameras, addToast }: AIConfigViewProps) => {
             const applyRes = await fetch(`/api/cameras/${selectedCamera}/ai/apply`, { method: 'POST' });
 
             if (!applyRes.ok) {
-                addToast?.({ type: 'error', title: 'Lỗi', message: 'Không thể kích hoạt restart Frigate' });
+                addToast?.({ type: 'error', title: 'Lỗi', message: 'Không thể kích hoạt restart AIView NVR' });
                 setIsApplying(false);
                 setApplyStatus(null);
                 return;
@@ -220,13 +220,13 @@ const AIConfigView = ({ cameras, addToast }: AIConfigViewProps) => {
                 addToast?.({
                     type: 'success',
                     title: 'Đã lưu & áp dụng thành công',
-                    message: 'AI Frigate đã được cập nhật cấu hình mới.'
+                    message: 'AIView NVR đã được cập nhật cấu hình AI mới.'
                 });
                 fetchConfig();
             } else {
                 setApplyStatus(null);
                 setIsApplying(false);
-                addToast?.({ type: 'error', title: 'Timeout', message: 'Frigate chưa về online sau 3 phút. Vui lòng kiểm tra.' });
+                addToast?.({ type: 'error', title: 'Timeout', message: 'AIView NVR chưa về online sau 3 phút. Vui lòng kiểm tra.' });
             }
         } catch (e) {
             console.error('Save & Apply error:', e);
