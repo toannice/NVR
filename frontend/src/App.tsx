@@ -387,7 +387,7 @@ function App() {
         await fetchCameras();
         addToast({ type: 'success', title: 'Thành công', message: `Đã thêm camera "${params.name}" thành công!` });
         if (data.frigateRestarted === false) {
-          addToast({ type: 'warning', title: 'Cảnh báo', message: 'Không thể restart Frigate. Camera sẽ hoạt động sau khi Frigate khởi động lại.' });
+          addToast({ type: 'warning', title: 'Cảnh báo', message: 'Không thể restart AIView NVR. Camera sẽ hoạt động sau khi AIView NVR khởi động lại.' });
         }
         return data;
       } else {

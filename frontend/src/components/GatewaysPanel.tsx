@@ -225,7 +225,7 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
       })
       const d = await r.json().catch(() => ({}))
       if (r.ok && d.success) {
-        toast(`Đã thêm camera ${row.name}${d.frigateRestarted ? '' : ' (Frigate chưa restart)'}`, 'success')
+        toast(`Đã thêm camera ${row.name}${d.frigateRestarted ? '' : ' (AIView NVR chưa restart)'}`, 'success')
         // remove the row once adopted
         setAddable(prev => ({ ...prev, [id]: (prev[id] || []).filter(x => x.localIp !== row.localIp) }))
         await fetchGateways()
