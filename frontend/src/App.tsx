@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import AIConfigView from './components/AIConfigView'
 import PatternLockScreen from './components/PatternLockScreen'
-import GatewaysPanel from './components/GatewaysPanel'
-import IntegrationPanel from './components/IntegrationPanel'
 import { useMqttEvents } from './hooks/useMqttEvents'
 import './App.css'
 import { Header } from './components/Header'
@@ -578,8 +576,6 @@ function App() {
         {activeTab === 'Sự kiện AI' && (
           <AIConfigView cameras={cameras} addToast={addToast} />
         )}
-        {activeTab === 'Gateways' && <GatewaysPanel addToast={addToast} onCamerasChanged={fetchCameras} />}
-        {activeTab === 'Tích hợp' && <IntegrationPanel addToast={addToast} />}
         {activeTab === 'Setup' && (
           <SetupView
             setupTab={setupTab}

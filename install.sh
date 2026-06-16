@@ -78,13 +78,13 @@ ensure_env() {
 ensure_cert() {
     c "[3/6] nginx TLS cert"
     if [[ -s nginx/server.crt && -s nginx/server.key ]]; then ok "cert present"; return; fi
-    [[ $CHECK_ONLY -eq 1 ]] && { warn "nginx/server.{crt,key} missing (would self-sign)"; return; }
+    [[ $CHECK_ONLY -eq 1 ]] && { warn "nginx/server.{crt,key} missing (would issue from internal CA)"; return; }
     mkdir -p nginx
     local ip; ip="$(hostname -I 2>/dev/null | awk '{print $1}')"; ip="${ip:-127.0.0.1}"
-    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-        -keyout nginx/server.key -out nginx/server.crt \
-        -subj "/CN=$ip" -addext "subjectAltName=IP:$ip,DNS:localhost" >/dev/null 2>&1
-    ok "self-signed cert generated (CN=$ip, 10y)"
+    # Internal-CA cert (SAN = LAN IP + nvr.local) so Boxes can verify TLS strictly after
+    # trusting nginx/ca/ca.crt. Re-run nginx/gen-tls.sh with new SANs if the address changes.
+    bash nginx/gen-tls.sh "$ip" nvr.local >/dev/null 2>&1
+    ok "cert issued from internal CA (SAN: IP:$ip,DNS:nvr.local). Trust nginx/ca/ca.crt on each Box."
 }
 
 # ── 4. Docker secrets ────────────────────────────────────────────────────────

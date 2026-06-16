@@ -6,14 +6,18 @@ import io.ktor.server.plugins.origin
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import io.ktor.util.reflect.typeInfo
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
+import org.slf4j.LoggerFactory
 import vn.aiview.nvr.models.Cameras
 import vn.aiview.nvr.services.IntegrationService
 import vn.aiview.nvr.services.StreamOnlineTracker
 
-// ---- Wire formats (match NVR_AIView_Integration_Protocol v1.1 exactly) ----
+// ---- Wire formats (match NVR_AIView_Integration_Protocol v1.2 exactly) ----
 
 @Serializable
 private data class IntegrationInfo(
@@ -52,19 +56,54 @@ private data class BoxCameraStatusItem(
     val online: Boolean,
 )
 
-private suspend fun ApplicationCall.respondError(status: HttpStatusCode, code: String, message: String) =
-    respond(status, ErrorResponse(code, message))
-
 /**
  * Client IP for rate limiting. Prefers the first X-Forwarded-For hop (set by nginx) so distinct
  * Boxes keep distinct buckets behind the reverse proxy; falls back to the direct socket peer.
  */
 private fun ApplicationCall.clientIp(): String =
     request.headers["X-Forwarded-For"]?.split(",")?.firstOrNull()?.trim()?.takeIf { it.isNotBlank() }
-        ?: request.origin.remoteHost
+        ?: request.origin.remoteAddress   // numeric IP (not remoteHost, which may reverse-DNS to a hostname like "localhost")
+
+// ---- Audit logging (full request/response trail of every Box call, e.g. from 192.168.2.2) ----
+
+private val auditLog = LoggerFactory.getLogger("IntegrationAudit")
+private val auditJson = Json { encodeDefaults = true }
 
 /**
- * Public AiView Box integration endpoints (v1.1 §3). NOT inside authenticate("auth-session") —
+ * Mask secrets so credentials never land in a log file: JSON `"password"` values AND any
+ * `user:pass@` embedded in an rtsp(s):// URL (relevant once `rtsp_auth=true`).
+ */
+private fun redact(raw: String): String = raw
+    .replace(Regex("(\"password\"\\s*:\\s*\")(.*?)(\")"), "$1***$3")
+    .replace(Regex("(rtsps?://[^:/?#@\\s]+:)([^@/\\s]+)(@)"), "$1***$3")
+
+/** Source descriptor: effective client IP + raw socket peer + X-Forwarded-For (for filtering). */
+private fun ApplicationCall.source(): String {
+    val peer = request.origin.remoteAddress
+    val xff = request.headers["X-Forwarded-For"] ?: "-"
+    return "ip=${clientIp()} peer=$peer xff=$xff"
+}
+
+private fun ApplicationCall.logReq(endpoint: String, rawBody: String) {
+    val payload = redact(rawBody).ifBlank { "<empty>" }
+    auditLog.info("REQ ${request.httpMethod.value} $endpoint | ${source()} | payload=$payload")
+}
+
+/** Log the response (status + body) then send it. */
+private suspend inline fun <reified T> ApplicationCall.respondLogged(
+    endpoint: String, status: HttpStatusCode, body: T
+) {
+    val rendered = redact(try { auditJson.encodeToString(body) } catch (_: Exception) { body.toString() })
+    auditLog.info("RESP $endpoint | ${source()} | status=${status.value} | response=$rendered")
+    respond(status, body as Any, typeInfo<T>())
+}
+
+private suspend fun ApplicationCall.respondError(
+    endpoint: String, status: HttpStatusCode, code: String, message: String
+) = respondLogged(endpoint, status, ErrorResponse(code, message))
+
+/**
+ * Public AiView Box integration endpoints (v1.2 §3). NOT inside authenticate("auth-session") —
  * these self-authenticate with the dedicated integration credential pair (§8 hướng A).
  */
 fun Route.integrationRouting() {
@@ -72,7 +111,10 @@ fun Route.integrationRouting() {
 
         // §3.1 — version + limits. No auth.
         get("/getintegrationinfo") {
-            call.respond(
+            val endpoint = "/api/getintegrationinfo"
+            call.logReq(endpoint, "")
+            call.respondLogged(
+                endpoint, HttpStatusCode.OK,
                 IntegrationInfo(
                     protocol_version = IntegrationService.PROTOCOL_VERSION,
                     nvr_version = appVersion,
@@ -84,25 +126,32 @@ fun Route.integrationRouting() {
 
         // §3.2 — discovery: list not-yet-added cameras + restream URLs. Rate-limit → auth.
         post("/getprofilecamera") {
+            val endpoint = "/api/getprofilecamera"
+            val raw = call.receiveText()
+            call.logReq(endpoint, raw)
+
             val ip = call.clientIp()
             IntegrationService.RateLimiter.check(ip)?.let { retryAfter ->
                 call.response.headers.append(HttpHeaders.RetryAfter, retryAfter.toString())
-                return@post call.respondError(HttpStatusCode.TooManyRequests, "TOO_MANY_REQUESTS", "Quá nhiều yêu cầu, thử lại sau.")
+                return@post call.respondError(endpoint, HttpStatusCode.TooManyRequests, "TOO_MANY_REQUESTS", "Quá nhiều yêu cầu, thử lại sau.")
             }
 
             val req = try {
-                call.receive<ProfileRequest>()
+                auditJson.decodeFromString<ProfileRequest>(raw)
             } catch (_: Exception) {
-                return@post call.respondError(HttpStatusCode.BadRequest, "BAD_REQUEST", "Yêu cầu không hợp lệ.")
+                return@post call.respondError(endpoint, HttpStatusCode.BadRequest, "BAD_REQUEST", "Yêu cầu không hợp lệ.")
             }
 
             when (IntegrationService.verifyBoxAuth(req.username, req.password)) {
                 is IntegrationService.AuthResult.Disabled ->
-                    return@post call.respondError(HttpStatusCode.Forbidden, "FORBIDDEN", "Tích hợp chưa được bật trên NVR.")
+                    return@post call.respondError(endpoint, HttpStatusCode.Forbidden, "FORBIDDEN", "Tích hợp chưa được bật trên NVR.")
                 is IntegrationService.AuthResult.Invalid ->
-                    return@post call.respondError(HttpStatusCode.Unauthorized, "INVALID_CREDENTIALS", "Sai tên đăng nhập hoặc mật khẩu.")
+                    return@post call.respondError(endpoint, HttpStatusCode.Unauthorized, "INVALID_CREDENTIALS", "Sai tên đăng nhập hoặc mật khẩu.")
                 is IntegrationService.AuthResult.Ok -> { /* fall through */ }
             }
+
+            // Successful auth → record this Box IP so the admin can see who connected.
+            IntegrationService.recordConnection(ip, req.username, endpoint)
 
             val excluded = req.already_added_camera_ids.toSet()
             val result = transaction {
@@ -120,22 +169,29 @@ fun Route.integrationRouting() {
                         )
                     }
             }
-            call.respond(result)
+            call.respondLogged(endpoint, HttpStatusCode.OK, result)
         }
 
         // §3.3 — health-check by camera_id. No auth (no stream URLs leaked). Rate-limited.
         post("/getcamerastatus") {
+            val endpoint = "/api/getcamerastatus"
+            val raw = call.receiveText()
+            call.logReq(endpoint, raw)
+
             val ip = call.clientIp()
             IntegrationService.RateLimiter.check(ip)?.let { retryAfter ->
                 call.response.headers.append(HttpHeaders.RetryAfter, retryAfter.toString())
-                return@post call.respondError(HttpStatusCode.TooManyRequests, "TOO_MANY_REQUESTS", "Quá nhiều yêu cầu, thử lại sau.")
+                return@post call.respondError(endpoint, HttpStatusCode.TooManyRequests, "TOO_MANY_REQUESTS", "Quá nhiều yêu cầu, thử lại sau.")
             }
 
             val req = try {
-                call.receive<StatusRequest>()
+                auditJson.decodeFromString<StatusRequest>(raw)
             } catch (_: Exception) {
-                return@post call.respondError(HttpStatusCode.BadRequest, "BAD_REQUEST", "Yêu cầu không hợp lệ.")
+                return@post call.respondError(endpoint, HttpStatusCode.BadRequest, "BAD_REQUEST", "Yêu cầu không hợp lệ.")
             }
+
+            // Heartbeat: bump lastSeen for a Box IP that already authenticated (never creates a row).
+            IntegrationService.touchConnection(ip, endpoint)
 
             val existing: Set<String> = transaction {
                 Cameras.selectAll().mapNotNull { it[Cameras.channelId] }.toSet()
@@ -147,7 +203,7 @@ fun Route.integrationRouting() {
                     online = id in existing && StreamOnlineTracker.isOnline(id),
                 )
             }
-            call.respond(result)
+            call.respondLogged(endpoint, HttpStatusCode.OK, result)
         }
     }
 }
@@ -155,7 +211,22 @@ fun Route.integrationRouting() {
 // ---- Admin settings (protected — NVR operator manages enable + credentials) ----
 
 @Serializable
-private data class IntegrationSettingsView(val enabled: Boolean, val username: String, val hasPassword: Boolean)
+private data class IntegrationSettingsView(
+    val enabled: Boolean,
+    val username: String,
+    val hasPassword: Boolean,
+    val passwordLen: Int,
+)
+
+@Serializable
+private data class ConnectionView(
+    val ip: String,
+    val username: String,
+    val firstSeen: Long,
+    val lastSeen: Long,
+    val hitCount: Long,
+    val lastEndpoint: String,
+)
 
 @Serializable
 private data class IntegrationSettingsUpdate(
@@ -171,26 +242,34 @@ fun Route.integrationAdminRouting() {
     route("/api/integration/settings") {
         get {
             val s = IntegrationService.readSettings()
-            call.respond(IntegrationSettingsView(s.enabled, s.username, s.passwordHash.isNotBlank()))
+            call.respond(IntegrationSettingsView(s.enabled, s.username, s.passwordHash.isNotBlank(), s.passwordLen))
         }
         put {
             val body = try {
                 call.receive<IntegrationSettingsUpdate>()
             } catch (_: Exception) {
-                return@put call.respondError(HttpStatusCode.BadRequest, "BAD_REQUEST", "Yêu cầu không hợp lệ.")
+                return@put call.respondError("/api/integration/settings", HttpStatusCode.BadRequest, "BAD_REQUEST", "Yêu cầu không hợp lệ.")
             }
             // Enabling requires a username and an existing-or-new password (avoid an open door).
             val current = IntegrationService.readSettings()
             val willHavePassword = !body.password.isNullOrBlank() || current.passwordHash.isNotBlank()
             if (body.enabled && (body.username.isBlank() || !willHavePassword)) {
                 return@put call.respondError(
-                    HttpStatusCode.BadRequest, "BAD_REQUEST",
+                    "/api/integration/settings", HttpStatusCode.BadRequest, "BAD_REQUEST",
                     "Bật tích hợp cần có tên đăng nhập và mật khẩu."
                 )
             }
             IntegrationService.updateSettings(body.enabled, body.username, body.password)
             val s = IntegrationService.readSettings()
-            call.respond(IntegrationSettingsView(s.enabled, s.username, s.passwordHash.isNotBlank()))
+            call.respond(IntegrationSettingsView(s.enabled, s.username, s.passwordHash.isNotBlank(), s.passwordLen))
         }
+    }
+
+    // List Box IPs that have successfully connected (admin visibility).
+    get("/api/integration/connections") {
+        val conns = IntegrationService.listConnections().map {
+            ConnectionView(it.ip, it.username, it.firstSeen, it.lastSeen, it.hitCount, it.lastEndpoint)
+        }
+        call.respond(conns)
     }
 }

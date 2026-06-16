@@ -241,11 +241,28 @@ fun Route.cameraRouting() {
                     }
                 }
             }
-            if (updated > 0) {
-                call.respondText("""{"success":true,"message":"Đã cập nhật camera"}""", io.ktor.http.ContentType.Application.Json)
-            } else {
+            if (updated == 0) {
                 call.respondText("""{"error":"Camera not found"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.NotFound)
+                return@post
             }
+
+            // Optional: attach/replace the sub-stream (e.g. an ONVIF 2nd profile that wasn't stored
+            // at add time). Persisted through the unified path → dual-stream YAML + go2rtc {ch}_sub.
+            val subRtspUrl = json["subRtspUrl"]?.jsonPrimitive?.content?.trim()?.takeIf { it.isNotBlank() }
+            if (subRtspUrl != null) {
+                val subUrlError = validateRtspUrl(subRtspUrl)
+                if (subUrlError != null) {
+                    call.respondText("""{"error":"Sub stream: $subUrlError"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.BadRequest)
+                    return@post
+                }
+                vn.aiview.nvr.services.CameraService.setSubStream(id, subRtspUrl).getOrElse {
+                    call.application.environment.log.error("CameraService.setSubStream failed", it)
+                    call.respondText("""{"error":"${it.message ?: "Failed to set sub stream"}"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.InternalServerError)
+                    return@post
+                }
+            }
+
+            call.respondText("""{"success":true,"message":"Đã cập nhật camera"}""", io.ktor.http.ContentType.Application.Json)
         } catch (e: Exception) {
             call.application.environment.log.error("Error renaming camera", e)
             call.respondText("""{"error":"${e.message}"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.InternalServerError)

@@ -32,6 +32,7 @@ fun Application.module() {
     configureSockets()
     configureRouting()
     
+    vn.aiview.nvr.services.HealthMonitorService.start()
     vn.aiview.nvr.services.MqttService.start()
     vn.aiview.nvr.services.RecordingScheduler.start()
     vn.aiview.nvr.services.GatewayScanner.start()

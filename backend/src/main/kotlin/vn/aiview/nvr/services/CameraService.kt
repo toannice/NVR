@@ -131,6 +131,47 @@ object CameraService {
         )
     }
 
+    /**
+     * Attach (or replace) the sub-stream of an EXISTING camera, re-applying through the unified
+     * path so DB + config.yml (dual-stream) + go2rtc + Frigate stay consistent. Used by the Web UI
+     * edit flow for cameras added before sub-stream probing existed (their 2nd ONVIF profile is
+     * still reachable — just was never stored). Pass subRtspUrl=null to drop the sub-stream.
+     */
+    suspend fun setSubStream(slugOrChannelId: String, subRtspUrl: String?): Result<AppliedCamera> = runCatching {
+        val row = transaction {
+            Cameras.selectAll().where {
+                (Cameras.slug eq slugOrChannelId) or (Cameras.channelId eq slugOrChannelId)
+            }.firstOrNull()
+        } ?: throw IllegalArgumentException("Camera not found: $slugOrChannelId")
+
+        val channelId = row[Cameras.channelId]?.takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("Camera $slugOrChannelId has no channel_id")
+        // Decrypt the stored password so configMutexApply re-encrypts the SAME secret instead of wiping it.
+        val plainPass = row[Cameras.passwordEncrypted]?.takeIf { it.isNotBlank() }
+            ?.let { runCatching { CryptoUtils.decrypt(it) }.getOrNull() }
+
+        configMutexApply(
+            slug = row[Cameras.slug],
+            channelId = channelId,
+            displayName = row[Cameras.displayName],
+            ip = row[Cameras.ip] ?: "",
+            onvifPort = row[Cameras.onvifPort],
+            username = row[Cameras.username],
+            password = plainPass,
+            manufacturer = row[Cameras.manufacturer],
+            model = row[Cameras.model],
+            mainToken = row[Cameras.mainToken].ifBlank { "MediaProfile${channelId.padStart(3, '0')}01" },
+            subToken = row[Cameras.subToken].ifBlank { buildSubToken(channelId) },
+            rtspUrl = row[Cameras.rtspUrl],
+            subRtspUrl = subRtspUrl,
+            record = true,
+            ptzEnabled = row[Cameras.ptzEnabled],
+            gatewayId = row[Cameras.gatewayId],
+            localIp = row[Cameras.localIp],
+            assignedRtspPort = row[Cameras.assignedRtspPort],
+        )
+    }
+
     suspend fun removeAndPersist(slugOrChannelId: String): Result<Unit> = runCatching {
         val target = transaction {
             Cameras.selectAll().where {

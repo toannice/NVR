@@ -30,7 +30,7 @@ export const Header = ({ activeTab, setActiveTab, currentTime }: {
     </div>
 
     <nav className="flex items-center space-x-1 flex-1 overflow-x-auto justify-center px-4 no-scrollbar">
-      {['Live View', 'Playback', 'Downloads', 'Sự kiện AI', 'Gateways', 'Tích hợp', 'Setup'].map(id => (
+      {['Live View', 'Playback', 'Downloads', 'Sự kiện AI', 'Setup'].map(id => (
         <button
           key={id}
           onClick={() => setActiveTab(id)}
@@ -39,7 +39,7 @@ export const Header = ({ activeTab, setActiveTab, currentTime }: {
             : 'text-white hover:bg-white/20'
             } `}
         >
-          {id === 'Live View' ? 'Trực tiếp' : id === 'Playback' ? 'Xem lại' : id === 'Downloads' ? 'Tải xuống' : id === 'Sự kiện AI' ? 'Sự kiện AI' : id === 'Gateways' ? 'Gateway' : id === 'Tích hợp' ? 'Tích hợp' : 'Cấu hình'}
+          {id === 'Live View' ? 'Trực tiếp' : id === 'Playback' ? 'Xem lại' : id === 'Downloads' ? 'Tải xuống' : id === 'Sự kiện AI' ? 'Sự kiện AI' : 'Cấu hình'}
         </button>
       ))}
     </nav>
