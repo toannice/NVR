@@ -21,11 +21,19 @@ COPY backend/gradle ./gradle
 RUN apk add --no-cache bash
 RUN chmod +x gradlew
 # Now copy source code and build.
-# Cache /root/.gradle (dependency downloads + build cache) across builds → only changed
-# Kotlin recompiles instead of re-resolving every dependency. --no-daemon: no persistent
-# daemon inside the ephemeral build container (the cache mount is what gives the speedup).
+# Two cache mounts persist across builds:
+#   /root/.gradle      → dependency downloads + gradle build cache (no re-resolving deps)
+#   /app/backend/build → Kotlin INCREMENTAL compile state, so a code change recompiles only the
+#                        changed files instead of the whole module. `build/` lives under a cache
+#                        mount → it is NOT in the image layer, so we copy the install dir OUT to
+#                        /opt/dist (a real layer) for stage 3 to COPY.
+# --no-daemon: no persistent daemon in the ephemeral build container (cache mounts give the speedup).
 COPY backend/src ./src
-RUN --mount=type=cache,target=/root/.gradle ./gradlew installDist --no-daemon
+RUN --mount=type=cache,target=/root/.gradle \
+    --mount=type=cache,target=/app/backend/build \
+    ./gradlew installDist --no-daemon \
+    && rm -rf /opt/dist && mkdir -p /opt/dist \
+    && cp -a build/install/nvr-wrapper-backend /opt/dist/
 
 # 3. Final Runtime Image (JRE only to save space)
 FROM eclipse-temurin:21-jre-alpine
@@ -43,8 +51,8 @@ RUN apk add --no-cache bash docker-cli sqlite curl wget
 # Copy Frontend Build from the frontend-builder stage
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 
-# Copy Backend fat distribution from the backend-builder stage
-COPY --from=backend-builder /app/backend/build/install/nvr-wrapper-backend ./backend
+# Copy Backend fat distribution from the backend-builder stage (copied out of the build/ cache mount)
+COPY --from=backend-builder /opt/dist/nvr-wrapper-backend ./backend
 
 EXPOSE 3000
 

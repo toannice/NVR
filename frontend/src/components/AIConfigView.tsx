@@ -65,9 +65,20 @@ const AIConfigView = ({ cameras, addToast }: AIConfigViewProps) => {
             const res = await fetch(`/api/cameras/${selectedCamera}/ai`);
             if (res.ok) {
                 const data = await res.json();
-                setConfig({ detect: { enabled: data.enabled } });
-                // Load existing zones
-                setZones(data.zones || {});
+                const existingZones = data.zones || {};
+                if (Object.keys(existingZones).length === 0) {
+                    // New camera: pre-populate a full-frame zone with all detectable objects
+                    setZones({
+                        toan_canh: {
+                            coordinates: '0.000,0.000,1.000,0.000,1.000,1.000,0.000,1.000',
+                            objects: ['person', 'car', 'motorcycle', 'bus', 'truck'],
+                        }
+                    });
+                    setConfig({ detect: { enabled: true } });
+                } else {
+                    setZones(existingZones);
+                    setConfig({ detect: { enabled: data.enabled } });
+                }
                 setPoints([]);
                 setEditingZoneName(null);
             }

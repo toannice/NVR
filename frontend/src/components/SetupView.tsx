@@ -5,6 +5,8 @@ import { RecordingScheduleSection } from './RecordingScheduleSection'
 import { CloudSettingsSection } from './CloudSettingsSection'
 import { EditCameraModal, OnvifCredentialsModal } from './CameraModals'
 import { ManualCameraForm } from './ManualCameraForm'
+import GatewaysPanel from './GatewaysPanel'
+import IntegrationPanel from './IntegrationPanel'
 
 export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDeleteCamera, handleAddCamera, setupStatus, fetchCameras, addToast, setMiniPlayerCamId }: any) => {
   const [showOnvifModal, setShowOnvifModal] = useState(false);
@@ -93,7 +95,9 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
             { id: 'Network', icon: 'settings_ethernet', label: 'Cấu hình mạng' },
             { id: 'Recording Schedule', icon: 'schedule', label: 'Lịch trình ghi hình' },
             { id: 'Storage', icon: 'storage', label: 'Lưu trữ' },
-            { id: 'Cloud', icon: 'cloud', label: 'Kết nối Cloud' }
+            { id: 'Cloud', icon: 'cloud', label: 'Kết nối Cloud' },
+            { id: 'Gateway', icon: 'router', label: 'Gateway' },
+            { id: 'Tích hợp', icon: 'extension', label: 'Tích hợp' }
           ].map((item) => (
             <li key={item.id}>
               <button
@@ -228,6 +232,16 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
         {setupTab === 'Recording Schedule' && <RecordingScheduleSection cameras={cameras} addToast={addToast} />}
         {setupTab === 'Storage' && <StorageConfigSection />}
         {setupTab === 'Cloud' && <CloudSettingsSection />}
+        {setupTab === 'Gateway' && (
+          <div className="-m-8">
+            <GatewaysPanel addToast={addToast} onCamerasChanged={fetchCameras} />
+          </div>
+        )}
+        {setupTab === 'Tích hợp' && (
+          <div className="-m-8">
+            <IntegrationPanel addToast={addToast} />
+          </div>
+        )}
       </div>
 
       {showOnvifModal && (

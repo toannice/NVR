@@ -134,9 +134,27 @@ object IntegrationSettings : Table("integration_settings") {
     val enabled = bool("enabled").default(false)        // master on/off for the Box integration API
     val username = varchar("username", 255).default("")
     val passwordHash = text("password_hash").default("") // bcrypt (verifyPattern-compatible)
+    val passwordLen = integer("password_len").default(0)  // length of the plaintext password — for the masked •••• UI hint only (NOT the secret)
     val updatedAt = datetime("updated_at").defaultExpression(CurrentDateTime)
 
     override val primaryKey = PrimaryKey(id)
+}
+
+/**
+ * Successful AiView Box connections, keyed by client IP. Lets the NVR operator see which Box(es)
+ * have actually authenticated against this NVR. A row is created only after a successful auth on
+ * /api/getprofilecamera; the periodic /api/getcamerastatus poll just bumps `lastSeen` of an
+ * already-known IP (never creates a row from an unauthenticated call).
+ */
+object IntegrationConnections : Table("integration_connections") {
+    val ip = varchar("ip", 64)
+    val username = varchar("username", 255).default("")
+    val firstSeen = long("first_seen")                    // epoch millis of first successful auth
+    val lastSeen = long("last_seen")                      // epoch millis of most recent activity
+    val hitCount = long("hit_count").default(0)           // total recorded requests from this IP
+    val lastEndpoint = varchar("last_endpoint", 128).default("")
+
+    override val primaryKey = PrimaryKey(ip)
 }
 
 object AIEvents : Table("ai_events") {

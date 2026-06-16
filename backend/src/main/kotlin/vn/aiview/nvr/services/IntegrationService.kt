@@ -6,6 +6,7 @@ import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
+import vn.aiview.nvr.models.IntegrationConnections
 import vn.aiview.nvr.models.IntegrationSettings
 import vn.aiview.nvr.plugins.hashPattern
 import vn.aiview.nvr.plugins.verifyPattern
@@ -18,7 +19,7 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object IntegrationService {
 
-    data class Settings(val enabled: Boolean, val username: String, val passwordHash: String)
+    data class Settings(val enabled: Boolean, val username: String, val passwordHash: String, val passwordLen: Int)
 
     /** Read the single-row settings (id=1). Returns disabled defaults if the row is somehow missing. */
     fun readSettings(): Settings = transaction {
@@ -27,22 +28,28 @@ object IntegrationService {
                 enabled = it[IntegrationSettings.enabled],
                 username = it[IntegrationSettings.username],
                 passwordHash = it[IntegrationSettings.passwordHash],
+                passwordLen = it[IntegrationSettings.passwordLen],
             )
-        } ?: Settings(enabled = false, username = "", passwordHash = "")
+        } ?: Settings(enabled = false, username = "", passwordHash = "", passwordLen = 0)
     }
 
     /**
      * Update settings. `password` null/blank → keep existing hash (so the admin can toggle/rename
-     * without retyping). A non-blank password is bcrypt-hashed via the shared hashPattern().
+     * without retyping). A non-blank password is bcrypt-hashed via the shared hashPattern();
+     * its plaintext length is stored separately to drive the masked •••• UI hint.
      */
     fun updateSettings(enabled: Boolean, username: String, password: String?) = transaction {
         val exists = IntegrationSettings.selectAll().where { IntegrationSettings.id eq 1 }.firstOrNull() != null
-        val newHash = password?.takeIf { it.isNotBlank() }?.let { hashPattern(it) }
+        val newPassword = password?.takeIf { it.isNotBlank() }
+        val newHash = newPassword?.let { hashPattern(it) }
         if (exists) {
             IntegrationSettings.update({ IntegrationSettings.id eq 1 }) {
                 it[IntegrationSettings.enabled] = enabled
                 it[IntegrationSettings.username] = username
-                if (newHash != null) it[IntegrationSettings.passwordHash] = newHash
+                if (newHash != null) {
+                    it[IntegrationSettings.passwordHash] = newHash
+                    it[IntegrationSettings.passwordLen] = newPassword.length
+                }
                 it[IntegrationSettings.updatedAt] = CurrentDateTime
             }
         } else {
@@ -51,6 +58,7 @@ object IntegrationService {
                 it[IntegrationSettings.enabled] = enabled
                 it[IntegrationSettings.username] = username
                 it[IntegrationSettings.passwordHash] = newHash ?: ""
+                it[IntegrationSettings.passwordLen] = newPassword?.length ?: 0
             }
         }
     }
@@ -68,6 +76,71 @@ object IntegrationService {
         if (s.username.isBlank() || s.passwordHash.isBlank()) return AuthResult.Invalid
         val (matched, _) = verifyPattern(password, s.passwordHash)
         return if (username == s.username && matched) AuthResult.Ok else AuthResult.Invalid
+    }
+
+    // ---- Connection tracking: which Box IPs have actually authenticated (admin visibility) ----
+
+    data class Connection(
+        val ip: String,
+        val username: String,
+        val firstSeen: Long,
+        val lastSeen: Long,
+        val hitCount: Long,
+        val lastEndpoint: String,
+    )
+
+    /**
+     * Record a *successful authenticated* call from a Box. Upserts the per-IP row, bumping the
+     * activity counter and timestamps and refreshing the username it logged in as.
+     */
+    fun recordConnection(ip: String, username: String, endpoint: String) = transaction {
+        val now = System.currentTimeMillis()
+        val existing = IntegrationConnections.selectAll().where { IntegrationConnections.ip eq ip }.firstOrNull()
+        if (existing != null) {
+            IntegrationConnections.update({ IntegrationConnections.ip eq ip }) {
+                it[IntegrationConnections.username] = username
+                it[IntegrationConnections.lastSeen] = now
+                it[IntegrationConnections.hitCount] = existing[IntegrationConnections.hitCount] + 1
+                it[IntegrationConnections.lastEndpoint] = endpoint
+            }
+        } else {
+            IntegrationConnections.insert {
+                it[IntegrationConnections.ip] = ip
+                it[IntegrationConnections.username] = username
+                it[IntegrationConnections.firstSeen] = now
+                it[IntegrationConnections.lastSeen] = now
+                it[IntegrationConnections.hitCount] = 1
+                it[IntegrationConnections.lastEndpoint] = endpoint
+            }
+        }
+    }
+
+    /**
+     * Heartbeat from an *unauthenticated* poll (e.g. /getcamerastatus): only bumps lastSeen for an
+     * IP that has already authenticated at least once — never creates a row from an anonymous call.
+     */
+    fun touchConnection(ip: String, endpoint: String) = transaction {
+        val existing = IntegrationConnections.selectAll().where { IntegrationConnections.ip eq ip }.firstOrNull()
+            ?: return@transaction
+        IntegrationConnections.update({ IntegrationConnections.ip eq ip }) {
+            it[IntegrationConnections.lastSeen] = System.currentTimeMillis()
+            it[IntegrationConnections.hitCount] = existing[IntegrationConnections.hitCount] + 1
+            it[IntegrationConnections.lastEndpoint] = endpoint
+        }
+    }
+
+    /** All known Box connections, most recently active first. */
+    fun listConnections(): List<Connection> = transaction {
+        IntegrationConnections.selectAll().map {
+            Connection(
+                ip = it[IntegrationConnections.ip],
+                username = it[IntegrationConnections.username],
+                firstSeen = it[IntegrationConnections.firstSeen],
+                lastSeen = it[IntegrationConnections.lastSeen],
+                hitCount = it[IntegrationConnections.hitCount],
+                lastEndpoint = it[IntegrationConnections.lastEndpoint],
+            )
+        }.sortedByDescending { it.lastSeen }
     }
 
     // ---- Restream URL building (v1.1 §3.2, A6) ----
@@ -88,17 +161,30 @@ object IntegrationService {
     /** v1.1 default: restream is exposed inside the trusted Box↔NVR LAN without RTSP auth. */
     const val RTSP_AUTH = false
     const val MAX_CAMERAS = 64
-    const val PROTOCOL_VERSION = "1.1"
+    const val PROTOCOL_VERSION = "1.2"
+
+    private val privateIp172 = Regex("^172\\.(1[6-9]|2\\d|3[01])\\..*")
 
     private fun detectLanIp(): String = try {
-        java.net.NetworkInterface.getNetworkInterfaces()
+        val candidates = java.net.NetworkInterface.getNetworkInterfaces()
             .toList().asSequence()
             .filter { it.isUp && !it.isLoopback && !it.isVirtual }
-            .filterNot { val n = it.name.lowercase(); n.startsWith("docker") || n.startsWith("br-") || n.startsWith("veth") }
+            // Skip docker/bridge AND overlay/VPN interfaces (Nebula, ZeroTier, WireGuard,
+            // Tailscale, tun) — their IPs are NOT reachable by a LAN Box pulling the restream.
+            .filterNot {
+                val n = it.name.lowercase()
+                n.startsWith("docker") || n.startsWith("br-") || n.startsWith("veth") ||
+                    n.startsWith("nebula") || n.startsWith("zt") || n.startsWith("tun") ||
+                    n.startsWith("tailscale") || n.startsWith("wg") || n.startsWith("utun")
+            }
             .flatMap { it.inetAddresses.toList().asSequence() }
             .filterIsInstance<java.net.Inet4Address>()
             .map { it.hostAddress }
-            .firstOrNull { ip -> ip.startsWith("192.168.") || ip.startsWith("10.") || ip.matches(Regex("^172\\.(1[6-9]|2\\d|3[01])\\..*")) }
+            .filter { ip -> ip.startsWith("192.168.") || ip.startsWith("10.") || ip.matches(privateIp172) }
+            .toList()
+        // Prefer real-LAN ranges (192.168 / 172.16-31) over ambiguous 10.x (often VPN/overlay).
+        candidates.firstOrNull { it.startsWith("192.168.") || it.matches(privateIp172) }
+            ?: candidates.firstOrNull()
             ?: "127.0.0.1"
     } catch (_: Exception) { "127.0.0.1" }
 

@@ -14,6 +14,11 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
+# BuildKit BẮT BUỘC để các `--mount=type=cache` trong Dockerfile (npm/gradle/build incremental)
+# hoạt động → build lại nhanh nhất. Bật tường minh phòng khi daemon/CLI không mặc định.
+export DOCKER_BUILDKIT=1
+export COMPOSE_DOCKER_CLI_BUILD=1
+
 # Full setup cần root; chế độ --rebuild chỉ cần quyền chạy docker.
 if [[ "$REBUILD_ONLY" -eq 0 && $EUID -ne 0 ]]; then
    echo "CRITICAL: Vui lòng chạy script này với quyền sudo: sudo ./run.sh"

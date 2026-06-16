@@ -1,23 +1,136 @@
 <configuration>
+
+    <!-- ─── Shared encoder pattern ──────────────────────────────────────── -->
+    <property name="LOG_PATTERN" value="[%d{yyyy-MM-dd HH:mm:ss.SSS}] [%-5level] %msg%n"/>
+
+    <!-- ─── Console ─────────────────────────────────────────────────────── -->
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder>
-            <pattern>[%d{yyyy-MM-dd HH:mm:ss.SSS}] [%-5level] %msg%n</pattern>
-        </encoder>
+        <encoder><pattern>${LOG_PATTERN}</pattern></encoder>
     </appender>
 
+    <!-- ─── Main log (SYSTEM / API / RECORDING / STORAGE / EVENT / SECURITY / PLAYBACK) -->
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>logs/nvr.log</file>
-        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <fileNamePattern>logs/nvr.%d{yyyy-MM-dd}.log</fileNamePattern>
-            <maxHistory>7</maxHistory>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/archive/nvr.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>5GB</totalSizeCap>
         </rollingPolicy>
-        <encoder>
-            <pattern>[%d{yyyy-MM-dd HH:mm:ss.SSS}] [%-5level] %msg%n</pattern>
-        </encoder>
+        <encoder><pattern>${LOG_PATTERN}</pattern></encoder>
     </appender>
 
+    <!-- ─── Camera log (CAMERA module: add/update/remove, go2rtc, Frigate) -->
+    <appender name="CAMERA_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/camera.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/archive/camera.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>2GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder><pattern>${LOG_PATTERN}</pattern></encoder>
+    </appender>
+
+    <!-- ─── Cloud log (MQTT, WebRTC, dc-bridge, cloud commands) ────────── -->
+    <appender name="CLOUD_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/cloud.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/archive/cloud.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>2GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder><pattern>${LOG_PATTERN}</pattern></encoder>
+    </appender>
+
+    <!-- ─── Gateway log (scan, approve, adopt, Nebula) ──────────────────── -->
+    <appender name="GATEWAY_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/gateway.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/archive/gateway.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>1GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder><pattern>${LOG_PATTERN}</pattern></encoder>
+    </appender>
+
+    <!-- ─── Health log (CPU / RAM / temperature every 5 s) ─────────────── -->
+    <appender name="HEALTH_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/health.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/archive/health.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>14</maxHistory>
+            <totalSizeCap>1GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder><pattern>${LOG_PATTERN}</pattern></encoder>
+    </appender>
+
+    <!-- ─── Integration audit (AiView Box request/response trail) ───────── -->
+    <appender name="INTEGRATION_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/integration.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/archive/integration.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>2GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder><pattern>${LOG_PATTERN}</pattern></encoder>
+    </appender>
+
+    <!-- ─── Errors log: every ERROR/FATAL from all loggers ─────────────── -->
+    <appender name="ERRORS_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/errors.log</file>
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>ERROR</level>
+        </filter>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/archive/errors.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>90</maxHistory>
+            <totalSizeCap>5GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder><pattern>${LOG_PATTERN}</pattern></encoder>
+    </appender>
+
+    <!-- ─── Per-group loggers (additivity=false → không duplicate vào root) -->
+    <logger name="CameraLog"      level="INFO" additivity="false">
+        <appender-ref ref="CAMERA_FILE"/>
+        <appender-ref ref="ERRORS_FILE"/>
+        <appender-ref ref="STDOUT"/>
+    </logger>
+
+    <logger name="CloudLog"       level="INFO" additivity="false">
+        <appender-ref ref="CLOUD_FILE"/>
+        <appender-ref ref="ERRORS_FILE"/>
+        <appender-ref ref="STDOUT"/>
+    </logger>
+
+    <logger name="GatewayLog"     level="INFO" additivity="false">
+        <appender-ref ref="GATEWAY_FILE"/>
+        <appender-ref ref="ERRORS_FILE"/>
+        <appender-ref ref="STDOUT"/>
+    </logger>
+
+    <logger name="HealthLog"      level="INFO" additivity="false">
+        <appender-ref ref="HEALTH_FILE"/>
+        <appender-ref ref="ERRORS_FILE"/>
+        <appender-ref ref="STDOUT"/>
+    </logger>
+
+    <logger name="IntegrationAudit" level="INFO" additivity="false">
+        <appender-ref ref="INTEGRATION_FILE"/>
+        <appender-ref ref="ERRORS_FILE"/>
+        <appender-ref ref="STDOUT"/>
+    </logger>
+
+    <!-- ─── Root: SystemLog + API + RECORDING + STORAGE + EVENT + SECURITY + PLAYBACK -->
     <root level="INFO">
-        <appender-ref ref="STDOUT" />
-        <appender-ref ref="FILE" />
+        <appender-ref ref="FILE"/>
+        <appender-ref ref="ERRORS_FILE"/>
+        <appender-ref ref="STDOUT"/>
     </root>
+
 </configuration>

@@ -11,6 +11,33 @@ type Settings = {
   enabled: boolean
   username: string
   hasPassword: boolean
+  passwordLen: number
+}
+
+type Connection = {
+  ip: string
+  username: string
+  firstSeen: number
+  lastSeen: number
+  hitCount: number
+  lastEndpoint: string
+}
+
+// "vài giây trước" / "3 phút trước" … relative time for the connections table.
+function timeAgo(ms: number): string {
+  const s = Math.max(0, Math.floor((Date.now() - ms) / 1000))
+  if (s < 10) return 'vừa xong'
+  if (s < 60) return `${s} giây trước`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m} phút trước`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h} giờ trước`
+  const d = Math.floor(h / 24)
+  return `${d} ngày trước`
+}
+
+function fmtTime(ms: number): string {
+  try { return new Date(ms).toLocaleString('vi-VN') } catch { return String(ms) }
 }
 
 export default function IntegrationPanel({ addToast }: {
@@ -26,8 +53,25 @@ export default function IntegrationPanel({ addToast }: {
   const [enabled, setEnabled] = useState(false)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [pwTouched, setPwTouched] = useState(false)   // has the operator edited the password field?
   const [hasPassword, setHasPassword] = useState(false)
+  const [passwordLen, setPasswordLen] = useState(0)
   const [info, setInfo] = useState<{ protocol_version: string; nvr_version: string; max_cameras: number; rtsp_auth: boolean } | null>(null)
+  const [connections, setConnections] = useState<Connection[]>([])
+  const [connLoading, setConnLoading] = useState(false)
+
+  // Masked dots matching the real password length — shown when set & not being edited.
+  const maskedPassword = '•'.repeat(passwordLen)
+
+  const loadConnections = useCallback(async () => {
+    setConnLoading(true)
+    try {
+      const r = await fetch('/api/integration/connections')
+      if (r.ok) setConnections(await r.json())
+    } catch { /* non-fatal */ } finally {
+      setConnLoading(false)
+    }
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -38,7 +82,9 @@ export default function IntegrationPanel({ addToast }: {
       setEnabled(s.enabled)
       setUsername(s.username || '')
       setHasPassword(s.hasPassword)
-      setPassword('')
+      setPasswordLen(s.passwordLen || 0)
+      setPwTouched(false)
+      setPassword(s.hasPassword ? '•'.repeat(s.passwordLen || 0) : '')
     } catch (e: any) {
       toast('Không tải được cài đặt tích hợp: ' + (e?.message || e), 'error')
     } finally {
@@ -49,21 +95,30 @@ export default function IntegrationPanel({ addToast }: {
       const ri = await fetch('/api/getintegrationinfo')
       if (ri.ok) setInfo(await ri.json())
     } catch { /* non-fatal */ }
-  }, [])
+    loadConnections()
+  }, [loadConnections])
 
   useEffect(() => { load() }, [load])
 
+  // Auto-refresh the connections table while the panel is open.
+  useEffect(() => {
+    const t = setInterval(loadConnections, 15000)
+    return () => clearInterval(t)
+  }, [loadConnections])
+
   const save = async () => {
+    // A password is being changed only when the operator actually edited the field.
+    const newPassword = pwTouched ? password.trim() : ''
     if (enabled && username.trim() === '') {
       toast('Bật tích hợp cần có tên đăng nhập.', 'warning'); return
     }
-    if (enabled && !hasPassword && password.trim() === '') {
+    if (enabled && !hasPassword && newPassword === '') {
       toast('Bật tích hợp cần đặt mật khẩu (lần đầu).', 'warning'); return
     }
     setSaving(true)
     try {
       const body: any = { enabled, username: username.trim() }
-      if (password.trim() !== '') body.password = password
+      if (newPassword !== '') body.password = newPassword
       const r = await fetch('/api/integration/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -77,7 +132,9 @@ export default function IntegrationPanel({ addToast }: {
       setEnabled(s.enabled)
       setUsername(s.username || '')
       setHasPassword(s.hasPassword)
-      setPassword('')
+      setPasswordLen(s.passwordLen || 0)
+      setPwTouched(false)
+      setPassword(s.hasPassword ? '•'.repeat(s.passwordLen || 0) : '')
       toast('Đã lưu cài đặt tích hợp AiView Box.', 'success')
     } catch (e: any) {
       toast('Lưu thất bại: ' + (e?.message || e), 'error')
@@ -143,12 +200,16 @@ export default function IntegrationPanel({ addToast }: {
               type="password"
               value={password}
               autoComplete="new-password"
-              onChange={e => setPassword(e.target.value)}
-              placeholder={hasPassword ? 'Để trống = giữ mật khẩu hiện tại' : 'Nhập mật khẩu mới'}
+              onChange={e => { setPwTouched(true); setPassword(e.target.value) }}
+              onFocus={() => { if (!pwTouched && hasPassword) setPassword('') }}
+              onBlur={() => { if (!pwTouched && hasPassword) setPassword(maskedPassword) }}
+              placeholder={hasPassword ? 'Bấm để đổi mật khẩu' : 'Nhập mật khẩu mới'}
               className="w-full rounded-lg bg-[#111827] border border-white/10 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-[#EF4444]/50"
             />
             <p className="text-xs text-gray-500 mt-1">
-              Đổi mật khẩu ở đây sẽ <span className="text-gray-300">thu hồi</span> quyền truy cập của Box cũ.
+              {hasPassword
+                ? <>Đang hiển thị <span className="text-gray-300">{passwordLen}</span> ký tự che (đúng độ dài mật khẩu thật). Bấm vào ô để đổi — đổi mật khẩu sẽ <span className="text-gray-300">thu hồi</span> quyền của Box cũ.</>
+                : <>Đổi mật khẩu ở đây sẽ <span className="text-gray-300">thu hồi</span> quyền truy cập của Box cũ.</>}
             </p>
           </div>
 
@@ -184,6 +245,62 @@ export default function IntegrationPanel({ addToast }: {
           <div>rtsp_auth: <span className="text-gray-300">{String(info.rtsp_auth)}</span></div>
         </div>
       )}
+
+      {/* Connections table — which Box IPs have successfully connected */}
+      <div className="mt-6">
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-sm font-semibold text-white">
+            Thiết bị đã kết nối thành công
+            <span className="ml-2 text-xs font-normal text-gray-500">({connections.length})</span>
+          </h3>
+          <button
+            onClick={loadConnections}
+            disabled={connLoading}
+            className="px-2.5 py-1 rounded-md bg-white/5 text-gray-300 hover:bg-white/10 text-xs transition-colors disabled:opacity-50"
+          >
+            {connLoading ? 'Đang tải…' : '⟳ Làm mới'}
+          </button>
+        </div>
+        <div className="overflow-x-auto rounded-xl border border-white/10 bg-[#1f2937]">
+          <table className="w-full text-sm text-left">
+            <thead className="text-xs uppercase text-gray-400 border-b border-white/10">
+              <tr>
+                <th className="px-4 py-2.5 font-medium">Địa chỉ IP</th>
+                <th className="px-4 py-2.5 font-medium">Tên đăng nhập</th>
+                <th className="px-4 py-2.5 font-medium">Hoạt động gần nhất</th>
+                <th className="px-4 py-2.5 font-medium text-right">Số lượt</th>
+                <th className="px-4 py-2.5 font-medium">Lần đầu kết nối</th>
+              </tr>
+            </thead>
+            <tbody>
+              {connections.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-4 py-6 text-center text-gray-500">
+                    Chưa có thiết bị nào kết nối thành công.
+                  </td>
+                </tr>
+              ) : connections.map(c => {
+                const live = Date.now() - c.lastSeen < 120000   // active within last 2 minutes
+                return (
+                  <tr key={c.ip} className="border-b border-white/5 last:border-0 hover:bg-white/5">
+                    <td className="px-4 py-2.5 font-mono text-gray-200">
+                      <span className={`inline-block h-2 w-2 rounded-full mr-2 ${live ? 'bg-emerald-400' : 'bg-gray-500'}`} />
+                      {c.ip}
+                    </td>
+                    <td className="px-4 py-2.5 text-gray-300">{c.username || '—'}</td>
+                    <td className="px-4 py-2.5 text-gray-300" title={fmtTime(c.lastSeen)}>{timeAgo(c.lastSeen)}</td>
+                    <td className="px-4 py-2.5 text-right text-gray-400">{c.hitCount}</td>
+                    <td className="px-4 py-2.5 text-gray-500" title={c.lastEndpoint}>{fmtTime(c.firstSeen)}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        <p className="text-xs text-gray-500 mt-1.5">
+          Chấm <span className="text-emerald-400">●</span> xanh = đang hoạt động (trong 2 phút). Tự làm mới mỗi 15 giây.
+        </p>
+      </div>
 
       <div className="mt-5 text-xs text-gray-500">
         <div className="font-medium text-gray-400 mb-1">Endpoint công khai cho Box (cùng LAN):</div>
