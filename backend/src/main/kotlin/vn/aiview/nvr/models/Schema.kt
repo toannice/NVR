@@ -135,6 +135,9 @@ object IntegrationSettings : Table("integration_settings") {
     val username = varchar("username", 255).default("")
     val passwordHash = text("password_hash").default("") // bcrypt (verifyPattern-compatible)
     val passwordLen = integer("password_len").default(0)  // length of the plaintext password — for the masked •••• UI hint only (NOT the secret)
+    // Box WebSocket event stream: NVR connects as client to ws://{boxIp}:{boxPort}/ws/events
+    val boxIp = varchar("box_ip", 128).default("")
+    val boxPort = integer("box_port").default(8088)
     val updatedAt = datetime("updated_at").defaultExpression(CurrentDateTime)
 
     override val primaryKey = PrimaryKey(id)
@@ -170,6 +173,8 @@ object AIEvents : Table("ai_events") {
     val startTime = long("start_time").index()
     val endTime = long("end_time").nullable()
     val createdAt = datetime("created_at").defaultExpression(CurrentDateTime)
+    // "frigate" or "box" — lets the UI filter/badge events by source
+    val eventSource = varchar("source", 20).default("frigate")
 
     override val primaryKey = PrimaryKey(id)
 }

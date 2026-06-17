@@ -13,13 +13,20 @@ import vn.aiview.nvr.plugins.verifyPattern
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Backing logic for the AiView Box integration (NVR_AIView_Integration_Protocol v1.1).
+ * Backing logic for the AiView Box integration (NVR_AIView_Integration_Protocol v1.2).
  * Owns: integration settings (enable + credentials), Box auth check, restream URL building,
  * and a simple per-IP rate limiter. Fully independent of pattern-lock / cloud config.
  */
 object IntegrationService {
 
-    data class Settings(val enabled: Boolean, val username: String, val passwordHash: String, val passwordLen: Int)
+    data class Settings(
+        val enabled: Boolean,
+        val username: String,
+        val passwordHash: String,
+        val passwordLen: Int,
+        val boxIp: String,
+        val boxPort: Int,
+    )
 
     /** Read the single-row settings (id=1). Returns disabled defaults if the row is somehow missing. */
     fun readSettings(): Settings = transaction {
@@ -29,16 +36,19 @@ object IntegrationService {
                 username = it[IntegrationSettings.username],
                 passwordHash = it[IntegrationSettings.passwordHash],
                 passwordLen = it[IntegrationSettings.passwordLen],
+                boxIp = it[IntegrationSettings.boxIp],
+                boxPort = it[IntegrationSettings.boxPort],
             )
-        } ?: Settings(enabled = false, username = "", passwordHash = "", passwordLen = 0)
+        } ?: Settings(enabled = false, username = "", passwordHash = "", passwordLen = 0, boxIp = "", boxPort = 8088)
     }
 
     /**
      * Update settings. `password` null/blank → keep existing hash (so the admin can toggle/rename
      * without retyping). A non-blank password is bcrypt-hashed via the shared hashPattern();
      * its plaintext length is stored separately to drive the masked •••• UI hint.
+     * After persisting, restarts the Box WS client if boxIp changed or integration toggled.
      */
-    fun updateSettings(enabled: Boolean, username: String, password: String?) = transaction {
+    fun updateSettings(enabled: Boolean, username: String, password: String?, boxIp: String = "", boxPort: Int = 8088) = transaction {
         val exists = IntegrationSettings.selectAll().where { IntegrationSettings.id eq 1 }.firstOrNull() != null
         val newPassword = password?.takeIf { it.isNotBlank() }
         val newHash = newPassword?.let { hashPattern(it) }
@@ -50,6 +60,8 @@ object IntegrationService {
                     it[IntegrationSettings.passwordHash] = newHash
                     it[IntegrationSettings.passwordLen] = newPassword.length
                 }
+                it[IntegrationSettings.boxIp] = boxIp
+                it[IntegrationSettings.boxPort] = boxPort
                 it[IntegrationSettings.updatedAt] = CurrentDateTime
             }
         } else {
@@ -59,7 +71,19 @@ object IntegrationService {
                 it[IntegrationSettings.username] = username
                 it[IntegrationSettings.passwordHash] = newHash ?: ""
                 it[IntegrationSettings.passwordLen] = newPassword?.length ?: 0
+                it[IntegrationSettings.boxIp] = boxIp
+                it[IntegrationSettings.boxPort] = boxPort
             }
+        }
+    }
+
+    /** Start or stop the Box WS client based on current settings. Call after updateSettings or on boot. */
+    fun applyBoxClient() {
+        val s = readSettings()
+        if (s.enabled && s.boxIp.isNotBlank()) {
+            BoxEventClient.start(s.boxIp, s.boxPort)
+        } else {
+            BoxEventClient.stop()
         }
     }
 
@@ -158,10 +182,23 @@ object IntegrationService {
         return "rtsp://${lanIp()}:8554/$name"
     }
 
-    /** v1.1 default: restream is exposed inside the trusted Box↔NVR LAN without RTSP auth. */
+    /** v1.2 default: restream is exposed inside the trusted Box↔NVR LAN without RTSP auth. */
     const val RTSP_AUTH = false
     const val MAX_CAMERAS = 64
     const val PROTOCOL_VERSION = "1.2"
+
+    /**
+     * Quick liveness check for Frigate (§4.1 — 503 SERVICE_UNAVAILABLE).
+     * Returns false if Frigate is restarting or unreachable.
+     */
+    fun isFrigateReady(): Boolean = try {
+        val conn = java.net.URL("http://127.0.0.1:5000/api/version").openConnection()
+            as java.net.HttpURLConnection
+        conn.connectTimeout = 2_000
+        conn.readTimeout    = 2_000
+        conn.requestMethod  = "GET"
+        conn.responseCode in 200..299
+    } catch (_: Exception) { false }
 
     private val privateIp172 = Regex("^172\\.(1[6-9]|2\\d|3[01])\\..*")
 

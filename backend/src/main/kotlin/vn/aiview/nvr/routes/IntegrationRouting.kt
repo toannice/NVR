@@ -113,15 +113,19 @@ fun Route.integrationRouting() {
         get("/getintegrationinfo") {
             val endpoint = "/api/getintegrationinfo"
             call.logReq(endpoint, "")
-            call.respondLogged(
-                endpoint, HttpStatusCode.OK,
-                IntegrationInfo(
-                    protocol_version = IntegrationService.PROTOCOL_VERSION,
-                    nvr_version = appVersion,
-                    max_cameras = IntegrationService.MAX_CAMERAS,
-                    rtsp_auth = IntegrationService.RTSP_AUTH,
+            try {
+                call.respondLogged(
+                    endpoint, HttpStatusCode.OK,
+                    IntegrationInfo(
+                        protocol_version = IntegrationService.PROTOCOL_VERSION,
+                        nvr_version = appVersion,
+                        max_cameras = IntegrationService.MAX_CAMERAS,
+                        rtsp_auth = IntegrationService.RTSP_AUTH,
+                    )
                 )
-            )
+            } catch (_: Exception) {
+                call.respondError(endpoint, HttpStatusCode.InternalServerError, "INTERNAL_ERROR", "Lỗi hệ thống NVR.")
+            }
         }
 
         // §3.2 — discovery: list not-yet-added cameras + restream URLs. Rate-limit → auth.
@@ -129,47 +133,55 @@ fun Route.integrationRouting() {
             val endpoint = "/api/getprofilecamera"
             val raw = call.receiveText()
             call.logReq(endpoint, raw)
+            try {
+                val ip = call.clientIp()
+                IntegrationService.RateLimiter.check(ip)?.let { retryAfter ->
+                    call.response.headers.append(HttpHeaders.RetryAfter, retryAfter.toString())
+                    return@post call.respondError(endpoint, HttpStatusCode.TooManyRequests, "TOO_MANY_REQUESTS", "Quá nhiều yêu cầu, thử lại sau.")
+                }
 
-            val ip = call.clientIp()
-            IntegrationService.RateLimiter.check(ip)?.let { retryAfter ->
-                call.response.headers.append(HttpHeaders.RetryAfter, retryAfter.toString())
-                return@post call.respondError(endpoint, HttpStatusCode.TooManyRequests, "TOO_MANY_REQUESTS", "Quá nhiều yêu cầu, thử lại sau.")
-            }
+                val req = try {
+                    auditJson.decodeFromString<ProfileRequest>(raw)
+                } catch (_: Exception) {
+                    return@post call.respondError(endpoint, HttpStatusCode.BadRequest, "BAD_REQUEST", "Yêu cầu không hợp lệ.")
+                }
 
-            val req = try {
-                auditJson.decodeFromString<ProfileRequest>(raw)
+                when (IntegrationService.verifyBoxAuth(req.username, req.password)) {
+                    is IntegrationService.AuthResult.Disabled ->
+                        return@post call.respondError(endpoint, HttpStatusCode.Forbidden, "FORBIDDEN", "Tích hợp chưa được bật trên NVR.")
+                    is IntegrationService.AuthResult.Invalid ->
+                        return@post call.respondError(endpoint, HttpStatusCode.Unauthorized, "INVALID_CREDENTIALS", "Sai tên đăng nhập hoặc mật khẩu.")
+                    is IntegrationService.AuthResult.Ok -> { /* fall through */ }
+                }
+
+                // §4.1 — 503 if Frigate/go2rtc not yet ready (stream URLs would be dead).
+                if (!IntegrationService.isFrigateReady()) {
+                    return@post call.respondError(endpoint, HttpStatusCode.ServiceUnavailable, "SERVICE_UNAVAILABLE", "NVR đang bận, thử lại sau.")
+                }
+
+                // Successful auth → record this Box IP so the admin can see who connected.
+                IntegrationService.recordConnection(ip, req.username, endpoint)
+
+                val excluded = req.already_added_camera_ids.toSet()
+                val result = transaction {
+                    Cameras.selectAll()
+                        .mapNotNull { row ->
+                            val chId = row[Cameras.channelId] ?: return@mapNotNull null   // need channelId for stream name (C2)
+                            if (chId in excluded) return@mapNotNull null
+                            val hasSub = !row[Cameras.subRtspUrl].isNullOrBlank()
+                            BoxCameraProfile(
+                                camera_id = chId,
+                                name = row[Cameras.displayName],
+                                main_stream_url = IntegrationService.streamUrl(chId, sub = false),
+                                sub_stream_url = if (hasSub) IntegrationService.streamUrl(chId, sub = true) else null,
+                                online = StreamOnlineTracker.isOnline(chId),
+                            )
+                        }
+                }
+                call.respondLogged(endpoint, HttpStatusCode.OK, result)
             } catch (_: Exception) {
-                return@post call.respondError(endpoint, HttpStatusCode.BadRequest, "BAD_REQUEST", "Yêu cầu không hợp lệ.")
+                call.respondError(endpoint, HttpStatusCode.InternalServerError, "INTERNAL_ERROR", "Lỗi hệ thống NVR.")
             }
-
-            when (IntegrationService.verifyBoxAuth(req.username, req.password)) {
-                is IntegrationService.AuthResult.Disabled ->
-                    return@post call.respondError(endpoint, HttpStatusCode.Forbidden, "FORBIDDEN", "Tích hợp chưa được bật trên NVR.")
-                is IntegrationService.AuthResult.Invalid ->
-                    return@post call.respondError(endpoint, HttpStatusCode.Unauthorized, "INVALID_CREDENTIALS", "Sai tên đăng nhập hoặc mật khẩu.")
-                is IntegrationService.AuthResult.Ok -> { /* fall through */ }
-            }
-
-            // Successful auth → record this Box IP so the admin can see who connected.
-            IntegrationService.recordConnection(ip, req.username, endpoint)
-
-            val excluded = req.already_added_camera_ids.toSet()
-            val result = transaction {
-                Cameras.selectAll()
-                    .mapNotNull { row ->
-                        val chId = row[Cameras.channelId] ?: return@mapNotNull null   // need channelId for stream name (C2)
-                        if (chId in excluded) return@mapNotNull null
-                        val hasSub = !row[Cameras.subRtspUrl].isNullOrBlank()
-                        BoxCameraProfile(
-                            camera_id = chId,
-                            name = row[Cameras.displayName],
-                            main_stream_url = IntegrationService.streamUrl(chId, sub = false),
-                            sub_stream_url = if (hasSub) IntegrationService.streamUrl(chId, sub = true) else null,
-                            online = StreamOnlineTracker.isOnline(chId),
-                        )
-                    }
-            }
-            call.respondLogged(endpoint, HttpStatusCode.OK, result)
         }
 
         // §3.3 — health-check by camera_id. No auth (no stream URLs leaked). Rate-limited.
@@ -177,33 +189,36 @@ fun Route.integrationRouting() {
             val endpoint = "/api/getcamerastatus"
             val raw = call.receiveText()
             call.logReq(endpoint, raw)
+            try {
+                val ip = call.clientIp()
+                IntegrationService.RateLimiter.check(ip)?.let { retryAfter ->
+                    call.response.headers.append(HttpHeaders.RetryAfter, retryAfter.toString())
+                    return@post call.respondError(endpoint, HttpStatusCode.TooManyRequests, "TOO_MANY_REQUESTS", "Quá nhiều yêu cầu, thử lại sau.")
+                }
 
-            val ip = call.clientIp()
-            IntegrationService.RateLimiter.check(ip)?.let { retryAfter ->
-                call.response.headers.append(HttpHeaders.RetryAfter, retryAfter.toString())
-                return@post call.respondError(endpoint, HttpStatusCode.TooManyRequests, "TOO_MANY_REQUESTS", "Quá nhiều yêu cầu, thử lại sau.")
-            }
+                val req = try {
+                    auditJson.decodeFromString<StatusRequest>(raw)
+                } catch (_: Exception) {
+                    return@post call.respondError(endpoint, HttpStatusCode.BadRequest, "BAD_REQUEST", "Yêu cầu không hợp lệ.")
+                }
 
-            val req = try {
-                auditJson.decodeFromString<StatusRequest>(raw)
+                // Heartbeat: bump lastSeen for a Box IP that already authenticated (never creates a row).
+                IntegrationService.touchConnection(ip, endpoint)
+
+                val existing: Set<String> = transaction {
+                    Cameras.selectAll().mapNotNull { it[Cameras.channelId] }.toSet()
+                }
+                val result = req.camera_ids.map { id ->
+                    BoxCameraStatusItem(
+                        camera_id = id,
+                        exists = id in existing,
+                        online = id in existing && StreamOnlineTracker.isOnline(id),
+                    )
+                }
+                call.respondLogged(endpoint, HttpStatusCode.OK, result)
             } catch (_: Exception) {
-                return@post call.respondError(endpoint, HttpStatusCode.BadRequest, "BAD_REQUEST", "Yêu cầu không hợp lệ.")
+                call.respondError(endpoint, HttpStatusCode.InternalServerError, "INTERNAL_ERROR", "Lỗi hệ thống NVR.")
             }
-
-            // Heartbeat: bump lastSeen for a Box IP that already authenticated (never creates a row).
-            IntegrationService.touchConnection(ip, endpoint)
-
-            val existing: Set<String> = transaction {
-                Cameras.selectAll().mapNotNull { it[Cameras.channelId] }.toSet()
-            }
-            val result = req.camera_ids.map { id ->
-                BoxCameraStatusItem(
-                    camera_id = id,
-                    exists = id in existing,
-                    online = id in existing && StreamOnlineTracker.isOnline(id),
-                )
-            }
-            call.respondLogged(endpoint, HttpStatusCode.OK, result)
         }
     }
 }
@@ -216,6 +231,8 @@ private data class IntegrationSettingsView(
     val username: String,
     val hasPassword: Boolean,
     val passwordLen: Int,
+    val box_ip: String,
+    val box_port: Int,
 )
 
 @Serializable
@@ -233,6 +250,8 @@ private data class IntegrationSettingsUpdate(
     val enabled: Boolean = false,
     val username: String = "",
     val password: String? = null,
+    val box_ip: String = "",
+    val box_port: Int = 8088,
 )
 
 /**
@@ -242,7 +261,7 @@ fun Route.integrationAdminRouting() {
     route("/api/integration/settings") {
         get {
             val s = IntegrationService.readSettings()
-            call.respond(IntegrationSettingsView(s.enabled, s.username, s.passwordHash.isNotBlank(), s.passwordLen))
+            call.respond(IntegrationSettingsView(s.enabled, s.username, s.passwordHash.isNotBlank(), s.passwordLen, s.boxIp, s.boxPort))
         }
         put {
             val body = try {
@@ -259,9 +278,10 @@ fun Route.integrationAdminRouting() {
                     "Bật tích hợp cần có tên đăng nhập và mật khẩu."
                 )
             }
-            IntegrationService.updateSettings(body.enabled, body.username, body.password)
+            IntegrationService.updateSettings(body.enabled, body.username, body.password, body.box_ip, body.box_port)
+            IntegrationService.applyBoxClient()
             val s = IntegrationService.readSettings()
-            call.respond(IntegrationSettingsView(s.enabled, s.username, s.passwordHash.isNotBlank(), s.passwordLen))
+            call.respond(IntegrationSettingsView(s.enabled, s.username, s.passwordHash.isNotBlank(), s.passwordLen, s.boxIp, s.boxPort))
         }
     }
 

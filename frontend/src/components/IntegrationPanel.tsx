@@ -1,10 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
 
-// AiView Box integration settings (NVR_AIView_Integration_Protocol v1.1, §8 — auth hướng A).
-// Admin toggles the integration and sets a dedicated username/password pair the Box uses to
-// authenticate against the NVR's public /api/getprofilecamera endpoint. This credential is
-// completely independent of the pattern-lock — locking the NVR UI does NOT disable the Box API.
-
 type ToastType = 'success' | 'error' | 'info' | 'warning'
 
 type Settings = {
@@ -12,6 +7,8 @@ type Settings = {
   username: string
   hasPassword: boolean
   passwordLen: number
+  box_ip: string
+  box_port: number
 }
 
 type Connection = {
@@ -23,7 +20,6 @@ type Connection = {
   lastEndpoint: string
 }
 
-// "vài giây trước" / "3 phút trước" … relative time for the connections table.
 function timeAgo(ms: number): string {
   const s = Math.max(0, Math.floor((Date.now() - ms) / 1000))
   if (s < 10) return 'vừa xong'
@@ -32,8 +28,7 @@ function timeAgo(ms: number): string {
   if (m < 60) return `${m} phút trước`
   const h = Math.floor(m / 60)
   if (h < 24) return `${h} giờ trước`
-  const d = Math.floor(h / 24)
-  return `${d} ngày trước`
+  return `${Math.floor(h / 24)} ngày trước`
 }
 
 function fmtTime(ms: number): string {
@@ -50,17 +45,23 @@ export default function IntegrationPanel({ addToast }: {
 
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+
+  // Section A: Box → NVR auth (Box lấy camera list)
   const [enabled, setEnabled] = useState(false)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [pwTouched, setPwTouched] = useState(false)   // has the operator edited the password field?
+  const [pwTouched, setPwTouched] = useState(false)
   const [hasPassword, setHasPassword] = useState(false)
   const [passwordLen, setPasswordLen] = useState(0)
+
+  // Section B: NVR → Box WS (NVR nhận AI events)
+  const [boxIp, setBoxIp] = useState('')
+  const [boxPort, setBoxPort] = useState(8088)
+
   const [info, setInfo] = useState<{ protocol_version: string; nvr_version: string; max_cameras: number; rtsp_auth: boolean } | null>(null)
   const [connections, setConnections] = useState<Connection[]>([])
   const [connLoading, setConnLoading] = useState(false)
 
-  // Masked dots matching the real password length — shown when set & not being edited.
   const maskedPassword = '•'.repeat(passwordLen)
 
   const loadConnections = useCallback(async () => {
@@ -73,24 +74,28 @@ export default function IntegrationPanel({ addToast }: {
     }
   }, [])
 
+  const applySettings = (s: Settings) => {
+    setEnabled(s.enabled)
+    setUsername(s.username || '')
+    setHasPassword(s.hasPassword)
+    setPasswordLen(s.passwordLen || 0)
+    setPwTouched(false)
+    setPassword(s.hasPassword ? '•'.repeat(s.passwordLen || 0) : '')
+    setBoxIp(s.box_ip || '')
+    setBoxPort(s.box_port || 8088)
+  }
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
       const r = await fetch('/api/integration/settings')
       if (!r.ok) throw new Error('HTTP ' + r.status)
-      const s: Settings = await r.json()
-      setEnabled(s.enabled)
-      setUsername(s.username || '')
-      setHasPassword(s.hasPassword)
-      setPasswordLen(s.passwordLen || 0)
-      setPwTouched(false)
-      setPassword(s.hasPassword ? '•'.repeat(s.passwordLen || 0) : '')
+      applySettings(await r.json())
     } catch (e: any) {
       toast('Không tải được cài đặt tích hợp: ' + (e?.message || e), 'error')
     } finally {
       setLoading(false)
     }
-    // protocol info (public endpoint) — shown for verification against the contract
     try {
       const ri = await fetch('/api/getintegrationinfo')
       if (ri.ok) setInfo(await ri.json())
@@ -100,14 +105,12 @@ export default function IntegrationPanel({ addToast }: {
 
   useEffect(() => { load() }, [load])
 
-  // Auto-refresh the connections table while the panel is open.
   useEffect(() => {
     const t = setInterval(loadConnections, 15000)
     return () => clearInterval(t)
   }, [loadConnections])
 
   const save = async () => {
-    // A password is being changed only when the operator actually edited the field.
     const newPassword = pwTouched ? password.trim() : ''
     if (enabled && username.trim() === '') {
       toast('Bật tích hợp cần có tên đăng nhập.', 'warning'); return
@@ -115,9 +118,18 @@ export default function IntegrationPanel({ addToast }: {
     if (enabled && !hasPassword && newPassword === '') {
       toast('Bật tích hợp cần đặt mật khẩu (lần đầu).', 'warning'); return
     }
+    // Validate box port if IP is set
+    if (boxIp.trim() !== '' && (boxPort < 1 || boxPort > 65535)) {
+      toast('Cổng Box phải từ 1 đến 65535.', 'warning'); return
+    }
     setSaving(true)
     try {
-      const body: any = { enabled, username: username.trim() }
+      const body: any = {
+        enabled,
+        username: username.trim(),
+        box_ip: boxIp.trim(),
+        box_port: boxPort,
+      }
       if (newPassword !== '') body.password = newPassword
       const r = await fetch('/api/integration/settings', {
         method: 'PUT',
@@ -128,13 +140,7 @@ export default function IntegrationPanel({ addToast }: {
         const err = await r.json().catch(() => ({}))
         throw new Error(err.message || ('HTTP ' + r.status))
       }
-      const s: Settings = await r.json()
-      setEnabled(s.enabled)
-      setUsername(s.username || '')
-      setHasPassword(s.hasPassword)
-      setPasswordLen(s.passwordLen || 0)
-      setPwTouched(false)
-      setPassword(s.hasPassword ? '•'.repeat(s.passwordLen || 0) : '')
+      applySettings(await r.json())
       toast('Đã lưu cài đặt tích hợp AiView Box.', 'success')
     } catch (e: any) {
       toast('Lưu thất bại: ' + (e?.message || e), 'error')
@@ -143,83 +149,151 @@ export default function IntegrationPanel({ addToast }: {
     }
   }
 
+  const boxWsConfigured = boxIp.trim() !== ''
+
   return (
     <div className="p-4 sm:p-6 max-w-3xl mx-auto text-gray-200">
       <div className="mb-6">
         <h2 className="text-xl font-semibold text-white">Tích hợp AiView Box</h2>
         <p className="text-sm text-gray-400 mt-1">
-          Cho phép hệ thống AiView Box kết nối tới NVR này (cùng mạng LAN) để lấy danh sách camera và
-          luồng RESTREAM. Box xác thực bằng cặp tên đăng nhập / mật khẩu riêng dưới đây —
-          <span className="text-gray-300"> độc lập với mật khẩu mở khoá màn hình.</span>
+          Cấu hình hai chiều kết nối giữa NVR và AiView Box.
         </p>
       </div>
 
       {loading ? (
         <div className="text-gray-400">Đang tải…</div>
       ) : (
-        <div className="space-y-5 bg-[#1f2937] rounded-xl p-5 border border-white/10">
-          {/* Enable toggle */}
-          <label className="flex items-center justify-between cursor-pointer select-none">
+        <div className="space-y-4">
+
+          {/* ── Section A: Box → NVR (Box lấy danh sách camera) ── */}
+          <div className="bg-[#1f2937] rounded-xl p-5 border border-white/10 space-y-4">
             <div>
-              <div className="font-medium text-white">Bật tích hợp AiView Box</div>
-              <div className="text-xs text-gray-400">Tắt = mọi yêu cầu từ Box bị từ chối (403).</div>
+              <div className="text-xs font-semibold uppercase tracking-widest text-gray-500 mb-1">Hướng A — Box kết nối đến NVR</div>
+              <p className="text-sm text-gray-400">
+                Box xác thực bằng cặp user/pass dưới đây để lấy danh sách camera và URL RTSP restream.
+                Độc lập với mật khẩu mở khoá màn hình.
+              </p>
             </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={enabled}
-              onClick={() => setEnabled(v => !v)}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${enabled ? 'bg-[#EF4444]' : 'bg-gray-600'}`}
-            >
-              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${enabled ? 'translate-x-6' : 'translate-x-1'}`} />
-            </button>
-          </label>
 
-          <div className="h-px bg-white/10" />
-
-          {/* Username */}
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Tên đăng nhập (cho Box)</label>
-            <input
-              type="text"
-              value={username}
-              autoComplete="off"
-              onChange={e => setUsername(e.target.value)}
-              placeholder="vd: box"
-              className="w-full rounded-lg bg-[#111827] border border-white/10 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-[#EF4444]/50"
-            />
-          </div>
-
-          {/* Password */}
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              Mật khẩu (cho Box)
-              {hasPassword && <span className="ml-2 text-xs text-emerald-400">• đã đặt</span>}
+            {/* Enable toggle */}
+            <label className="flex items-center justify-between cursor-pointer select-none">
+              <div>
+                <div className="font-medium text-white">Bật tích hợp AiView Box</div>
+                <div className="text-xs text-gray-400">Tắt = mọi yêu cầu từ Box bị từ chối (403).</div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={enabled}
+                onClick={() => setEnabled(v => !v)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${enabled ? 'bg-[#EF4444]' : 'bg-gray-600'}`}
+              >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+              </button>
             </label>
-            <input
-              type="password"
-              value={password}
-              autoComplete="new-password"
-              onChange={e => { setPwTouched(true); setPassword(e.target.value) }}
-              onFocus={() => { if (!pwTouched && hasPassword) setPassword('') }}
-              onBlur={() => { if (!pwTouched && hasPassword) setPassword(maskedPassword) }}
-              placeholder={hasPassword ? 'Bấm để đổi mật khẩu' : 'Nhập mật khẩu mới'}
-              className="w-full rounded-lg bg-[#111827] border border-white/10 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-[#EF4444]/50"
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              {hasPassword
-                ? <>Đang hiển thị <span className="text-gray-300">{passwordLen}</span> ký tự che (đúng độ dài mật khẩu thật). Bấm vào ô để đổi — đổi mật khẩu sẽ <span className="text-gray-300">thu hồi</span> quyền của Box cũ.</>
-                : <>Đổi mật khẩu ở đây sẽ <span className="text-gray-300">thu hồi</span> quyền truy cập của Box cũ.</>}
-            </p>
+
+            <div className="h-px bg-white/10" />
+
+            {/* Username */}
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Tên đăng nhập (Box dùng để xác thực)</label>
+              <input
+                type="text"
+                value={username}
+                autoComplete="off"
+                onChange={e => setUsername(e.target.value)}
+                placeholder="vd: box"
+                className="w-full rounded-lg bg-[#111827] border border-white/10 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-[#EF4444]/50"
+              />
+            </div>
+
+            {/* Password */}
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">
+                Mật khẩu (Box dùng để xác thực)
+                {hasPassword && <span className="ml-2 text-xs text-emerald-400">• đã đặt</span>}
+              </label>
+              <input
+                type="password"
+                value={password}
+                autoComplete="new-password"
+                onChange={e => { setPwTouched(true); setPassword(e.target.value) }}
+                onFocus={() => { if (!pwTouched && hasPassword) setPassword('') }}
+                onBlur={() => { if (!pwTouched && hasPassword) setPassword(maskedPassword) }}
+                placeholder={hasPassword ? 'Bấm để đổi mật khẩu' : 'Nhập mật khẩu mới'}
+                className="w-full rounded-lg bg-[#111827] border border-white/10 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-[#EF4444]/50"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                {hasPassword
+                  ? <>Hiển thị <span className="text-gray-300">{passwordLen}</span> ký tự che (đúng độ dài). Đổi mật khẩu sẽ <span className="text-gray-300">thu hồi</span> quyền của Box cũ.</>
+                  : <>Đổi mật khẩu sẽ <span className="text-gray-300">thu hồi</span> quyền truy cập của Box cũ.</>}
+              </p>
+            </div>
           </div>
 
+          {/* ── Section B: NVR → Box WS (NVR nhận AI events) ── */}
+          <div className="bg-[#1f2937] rounded-xl p-5 border border-white/10 space-y-4">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-widest text-gray-500 mb-1">Hướng B — NVR kết nối đến Box</div>
+              <p className="text-sm text-gray-400">
+                NVR chủ động kết nối WebSocket tới Box để nhận sự kiện AI theo thời gian thực
+                (nhận diện khuôn mặt, biển số, xâm nhập…). Các sự kiện sẽ hiển thị giống Frigate.
+              </p>
+            </div>
+
+            <div className="flex gap-3">
+              {/* Box IP */}
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-gray-300 mb-1">IP của Box</label>
+                <input
+                  type="text"
+                  value={boxIp}
+                  onChange={e => setBoxIp(e.target.value)}
+                  placeholder="vd: 192.168.2.10"
+                  className="w-full rounded-lg bg-[#111827] border border-white/10 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-[#EF4444]/50 font-mono"
+                />
+              </div>
+              {/* Box Port */}
+              <div className="w-28">
+                <label className="block text-sm font-medium text-gray-300 mb-1">Cổng</label>
+                <input
+                  type="number"
+                  value={boxPort}
+                  min={1}
+                  max={65535}
+                  onChange={e => setBoxPort(Number(e.target.value))}
+                  className="w-full rounded-lg bg-[#111827] border border-white/10 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-[#EF4444]/50 font-mono"
+                />
+              </div>
+            </div>
+
+            <p className="text-xs text-gray-500">
+              Để trống IP nếu không dùng. Khi đã điền, NVR sẽ kết nối{' '}
+              <code className="text-gray-400">ws://{boxIp || '<ip>'}:{boxPort}/ws/events</code>{' '}
+              và tự reconnect nếu mất kết nối.
+            </p>
+
+            {/* Status badge */}
+            <div className={`inline-flex items-center gap-2 text-xs px-3 py-1.5 rounded-full font-medium ${
+              boxWsConfigured
+                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                : 'bg-gray-700/50 text-gray-500 border border-white/5'
+            }`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${boxWsConfigured ? 'bg-emerald-400' : 'bg-gray-500'}`} />
+              {boxWsConfigured
+                ? `Đã cấu hình — ws://${boxIp}:${boxPort}/ws/events`
+                : 'Chưa cấu hình — không nhận AI events từ Box'}
+            </div>
+          </div>
+
+          {/* Save bar */}
           <div className="flex items-center gap-3 pt-1">
             <button
               onClick={save}
               disabled={saving}
               className="px-4 py-2 rounded-lg bg-[#EF4444] text-white font-medium hover:bg-[#dc2626] disabled:opacity-50 transition-colors"
             >
-              {saving ? 'Đang lưu…' : 'Lưu'}
+              {saving ? 'Đang lưu…' : 'Lưu tất cả'}
             </button>
             <button
               onClick={load}
@@ -229,13 +303,13 @@ export default function IntegrationPanel({ addToast }: {
               Tải lại
             </button>
             <span className={`text-sm ${enabled ? 'text-emerald-400' : 'text-gray-500'}`}>
-              {enabled ? '● Đang bật' : '○ Đang tắt'}
+              {enabled ? '● Tích hợp đang bật' : '○ Tích hợp đang tắt'}
             </span>
           </div>
         </div>
       )}
 
-      {/* Protocol info — for quick verification against the integration contract */}
+      {/* Protocol info */}
       {info && (
         <div className="mt-5 text-xs text-gray-500 bg-[#111827] rounded-lg p-4 border border-white/5 font-mono">
           <div className="text-gray-400 mb-2 font-sans font-medium">Thông tin giao thức (GET /api/getintegrationinfo)</div>
@@ -246,11 +320,11 @@ export default function IntegrationPanel({ addToast }: {
         </div>
       )}
 
-      {/* Connections table — which Box IPs have successfully connected */}
+      {/* Connections table */}
       <div className="mt-6">
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-sm font-semibold text-white">
-            Thiết bị đã kết nối thành công
+            Box đã kết nối thành công (Hướng A)
             <span className="ml-2 text-xs font-normal text-gray-500">({connections.length})</span>
           </h3>
           <button
@@ -276,11 +350,11 @@ export default function IntegrationPanel({ addToast }: {
               {connections.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-4 py-6 text-center text-gray-500">
-                    Chưa có thiết bị nào kết nối thành công.
+                    Chưa có Box nào kết nối thành công.
                   </td>
                 </tr>
               ) : connections.map(c => {
-                const live = Date.now() - c.lastSeen < 120000   // active within last 2 minutes
+                const live = Date.now() - c.lastSeen < 120000
                 return (
                   <tr key={c.ip} className="border-b border-white/5 last:border-0 hover:bg-white/5">
                     <td className="px-4 py-2.5 font-mono text-gray-200">
@@ -298,12 +372,12 @@ export default function IntegrationPanel({ addToast }: {
           </table>
         </div>
         <p className="text-xs text-gray-500 mt-1.5">
-          Chấm <span className="text-emerald-400">●</span> xanh = đang hoạt động (trong 2 phút). Tự làm mới mỗi 15 giây.
+          Chấm <span className="text-emerald-400">●</span> xanh = hoạt động trong 2 phút. Tự làm mới mỗi 15 giây.
         </p>
       </div>
 
       <div className="mt-5 text-xs text-gray-500">
-        <div className="font-medium text-gray-400 mb-1">Endpoint công khai cho Box (cùng LAN):</div>
+        <div className="font-medium text-gray-400 mb-1">Endpoint công khai cho Box (Hướng A — cùng LAN):</div>
         <ul className="list-disc list-inside space-y-0.5">
           <li><code className="text-gray-400">GET  /api/getintegrationinfo</code> — phiên bản &amp; giới hạn</li>
           <li><code className="text-gray-400">POST /api/getprofilecamera</code> — danh sách camera + URL restream (cần user/pass)</li>

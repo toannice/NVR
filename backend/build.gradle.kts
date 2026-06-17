@@ -41,9 +41,10 @@ dependencies {
     implementation("io.ktor:ktor-server-cors-jvm:$ktor_version")
     implementation("io.ktor:ktor-server-websockets-jvm:$ktor_version")
     
-    // Ktor Client (for Reverse Proxy to Frigate)
+    // Ktor Client (for Reverse Proxy to Frigate + Box WebSocket client)
     implementation("io.ktor:ktor-client-core-jvm:$ktor_version")
     implementation("io.ktor:ktor-client-cio-jvm:$ktor_version")
+    implementation("io.ktor:ktor-client-websockets-jvm:$ktor_version")
     
     // Logging
     implementation("io.ktor:ktor-server-call-logging-jvm:$ktor_version")
