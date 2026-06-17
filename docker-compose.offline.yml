@@ -1,0 +1,20 @@
+# docker-compose.offline.yml — override cho bản deploy offline (không cần GHCR)
+#
+# Dùng kèm với docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.offline.yml up -d
+#
+# Thay đổi so với bản production:
+#   1. nvr-wrapper dùng image local (đã load từ images.tar), không pull GHCR
+#   2. nvr-watchdog dùng image local, không build từ source
+#   3. OTA watchdog bị tắt (offline máy không kết nối GHCR)
+
+services:
+
+  nvr-wrapper:
+    image: ${WRAPPER_IMAGE:-nvr-wrapper:latest}
+
+  nvr-watchdog:
+    image: nvr-watchdog:latest
+    build: !reset null
+    environment:
+      - DISABLE_OTA=true   # tắt OTA — máy offline không kết nối GHCR

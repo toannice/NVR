@@ -5,6 +5,7 @@ import io.ktor.server.engine.*
 import io.ktor.server.netty.*
 import vn.aiview.nvr.plugins.*
 import vn.aiview.nvr.services.CloudService
+import vn.aiview.nvr.services.IntegrationService
 import vn.aiview.nvr.utils.AppLogger
 import java.io.File
 
@@ -39,4 +40,5 @@ fun Application.module() {
     vn.aiview.nvr.services.GatewayMonitor.start()
     vn.aiview.nvr.services.StreamOnlineTracker.start()
     CloudService.start()
+    IntegrationService.applyBoxClient()
 }

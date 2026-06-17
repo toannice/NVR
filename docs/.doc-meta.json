@@ -1,13 +1,13 @@
 {
   "project": "AIView_NVR",
   "project_code": "NVR",
-  "version": "0.0.0.1",
+  "version": "1.0.0.0",
   "team": "AIView Dev Team",
   "approver": "AIView Product Manager",
   "os": "Ubuntu",
   "description": "Hệ thống NVR (Network Video Recorder) chạy trên Ubuntu, tích hợp AI phát hiện sự kiện camera, quản lý qua Web UI và đồng bộ với cloud AIView.",
   "created_at": "2026-06-01",
-  "last_updated": "2026-06-01",
+  "last_updated": "2026-06-16",
   "drive_folder_id": "1U8PC6Tpq1zdIFIkY2FJD3gJIxtJpfAm9",
   "drive_url": "https://drive.google.com/drive/u/0/folders/1U8PC6Tpq1zdIFIkY2FJD3gJIxtJpfAm9"
 }

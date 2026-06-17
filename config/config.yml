@@ -36,10 +36,9 @@ cameras:
         - record
       - path: rtsp://127.0.0.1:8554/ai_view_ossd2mpvf33xptzai_192_168_2_64_sub
         input_args: preset-rtsp-restream
-        roles:
-        - detect
+        roles: []
     detect:
-      enabled: true
+      enabled: false
     record:
       enabled: true
       retain:
