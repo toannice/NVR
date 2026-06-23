@@ -60,9 +60,9 @@ const LiveViewSidebar = ({ cameras, visibleCamIds, toggleCamera }: { cameras: an
 }
 
 export const LiveView = ({
-  cameras, loading, visibleCamIds, setVisibleCamIds, toggleCamera, layout, setLayout, fullscreenCamId, setFullscreenCamId, requestFullscreen, getCameraDetections
+  cameras, loading, visibleCamIds, setVisibleCamIds, toggleCamera, layout, setLayout, fullscreenCamId, setFullscreenCamId, requestFullscreen, appFullscreen, getCameraDetections
 }: {
-  cameras: any[], loading: boolean, visibleCamIds: string[], setVisibleCamIds: (ids: React.SetStateAction<string[]>) => void, toggleCamera: (id: string) => void, layout: number | string, setLayout: (l: number | string) => void, fullscreenCamId: string | null, setFullscreenCamId: (id: string | null) => void, requestFullscreen: () => void,
+  cameras: any[], loading: boolean, visibleCamIds: string[], setVisibleCamIds: (ids: React.SetStateAction<string[]>) => void, toggleCamera: (id: string) => void, layout: number | string, setLayout: (l: number | string) => void, fullscreenCamId: string | null, setFullscreenCamId: (id: string | null) => void, requestFullscreen: () => void, appFullscreen: boolean,
   getCameraDetections: (cameraId: string) => import('../hooks/useMqttEvents').Detection[]
 }) => {
   const visibleCameras = visibleCamIds.map(id => id ? cameras.find(c => c.id === id) || null : null);
@@ -76,7 +76,7 @@ export const LiveView = ({
   const handleMouseMove = () => {
     setShowToolbar(true);
     if (hideTimeout) clearTimeout(hideTimeout);
-    if (document.fullscreenElement) {
+    if (appFullscreen || document.fullscreenElement) {
       hideTimeout = setTimeout(() => setShowToolbar(false), 2000);
     }
   };
@@ -178,7 +178,7 @@ export const LiveView = ({
 
   return (
     <div className="flex flex-1 overflow-hidden h-full">
-      <LiveViewSidebar cameras={cameras} visibleCamIds={visibleCamIds} toggleCamera={toggleCamera} />
+      {!appFullscreen && <LiveViewSidebar cameras={cameras} visibleCamIds={visibleCamIds} toggleCamera={toggleCamera} />}
       <main className="flex-1 flex flex-col bg-gray-100 dark:bg-gray-900 relative" id="live-view-container" onMouseMove={handleMouseMove}>
         {/* Grid Area */}
         <div className={`flex-1 p-2 grid gap-2 h-full overflow-hidden ${currentGridClass} `}>
@@ -207,7 +207,7 @@ export const LiveView = ({
         {/* Toolbar */}
         <div className={`
             flex items-center justify-between px-4 shrink-0 shadow-sm z-50 transition-all duration-300
-            ${isFullscreen
+            ${(appFullscreen || isFullscreen)
             ? `absolute bottom-0 left-0 right-0 bg-white/90 dark:bg-[#1F2937]/90 backdrop-blur-sm border-t-0 p-3 h-16 ${showToolbar ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0'}`
             : 'relative h-14 bg-white dark:bg-[#1F2937] border-t border-gray-200 dark:border-gray-700 opacity-100'
           }
@@ -263,8 +263,8 @@ export const LiveView = ({
               onClick={requestFullscreen}
               className="flex items-center space-x-2 px-3 py-1.5 text-white rounded-md shadow-sm transition-colors" style={{ backgroundColor: '#EF4444' }}
             >
-              <Icon name={document.fullscreenElement ? "fullscreen_exit" : "fullscreen"} className="text-xl" />
-              <span className="text-sm font-medium">{document.fullscreenElement ? "Thoát" : "Toàn màn hình"}</span>
+              <Icon name={(appFullscreen || document.fullscreenElement) ? "fullscreen_exit" : "fullscreen"} className="text-xl" />
+              <span className="text-sm font-medium">{(appFullscreen || document.fullscreenElement) ? "Thoát" : "Toàn màn hình"}</span>
             </button>
           </div>
         </div>

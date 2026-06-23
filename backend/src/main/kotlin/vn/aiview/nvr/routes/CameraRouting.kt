@@ -441,7 +441,7 @@ fun Route.cameraRouting() {
                 }
 
                 if (alerts.isEmpty()) review.remove("alerts") else review["alerts"] = alerts
-                if (review.isEmpty()) camConfig.remove("review") else review["review"] = review
+                if (review.isEmpty()) camConfig.remove("review") else camConfig["review"] = review
 
                 if (allObjects.isNotEmpty()) {
                     val objectsRaw = camConfig["objects"] as? Map<*, *>
