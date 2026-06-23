@@ -215,16 +215,40 @@ function App() {
     });
   }
 
+  // ── App-level fullscreen (hides header + sidebar, auto on load) ────────────
+  const [isAppFullscreen, setIsAppFullscreen] = useState(true)
   const requestFullscreen = () => {
-    const elem = document.getElementById('live-view-container');
-    if (elem) {
-      if (!document.fullscreenElement) {
-        elem.requestFullscreen().catch(err => console.log(err));
-      } else {
-        document.exitFullscreen();
-      }
+    const next = !isAppFullscreen
+    setIsAppFullscreen(next)
+    if (next) {
+      document.documentElement.requestFullscreen().catch(() => {})
+    } else {
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
     }
   }
+  // On first user interaction, silently enter browser fullscreen (needs gesture)
+  useEffect(() => {
+    if (!document.fullscreenEnabled) return
+    const enterBrowserFs = () => {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {})
+      }
+      document.removeEventListener('click', enterBrowserFs)
+      document.removeEventListener('keydown', enterBrowserFs)
+    }
+    document.addEventListener('click', enterBrowserFs)
+    document.addEventListener('keydown', enterBrowserFs)
+    return () => {
+      document.removeEventListener('click', enterBrowserFs)
+      document.removeEventListener('keydown', enterBrowserFs)
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // Keep isAppFullscreen in sync when user presses Esc to exit browser fullscreen
+  useEffect(() => {
+    const onFsChange = () => { if (!document.fullscreenElement && isAppFullscreen) setIsAppFullscreen(false) }
+    document.addEventListener('fullscreenchange', onFsChange)
+    return () => document.removeEventListener('fullscreenchange', onFsChange)
+  }, [isAppFullscreen])
 
   // Playback
   // Playback
@@ -536,12 +560,14 @@ function App() {
 
   return (
     <div className="bg-[#F3F4F6] dark:bg-[#111827] font-body h-screen flex flex-col text-[#1F2937] dark:text-[#F9FAFB] overflow-hidden">
-      <Header
-        activeTab={activeTab}
-        setActiveTab={handleTabChange}
-        currentTime={currentTime}
-      />
-      <div className="flex-1 overflow-hidden relative flex flex-col pt-2">
+      {!isAppFullscreen && (
+        <Header
+          activeTab={activeTab}
+          setActiveTab={handleTabChange}
+          currentTime={currentTime}
+        />
+      )}
+      <div className={`flex-1 overflow-hidden relative flex flex-col ${isAppFullscreen ? '' : 'pt-2'}`}>
         {/* Pattern Lock Overlay — shows during setup OR when session needs unlock */}
         {showLockScreen && (
           <PatternLockScreen
@@ -550,7 +576,7 @@ function App() {
             onSetupComplete={handleSetupComplete}
           />
         )}
-        {activeTab === 'Live View' && <LiveView cameras={cameras} loading={loading} visibleCamIds={visibleCamIds} setVisibleCamIds={setVisibleCamIds} toggleCamera={toggleCamera} layout={layout} setLayout={setLayout} fullscreenCamId={fullscreenCamId} setFullscreenCamId={setFullscreenCamId} requestFullscreen={requestFullscreen} getCameraDetections={getCameraDetections} />}
+        {activeTab === 'Live View' && <LiveView cameras={cameras} loading={loading} visibleCamIds={visibleCamIds} setVisibleCamIds={setVisibleCamIds} toggleCamera={toggleCamera} layout={layout} setLayout={setLayout} fullscreenCamId={fullscreenCamId} setFullscreenCamId={setFullscreenCamId} requestFullscreen={requestFullscreen} appFullscreen={isAppFullscreen} getCameraDetections={getCameraDetections} />}
         {activeTab === 'Playback' && (
           <>
             <PlaybackView

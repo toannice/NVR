@@ -41,4 +41,5 @@ fun Application.module() {
     vn.aiview.nvr.services.StreamOnlineTracker.start()
     CloudService.start()
     IntegrationService.applyBoxClient()
+    vn.aiview.nvr.services.OnvifServerService.start()
 }

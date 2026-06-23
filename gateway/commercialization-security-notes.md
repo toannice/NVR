@@ -77,21 +77,56 @@ ZeroTier One = **BSL 1.1** (trước là GPLv3). BSL KHÔNG phải copyleft. Ph�
 
 ---
 
-## Gateway Security — To-Do (PENDING, từ audit 2026-06-08)
+## Gateway Security — To-Do (PENDING, từ audit 2026-06-08; cập nhật 2026-06-19)
 
-Audit code `gateway/edge-agent/` (proxy L4 thụ động). Thiết kế kín ở: creds camera KHÔNG bao giờ trên Pi, video mã hoá trên đường ZeroTier (Salsa20), proxy port chỉ bind ztIP, node lạ phải admin cấp phép mới vào overlay. Nhưng còn các lỗ sau (ưu tiên giảm dần):
+### Nguyên tắc giao tiếp (CHỐT 2026-06-19)
+**Luồng 1 chiều: NVR → Pi.** Pi KHÔNG được tự gọi lên NVR, KHÔNG được giao tiếp sang Pi khác trong cùng overlay. Thiết kế thụ động hoàn toàn — Pi chỉ phục vụ khi được hỏi.
+
+Audit code `gateway/edge-agent/` (proxy L4 thụ động). Thiết kế kín ở: creds camera KHÔNG bao giờ trên Pi, video mã hoá trên đường Nebula, proxy port chỉ bind overlay IP, node lạ phải admin cấp phép mới vào overlay. Nhưng còn các lỗ sau (ưu tiên giảm dần):
 
 | # | Mức | Lỗ hổng | Vị trí | Vá đề xuất |
 |---|---|---|---|---|
 | G1 | ✅ | **`/camera` = port-forward tùy ý vào LAN field (SSRF/pivot).** `localIp` chỉ validate "IP hợp lệ", KHÔNG bắt buộc thuộc field subnet → ai có fleet token + trên overlay forward tới bất kỳ host:80/:554 của LAN khách. | `main.go#handleCamera` | ✅ DONE (Nebula agent): `localIPInField()` chặn `localIp ∉ FieldSubnet` (403); fail-open + WARN nếu chưa cấu hình subnet. TODO mirror sang ZT agent nếu còn dùng. |
-| G2 | ✅ | **Fleet token DÙNG CHUNG cả fleet.** Trộm 1 Pi / đọc 1 SD = điều khiển TẤT CẢ gateway; không revoke lẻ được. | `config.go` `EDGE_AGENT_TOKEN` | ✅ DONE (hướng **C**, Nebula agent): xác thực bằng **cert Nebula + firewall group** thay token chung. Bật `NEBULA_FW_NVR_GROUP=nvr` → agent firewall chỉ nhận group `nvr` inbound + tin request overlay không cần token; gateway (group `gateways`) không chạm được API gateway khác. **Bước vận hành:** ký cert NVR `-groups nvr`, gateway giữ `-groups gateways` (mặc định token). Revoke lẻ = revoke cert (V3). Token để trống = legacy. |
-| G3 | ✅ | **`/enroll` no-auth → hijack gateway CHƯA adopt.** Van 409 chỉ chặn khi đã có camera; Pi mới cắm bị trỏ sang network của kẻ tấn công. | `main.go#handleEnroll` | ✅ DONE (Nebula agent, 2026-06-12): **cửa sổ thời gian sau boot** — `/enroll` chỉ nhận region MỚI trong `EDGE_AGENT_ENROLL_WINDOW_MIN` (mặc định 30') sau boot; hết hạn phải reboot. Re-submit cùng token vẫn cho. `/identity.enrollOpen` để app báo. (Lưu ý dư: cùng-LAN trong cửa sổ vẫn claim được — nâng PIN/nút nếu cần mạnh hơn.) |
+| G2 | 🔵 | **Fleet token DÙNG CHUNG cả fleet.** Trộm 1 Pi / đọc 1 SD = điều khiển TẤT CẢ gateway; không revoke lẻ được. | `config.go` `EDGE_AGENT_TOKEN` | **LÝ THUYẾT / hướng phát triển tương lai.** Hướng C: xác thực bằng cert Nebula + firewall group thay token chung (`NEBULA_FW_NVR_GROUP=nvr`). Chưa triển khai — revoke lẻ hiện tại dùng **G8 (nút revoke trên NVR)**. |
+| G3 | ✅ | **`/enroll` no-auth → hijack gateway CHƯA adopt.** Pi chỉ vào được 1 overlay tại 1 thời điểm. Kịch bản: Pi mới boot chưa enroll → kẻ tấn công gọi `/enroll` trước kỹ thuật viên → Pi bị trỏ sang overlay lạ → không bao giờ kết nối vào NVR thật. | `main.go#handleEnroll` | ✅ DONE (Nebula agent, 2026-06-12): **cửa sổ thời gian sau boot** — `/enroll` chỉ nhận region MỚI trong `EDGE_AGENT_ENROLL_WINDOW_MIN` (mặc định 30') sau boot; hết hạn phải reboot. Chặn được kẻ từ xa. Còn hở: kẻ tấn công có mặt vật lý tại field trong 30 phút. **Định hướng tương lai (chưa làm):** nút GPIO gắn thêm vào Pi gate `/enroll` — chỉ nhận khi nút đang được nhấn. |
 | G4 | 🟠 | **Agent chạy `root` + `ip_nonlocal_bind=1` global.** RCE = root. | `nvr-edge-agent.service`, `install.sh` | Hạ quyền: cap `NET_BIND_SERVICE` + sudoers hẹp |
 | G5 | 🟠 | **API bind `0.0.0.0`** → `/identity` rò recon ra cả LAN field. | `config.go#listenAddrs` | Giới hạn field/định danh; giảm thông tin `/identity` |
 | G6 | ✅ | **nginx config injection qua tên camera.** `c.Name` ghi thẳng vào nginx conf, không lọc newline. | `nginx.go#renderStreamConf` | ✅ DONE (Nebula agent): `sanitizeComment()` strip newline/control char + cap 64 ký tự. TODO mirror sang ZT agent nếu còn dùng. |
 | G7 | 🟠 | **Gateway nới rộng bề mặt tấn công của camera** (pass mặc định, ONVIF lộ info, CVE firmware) giờ với tới từ overlay. | (thiết kế) | Cứng hoá camera; G1 giảm phần lớn |
+| G8 | 🟡 | **Không có cơ chế revoke gateway nhanh khi Pi bị mất/đánh cắp.** Hiện tại revoke cert là manual qua HQ endpoint. | NVR UI + HQ signing service | **TODO:** Nút "Thu hồi Gateway" trên NVR UI → xóa toàn bộ thông tin gateway trên NVR + gọi HQ revoke cert (V3) + block overlay IP đó. Xem chi tiết bên dưới. |
 
-> Trọng tâm thực dụng (nhà dân/cửa hàng): **G1 (pivot vào LAN khách) + G2 (token chung)** là rủi ro đáng tiền nhất.
+> Trọng tâm thực dụng (nhà dân/cửa hàng): **G1 (pivot vào LAN khách) + G8 (revoke nhanh khi mất Pi)** là rủi ro đáng tiền nhất. G2 là hướng dài hạn.
+
+### LED blink — identify only (2026-06-19)
+LED blink (`/blink` endpoint → ACT LED onboard Pi) dùng để **nhận dạng đúng Pi vật lý** (kỹ thuật viên nhìn thấy đúng con nào nháy) — **không phải cơ chế bảo mật**. Không liên quan đến việc chặn enroll hijack hay SD theft.
+
+Điều khiển ACT LED: `echo 1 > /sys/class/leds/ACT/brightness` (bật) / `echo 0 > ...` (tắt). Code endpoint `/blink` đã có. Đây là tính năng UX cho kỹ thuật viên lắp đặt, giữ nguyên cho PoC.
+
+Nút GPIO gate `/enroll` là tính năng bảo mật riêng biệt — định hướng tương lai, chưa implement.
+
+---
+
+### Cert TTL & Auto-renew (2026-06-19)
+- **TTL cert ngắn** là cơ chế tự bảo vệ thực tế nhất khi SD bị clone: cert hết hạn tự chết, không cần revoke thủ công.
+- **Mục tiêu:** TTL cert ngắn (cụ thể TBD — đề xuất 90 ngày); auto-renew khi còn **30 ngày** (`NEBULA_RENEW_THRESHOLD_DAYS=30`).
+- Pi chủ động renew: gọi HQ signing service re-sign cùng public key → không cần admin can thiệp. Đã có code R1 trong Nebula agent.
+- Nếu SD bị clone: clone vẫn dùng được đến hết TTL → cần kết hợp G8 (revoke thủ công ngay khi phát hiện).
+
+---
+
+### G8 — Nút "Thu hồi Gateway" trên NVR (TODO)
+**Trigger:** admin phát hiện Pi bị mất / nghi ngờ SD bị clone.
+
+**Luồng dự kiến:**
+1. Admin nhấn "Thu hồi" trên tab Gateway của NVR UI
+2. NVR gọi HQ signing service `POST /revoke` với `gatewayId` / overlay IP → HQ ghi vào CRL
+3. NVR xóa toàn bộ thông tin gateway khỏi DB (cameras, enroll state)
+4. NVR cập nhật Nebula firewall rule block overlay IP đó (hoặc HQ tự enforce qua CRL khi Pi renew)
+5. UI badge gateway là "Đã thu hồi"
+
+**Hiệu lực:** Pi bị thu hồi mất kết nối overlay khi cert hết hạn hoặc khi cố renew (HQ từ chối). Trong khoảng thời gian còn lại của cert hiện tại, Pi vẫn có overlay IP nhưng các port proxy không còn được NVR tin tưởng (cameras đã xóa khỏi DB).
+
+**Phụ thuộc:** HQ signing service cần endpoint revoke + CRL check khi sign.
 
 ---
 

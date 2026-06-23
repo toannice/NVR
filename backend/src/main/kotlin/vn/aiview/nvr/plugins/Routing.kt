@@ -36,6 +36,9 @@ fun Application.configureRouting() {
         // AiView Box integration — public contract endpoints (self-authenticate, v1.1)
         integrationRouting()
 
+        // ONVIF server — NVR advertises itself as ONVIF device for Box/VMS discovery (HTTP, no session auth)
+        onvifServerRouting()
+
         // Static files (for frontend)
         staticFilesRouting()
     }
