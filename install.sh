@@ -44,6 +44,12 @@ ensure_docker() {
 }
 
 # ── 2. .env ──────────────────────────────────────────────────────────────────
+# ── Shared credentials (baked in — no user input needed) ─────────────────────
+_GITHUB_USERNAME="toannice"
+_GITHUB_TOKEN="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"
+_GMAIL_USER="nvr.bkav@gmail.com"
+_GMAIL_APP_PASSWORD="nbeqpzxcjnujccvu"
+
 REQUIRED_VARS=(WRAPPER_TAG FRIGATE_HOST_IP GITHUB_USERNAME GITHUB_TOKEN GMAIL_USER)
 
 ensure_env() {
@@ -58,6 +64,18 @@ ensure_env() {
     else
         ok ".env exists"
     fi
+
+    # Bake shared credentials — always inject after fresh template copy; skip if already set on re-run
+    local v val
+    for v in GITHUB_USERNAME GITHUB_TOKEN GMAIL_USER; do
+        local baked="_${v}"
+        # Strip inline comments + whitespace to get actual value
+        val="$(grep -E "^${v}=" .env 2>/dev/null | head -1 | cut -d= -f2- | sed 's/#.*//' | tr -d '"'"'"' \r\t ' || true)"
+        if [[ -z "$val" ]]; then
+            sed -i "s|^${v}=.*|${v}=${!baked}|" .env
+            ok "$v auto-filled (shared account)"
+        fi
+    done
 
     # Validate required values are non-empty (strip optional surrounding quotes)
     local missing=() v val
@@ -94,14 +112,12 @@ ensure_secrets() {
     c "[4/6] secrets/"
     mkdir -p secrets
 
-    # gmail_app_password — operator supplies (16-char Gmail App Password)
+    # gmail_app_password — shared account, baked in
     if [[ ! -s secrets/gmail_app_password ]]; then
-        if [[ $CHECK_ONLY -eq 1 ]]; then warn "secrets/gmail_app_password missing (would prompt)"; else
-            local pw
-            read -rsp "    Gmail App Password for ${GMAIL_USER:-the OTP account} (Enter to skip): " pw; echo
-            printf '%s' "$pw" > secrets/gmail_app_password
+        if [[ $CHECK_ONLY -eq 1 ]]; then warn "secrets/gmail_app_password missing (would auto-fill)"; else
+            printf '%s' "$_GMAIL_APP_PASSWORD" > secrets/gmail_app_password
             chmod 600 secrets/gmail_app_password
-            [[ -n "$pw" ]] && ok "gmail_app_password saved" || warn "gmail_app_password left empty (OTP email won't work)"
+            ok "gmail_app_password auto-filled (shared account)"
         fi
     else ok "gmail_app_password present"; fi
 

@@ -103,14 +103,6 @@ go2rtc:
     - rtsp://127.0.0.1:8554/ai_view_p200_0802n_192_168_2_65_sub
     3_main:
     - rtsp://127.0.0.1:8554/ipcamera_192_168_2_3
-    cam_4:
-    - rtsp://admin:Bkav@2020@10.10.20.3:8081/profile1/live#tcp
-    4_main:
-    - rtsp://127.0.0.1:8554/cam_4
-    cam_4_sub:
-    - rtsp://admin:Bkav@2020@10.10.20.3:8081/profile2/live#tcp
-    4_sub:
-    - rtsp://127.0.0.1:8554/cam_4_sub
     ai_view_ossd2mpvf33xptzai_192_168_2_64_sub:
     - rtsp://admin:Bkav@2020@192.168.2.65:554/profile2/live#tcp
     1_sub:
@@ -119,38 +111,44 @@ go2rtc:
     - rtsp://admin:123456@192.168.2.3:554/live/sub#tcp
     3_sub:
     - rtsp://127.0.0.1:8554/ipcamera_192_168_2_3_sub
-    virtual_cam_01:
-    - rtsp://127.0.0.1:8554/1_main
-    virtual_cam_02:
-    - rtsp://127.0.0.1:8554/1_main
-    virtual_cam_03:
-    - rtsp://127.0.0.1:8554/1_main
-    virtual_cam_04:
-    - rtsp://127.0.0.1:8554/1_main
-    virtual_cam_05:
-    - rtsp://127.0.0.1:8554/1_main
-    virtual_cam_06:
-    - rtsp://127.0.0.1:8554/1_main
-    virtual_cam_07:
-    - rtsp://127.0.0.1:8554/1_main
-    virtual_cam_08:
-    - rtsp://127.0.0.1:8554/1_main
-    virtual_cam_09:
-    - rtsp://127.0.0.1:8554/1_main
-    virtual_cam_10:
-    - rtsp://127.0.0.1:8554/1_main
-    virtual_cam_11:
-    - rtsp://127.0.0.1:8554/1_main
-    virtual_cam_12:
-    - rtsp://127.0.0.1:8554/1_main
-    virtual_cam_13:
-    - rtsp://127.0.0.1:8554/1_main
-    virtual_cam_14:
-    - rtsp://127.0.0.1:8554/1_main
-    virtual_cam_15:
-    - rtsp://127.0.0.1:8554/1_main
-    virtual_cam_16:
-    - rtsp://127.0.0.1:8554/1_main
+    cam-1:
+    - rtsp://127.0.0.1:8554/ai_view_ossd2mpvf33xptzai_192_168_2_64
+    cam-2:
+    - rtsp://127.0.0.1:8554/cam-1
+    cam-3:
+    - rtsp://127.0.0.1:8554/cam-1
+    cam-4:
+    - rtsp://127.0.0.1:8554/cam-1
+    cam-5:
+    - rtsp://127.0.0.1:8554/cam-1
+    cam-6:
+    - rtsp://127.0.0.1:8554/cam-1
+    cam-7:
+    - rtsp://127.0.0.1:8554/cam-1
+    cam-8:
+    - rtsp://127.0.0.1:8554/cam-1
+    cam-9:
+    - rtsp://127.0.0.1:8554/cam-1
+    cam-10:
+    - rtsp://127.0.0.1:8554/cam-1
+    cam-11:
+    - rtsp://127.0.0.1:8554/cam-1
+    cam-12:
+    - rtsp://127.0.0.1:8554/cam-1
+    cam-13:
+    - rtsp://127.0.0.1:8554/cam-1
+    cam-14:
+    - rtsp://127.0.0.1:8554/cam-1
+    cam-15:
+    - rtsp://127.0.0.1:8554/cam-1
+    cam_4:
+    - rtsp://admin:Bkav@2020@10.10.20.3:8081/live/main#tcp
+    4_main:
+    - rtsp://127.0.0.1:8554/cam_4
+    cam_4_sub:
+    - rtsp://admin:Bkav@2020@10.10.20.3:8081/live/sub#tcp
+    4_sub:
+    - rtsp://127.0.0.1:8554/cam_4_sub
   webrtc:
     candidates:
     - 192.168.2.107:8555

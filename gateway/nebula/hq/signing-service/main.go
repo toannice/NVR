@@ -242,31 +242,41 @@ func (s *server) handleRenew(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.statusBody(rq))
 }
 
-// handleRevoke (admin): POST {token}. Marks the gateway revoked (blocks renew + re-enroll → its
-// short-lived cert lapses, V1) and appends its cert fingerprint to the blocklist file for the operator
-// to wire into the lighthouse pki.blocklist + reload (V2 fast-cut).
+// handleRevoke (admin): POST {token} OR {overlayIp}. Marks the gateway revoked (blocks renew +
+// re-enroll → its short-lived cert lapses, V1) and appends its cert fingerprint to the blocklist file
+// for the operator to wire into the lighthouse pki.blocklist + reload (V2 fast-cut). The NVR's "Thu hồi"
+// button (G8) passes overlayIp since it tracks gateways by overlay IP, not the enrollment token.
 func (s *server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method"})
 		return
 	}
 	var req struct {
-		Token string `json:"token"`
+		Token     string `json:"token"`
+		OverlayIP string `json:"overlayIp"`
 	}
-	if err := readJSON(r, &req); err != nil || req.Token == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "token required"})
+	if err := readJSON(r, &req); err != nil || (req.Token == "" && req.OverlayIP == "") {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "token or overlayIp required"})
 		return
 	}
-	fp, ok := s.store.markRevoked(strings.TrimSpace(req.Token))
+	var fp string
+	var ok bool
+	keyDesc := safePrefix(strings.TrimSpace(req.Token))
+	if req.Token != "" {
+		fp, ok = s.store.markRevoked(strings.TrimSpace(req.Token))
+	} else {
+		keyDesc = strings.TrimSpace(req.OverlayIP)
+		fp, ok = s.store.markRevokedByOverlayIP(strings.TrimSpace(req.OverlayIP))
+	}
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no request for token"})
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no gateway for token/overlayIp"})
 		return
 	}
 	blocklisted := false
 	if fp != "" {
 		blocklisted = s.appendBlocklist(fp)
 	}
-	log.Printf("revoked token=%s.. fingerprint=%q blocklisted=%v", safePrefix(strings.TrimSpace(req.Token)), fp, blocklisted)
+	log.Printf("revoked gateway=%s fingerprint=%q blocklisted=%v", keyDesc, fp, blocklisted)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "fingerprint": fp, "blocklisted": blocklisted})
 }
 

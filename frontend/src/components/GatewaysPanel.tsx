@@ -174,6 +174,30 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
     finally { setBusyAction('') }
   }
 
+  // G8: revoke a lost/stolen gateway (or one whose SD is suspected cloned). Stronger than delete — it
+  // also tells the HQ to revoke the cert so the Pi can't renew, and tombstones the row so the scanner
+  // can't re-approve it. The gateway stays in the list as "Đã thu hồi" until hard-deleted.
+  const revokeGateway = async (g: Gateway) => {
+    const msg = `THU HỒI gateway "${g.name}"?\n\n` +
+      `Dùng khi Pi bị mất/đánh cắp hoặc nghi SD bị sao chép. Sẽ:\n` +
+      `• yêu cầu HQ thu hồi chứng chỉ (Pi không gia hạn được, cert hết hạn là mất mạng)\n` +
+      (g.cameraCount > 0 ? `• xóa ${g.cameraCount} camera đã thêm qua nó\n` : '') +
+      `• đánh dấu gateway là "Đã thu hồi" (không tự kết nối lại).\n\nKhông thể hoàn tác.`
+    if (!window.confirm(msg)) return
+    setBusyAction('revoke:' + g.id)
+    try {
+      const r = await fetch(`/api/gateways/${g.id}/revoke`, { method: 'POST' })
+      const d = await r.json().catch(() => ({}))
+      if (r.ok && d.success) {
+        toast(`Đã thu hồi gateway${d.camerasRemoved ? ` + xóa ${d.camerasRemoved} camera` : ''}`, 'success')
+        if (openId === g.id) setOpenId(null)
+        await fetchGateways()
+        onCamerasChanged?.()
+      } else toast(d.error || 'Thu hồi gateway thất bại', 'error')
+    } catch { toast('Lỗi mạng khi thu hồi gateway', 'error') }
+    finally { setBusyAction('') }
+  }
+
   const mergeAddable = (id: string, rows: Addable[]) => {
     setAddable(prev => {
       const existing = prev[id] || []
@@ -292,6 +316,8 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
   }
 
   const statusBadge = (g: Gateway) => {
+    if (g.status === 'revoked')
+      return <span className="px-2 py-0.5 rounded-full text-xs bg-red-100 text-red-700" title="Chứng chỉ đã bị thu hồi">⊘ Đã thu hồi</span>
     if (g.status === 'discovered')
       return <span className="px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700">Chờ duyệt</span>
     if (!g.online)
@@ -382,7 +408,7 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
                   )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  {g.status === 'discovered' ? (
+                  {g.status === 'revoked' ? null : g.status === 'discovered' ? (
                     <button onClick={() => approve(g.id)} disabled={busyAction === 'approve:' + g.id}
                       className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-sm disabled:opacity-50">Phê duyệt</button>
                   ) : (
@@ -391,8 +417,15 @@ export default function GatewaysPanel({ addToast, onCamerasChanged }: {
                       <Icon name={openId === g.id ? 'expand_less' : 'add_a_photo'} className="text-base" /> Thêm camera
                     </button>
                   )}
+                  {g.status !== 'revoked' && (
+                    <button onClick={() => revokeGateway(g)} disabled={busyAction === 'revoke:' + g.id}
+                      title="Thu hồi gateway (Pi mất/bị đánh cắp)" aria-label="Thu hồi gateway"
+                      className="flex items-center text-gray-400 hover:text-red-600 px-2 py-1.5 rounded-lg disabled:opacity-50">
+                      <Icon name="gpp_bad" className="text-base" />
+                    </button>
+                  )}
                   <button onClick={() => deleteGateway(g)} disabled={busyAction === 'delete:' + g.id}
-                    title="Xóa gateway" aria-label="Xóa gateway"
+                    title={g.status === 'revoked' ? 'Xóa hẳn gateway đã thu hồi' : 'Xóa gateway'} aria-label="Xóa gateway"
                     className="flex items-center text-gray-400 hover:text-red-600 px-2 py-1.5 rounded-lg disabled:opacity-50">
                     <Icon name="delete_outline" className="text-base" />
                   </button>

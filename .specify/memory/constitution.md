@@ -102,6 +102,92 @@ anywhere. Production runs `latest`.
 
 ---
 
+## Release Packaging (zip mã nguồn)
+
+### Credentials dùng chung — baked vào mọi bản phát hành
+
+| Credential | Giá trị | Ghi chú |
+|---|---|---|
+| `GITHUB_USERNAME` / `GITHUB_TOKEN` | Tài khoản `toannice` + PAT `read:packages` | Tất cả máy dùng chung 1 token pull GHCR |
+| `GMAIL_USER` / `secrets/gmail_app_password` | Tài khoản Gmail AIView chung | Gửi OTP reset pattern lock |
+
+`install.sh` điền sẵn 2 nhóm trên — user không cần tự cung cấp khi cài máy mới.
+
+### Loại ra khỏi zip khi tạo bản phát hành
+
+**Secrets / Credentials — TUYỆT ĐỐI không đưa vào:**
+```
+.env
+secrets/
+data/session_secret
+config/.jwt_secret
+nginx/server.key
+nginx/ca/ca.key
+```
+
+**Database / Runtime state (máy mới phải bắt đầu trống):**
+```
+data/nvr.db
+data/nvr.db-shm
+data/nvr.db-wal
+config/frigate.db
+config/nvr.db
+config/backup.db
+backend/data/nvr.db
+mosquitto/data/mosquitto.db
+```
+
+**Cấu hình cụ thể máy đang chạy (không áp dụng máy mới):**
+```
+config/config.yml
+nginx/server.crt
+nginx/ca/ca.crt
+docker-compose.override.yml
+```
+
+**Build artifacts / Dev:**
+```
+.git/
+node_modules/
+frontend/dist/
+build/
+*.class
+```
+
+### Lệnh zip chuẩn
+
+```bash
+cd /home/toan/my-nvr
+zip -r AIViewNVRV<version>.zip . -P "AIView@2030" \
+  --exclude ".git/*" \
+  --exclude ".env" \
+  --exclude "secrets/*" \
+  --exclude "data/nvr.db*" \
+  --exclude "data/session_secret" \
+  --exclude "config/*.db*" \
+  --exclude "config/.jwt_secret" \
+  --exclude "config/config.yml" \
+  --exclude "nginx/server.key" \
+  --exclude "nginx/server.crt" \
+  --exclude "nginx/ca/ca.key" \
+  --exclude "nginx/ca/ca.crt" \
+  --exclude "backend/data/*" \
+  --exclude "mosquitto/data/*" \
+  --exclude "docker-compose.override.yml" \
+  --exclude "node_modules/*" \
+  --exclude "frontend/dist/*" \
+  --exclude "build/*" \
+  --exclude "*.class"
+```
+
+Sau khi zip: verify không có credential nào lọt vào:
+```bash
+mkdir /tmp/nvr-verify && unzip -P "AIView@2030" AIViewNVRV<version>.zip -d /tmp/nvr-verify
+grep -r "gmail_app_password\|GITHUB_TOKEN\|nebula_sign_token\|Bkav@" /tmp/nvr-verify/
+```
+
+---
+
 ## References
 
 - Operational guide & codebase map: [`CLAUDE.md`](../../CLAUDE.md)

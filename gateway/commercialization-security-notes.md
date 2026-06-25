@@ -87,15 +87,16 @@ Audit code `gateway/edge-agent/` (proxy L4 thụ động). Thiết kế kín ở
 | # | Mức | Lỗ hổng | Vị trí | Vá đề xuất |
 |---|---|---|---|---|
 | G1 | ✅ | **`/camera` = port-forward tùy ý vào LAN field (SSRF/pivot).** `localIp` chỉ validate "IP hợp lệ", KHÔNG bắt buộc thuộc field subnet → ai có fleet token + trên overlay forward tới bất kỳ host:80/:554 của LAN khách. | `main.go#handleCamera` | ✅ DONE (Nebula agent): `localIPInField()` chặn `localIp ∉ FieldSubnet` (403); fail-open + WARN nếu chưa cấu hình subnet. TODO mirror sang ZT agent nếu còn dùng. |
-| G2 | 🔵 | **Fleet token DÙNG CHUNG cả fleet.** Trộm 1 Pi / đọc 1 SD = điều khiển TẤT CẢ gateway; không revoke lẻ được. | `config.go` `EDGE_AGENT_TOKEN` | **LÝ THUYẾT / hướng phát triển tương lai.** Hướng C: xác thực bằng cert Nebula + firewall group thay token chung (`NEBULA_FW_NVR_GROUP=nvr`). Chưa triển khai — revoke lẻ hiện tại dùng **G8 (nút revoke trên NVR)**. |
+| G2 | ✅ | **Fleet token DÙNG CHUNG cả fleet.** Trộm 1 Pi / đọc 1 SD = điều khiển TẤT CẢ gateway; không revoke lẻ được. | `config.go` `EDGE_AGENT_TOKEN` | ✅ DONE (2026-06-23): (1) **G2:C cert-group** đã đóng rủi ro chính của đường overlay (NVR↔gateway xác thực bằng cert group, không cần token chung). (2) **Per-gateway token** — mỗi Pi tự sinh token riêng ở `state.json` lúc boot đầu (`newToken()`), agent chấp nhận token-riêng SONG SONG fleet token → trộm 1 SD chỉ lộ secret field-LAN của đúng Pi đó, không phải cả fleet. EDGE_AGENT_TOKEN nay để TRỐNG được. **KHÔNG** xây control-plane rotate token riêng (cert-group đã thay vai trò đó). Revoke lẻ = **G8**. |
 | G3 | ✅ | **`/enroll` no-auth → hijack gateway CHƯA adopt.** Pi chỉ vào được 1 overlay tại 1 thời điểm. Kịch bản: Pi mới boot chưa enroll → kẻ tấn công gọi `/enroll` trước kỹ thuật viên → Pi bị trỏ sang overlay lạ → không bao giờ kết nối vào NVR thật. | `main.go#handleEnroll` | ✅ DONE (Nebula agent, 2026-06-12): **cửa sổ thời gian sau boot** — `/enroll` chỉ nhận region MỚI trong `EDGE_AGENT_ENROLL_WINDOW_MIN` (mặc định 30') sau boot; hết hạn phải reboot. Chặn được kẻ từ xa. Còn hở: kẻ tấn công có mặt vật lý tại field trong 30 phút. **Định hướng tương lai (chưa làm):** nút GPIO gắn thêm vào Pi gate `/enroll` — chỉ nhận khi nút đang được nhấn. |
-| G4 | 🟠 | **Agent chạy `root` + `ip_nonlocal_bind=1` global.** RCE = root. | `nvr-edge-agent.service`, `install.sh` | Hạ quyền: cap `NET_BIND_SERVICE` + sudoers hẹp |
-| G5 | 🟠 | **API bind `0.0.0.0`** → `/identity` rò recon ra cả LAN field. | `config.go#listenAddrs` | Giới hạn field/định danh; giảm thông tin `/identity` |
+| G4 | ✅ | **Agent chạy `root` + `ip_nonlocal_bind=1` global.** RCE = root. | `nvr-edge-agent.service`, `install.sh` | ✅ DONE (2026-06-23, **CẦN TEST PI THẬT**): agent chạy user `nvragent` (no shell). Root chỉ cho **2 lệnh** qua sudoers hẹp (`nginx -s reload`, `systemctl restart nebula`) — `nvr-edge-agent.sudoers`, pin nguyên argv. Agent route 2 lệnh đó qua `sudo -n` (`privileged.go`). systemd sandbox: `ProtectSystem=strict` + `ReadWritePaths` đúng 3 thư mục, `ProtectHome/PrivateTmp/ProtectKernel*`, `RestrictAddressFamilies`. `install.sh` tạo user + chown + `visudo -c` validate. (NoNewPrivileges KHÔNG bật vì cần sudo.) |
+| G5 | 🟡 | **API bind `0.0.0.0`** → `/identity` rò recon ra cả LAN field. | `config.go#listenAddrs`, `main.go#handleIdentity` | **GĐ A ✅ DONE (2026-06-23):** `handleIdentity` rút gọn — bỏ `overlayIp`/`lighthouse`/`fieldSubnet`/`cameraCount`/`agentPort`/`nebulaUp`, chỉ còn `gatewayId`/`name`/`installer`/`location`/`overlay`/`enrolled`/`signed`/`enrollOpen`/`alive`. NVR đọc full qua `/health` (overlay). Ảnh hưởng app enroll = **chỉ cosmetic** (mọi field Identity có default + `ignoreUnknownKeys`): `agentPort`→DEFAULT_PORT 9797, `overlayIp` hiển thị từ enroll-response, `cameraCount`=0 trên Pi mới. **GĐ B (backlog, cần Pi, lợi ích biên thấp):** tách listener — control plane (`/health`,`/camera`,`/discovery`,`/cameras`) chỉ nghe overlay IP; field LAN chỉ public paths. Chỉ chặn thêm kẻ **đã có token** đứng trên LAN khách (đã bị G2:C/G2/G3 thu hẹp) nhưng risk làm chết control plane nếu listener-động sai. |
 | G6 | ✅ | **nginx config injection qua tên camera.** `c.Name` ghi thẳng vào nginx conf, không lọc newline. | `nginx.go#renderStreamConf` | ✅ DONE (Nebula agent): `sanitizeComment()` strip newline/control char + cap 64 ký tự. TODO mirror sang ZT agent nếu còn dùng. |
 | G7 | 🟠 | **Gateway nới rộng bề mặt tấn công của camera** (pass mặc định, ONVIF lộ info, CVE firmware) giờ với tới từ overlay. | (thiết kế) | Cứng hoá camera; G1 giảm phần lớn |
-| G8 | 🟡 | **Không có cơ chế revoke gateway nhanh khi Pi bị mất/đánh cắp.** Hiện tại revoke cert là manual qua HQ endpoint. | NVR UI + HQ signing service | **TODO:** Nút "Thu hồi Gateway" trên NVR UI → xóa toàn bộ thông tin gateway trên NVR + gọi HQ revoke cert (V3) + block overlay IP đó. Xem chi tiết bên dưới. |
+| G9 | 🟡 | **Restream NVR phơi ra LAN + overlay không auth.** `go2rtc` RTSP `8554` + API `1984` bind `0.0.0.0` → ai trên field LAN HOẶC trên overlay (gateway bị chiếm) kéo `rtsp://IP_NVR:8554/<cam>` / mở `http://IP_NVR:1984` xem mọi camera, không cần mật khẩu. | `docker-compose.yml` frigate `ports`, `config.yml` go2rtc | ✅ GĐ1 DONE (2026-06-23): `1984`→`127.0.0.1` (chỉ nvr-wrapper dùng); `8554`→`127.0.0.1` + `${FRIGATE_HOST_IP}` (IP LAN) thay vì `0.0.0.0` → **cắt overlay**, giữ Box cùng LAN (URL Box nhận từ API NVR vốn đã là IP LAN). **GĐ2 (TODO):** bật auth go2rtc qua hook `IntegrationService.RTSP_AUTH` để chặn cả máy lạ cùng LAN — cần nhúng creds vào path nội bộ Frigate (`CameraService.writeYaml`), để khi test Box E2E. |
+| G8 | ✅ | **Không có cơ chế revoke gateway nhanh khi Pi bị mất/đánh cắp.** Hiện tại revoke cert là manual qua HQ endpoint. | NVR UI + HQ signing service | ✅ DONE (2026-06-23): Nút **"Thu hồi"** (icon `gpp_bad`) trên tab Gateway → `POST /api/gateways/{id}/revoke` → `GatewayService.revokeGateway`: (1) HQ `/revoke` theo **overlayIp** (NVR không giữ enrollment token) → từ chối renew/re-enroll + blocklist fingerprint; (2) cascade xóa camera (proxy+DB+YAML+go2rtc); (3) **tombstone** row = `revoked` để scanner KHÔNG tự rediscover+auto-approve lại. Badge "⊘ Đã thu hồi"; nút thùng rác = xóa hẳn. HQ down vẫn cắt được local (best-effort). |
 
-> Trọng tâm thực dụng (nhà dân/cửa hàng): **G1 (pivot vào LAN khách) + G8 (revoke nhanh khi mất Pi)** là rủi ro đáng tiền nhất. G2 là hướng dài hạn.
+> Trọng tâm thực dụng (nhà dân/cửa hàng): **G1 (pivot vào LAN khách) + G8 (revoke nhanh khi mất Pi)** là rủi ro đáng tiền nhất — **cả hai nay đã ✅**. Còn mở: **G5** (bind 0.0.0.0 / recon `/identity`) + **G7** (cứng hoá camera) — mức 🟠, để sau.
 
 ### LED blink — identify only (2026-06-19)
 LED blink (`/blink` endpoint → ACT LED onboard Pi) dùng để **nhận dạng đúng Pi vật lý** (kỹ thuật viên nhìn thấy đúng con nào nháy) — **không phải cơ chế bảo mật**. Không liên quan đến việc chặn enroll hijack hay SD theft.
@@ -114,19 +115,33 @@ Nút GPIO gate `/enroll` là tính năng bảo mật riêng biệt — định h
 
 ---
 
-### G8 — Nút "Thu hồi Gateway" trên NVR (TODO)
+### G8 — Nút "Thu hồi Gateway" trên NVR (✅ DONE 2026-06-23)
 **Trigger:** admin phát hiện Pi bị mất / nghi ngờ SD bị clone.
 
-**Luồng dự kiến:**
-1. Admin nhấn "Thu hồi" trên tab Gateway của NVR UI
-2. NVR gọi HQ signing service `POST /revoke` với `gatewayId` / overlay IP → HQ ghi vào CRL
-3. NVR xóa toàn bộ thông tin gateway khỏi DB (cameras, enroll state)
-4. NVR cập nhật Nebula firewall rule block overlay IP đó (hoặc HQ tự enforce qua CRL khi Pi renew)
-5. UI badge gateway là "Đã thu hồi"
+**Luồng đã implement:**
+1. Admin nhấn **"Thu hồi"** (icon `gpp_bad`) trên tab Gateway → confirm cảnh báo.
+2. `POST /api/gateways/{id}/revoke` → `GatewayService.revokeGateway`.
+3. NVR gọi HQ `POST /revoke` với **`overlayIp`** (NVR theo dõi gateway bằng overlay IP, không giữ enrollment token). HQ `markRevokedByOverlayIP` → set `Revoked=true` (từ chối `/renew` + re-enroll) + append fingerprint vào blocklist file (operator nạp vào lighthouse `pki.blocklist`). Best-effort: HQ down KHÔNG chặn cắt local.
+4. NVR cascade xóa camera của gateway (proxy agent + DB + YAML + go2rtc + Frigate restart).
+5. NVR **tombstone** row = `revoked` (KHÔNG xóa hẳn) → `upsertFromHealth` bỏ qua row `revoked` nên scanner không tự rediscover + auto-approve lại Pi khi cert còn hạn. UI badge "⊘ Đã thu hồi"; nút thùng rác để xóa hẳn (forget).
 
-**Hiệu lực:** Pi bị thu hồi mất kết nối overlay khi cert hết hạn hoặc khi cố renew (HQ từ chối). Trong khoảng thời gian còn lại của cert hiện tại, Pi vẫn có overlay IP nhưng các port proxy không còn được NVR tin tưởng (cameras đã xóa khỏi DB).
+**Hiệu lực:** Pi bị thu hồi mất kết nối overlay khi cert hết hạn / khi cố renew (HQ từ chối) / khi operator nạp blocklist. Trong thời gian cert còn lại, Pi vẫn có overlay IP nhưng cameras đã xóa khỏi DB → NVR không còn tin các port proxy.
 
-**Phụ thuộc:** HQ signing service cần endpoint revoke + CRL check khi sign.
+**Đã có sẵn ở HQ từ trước:** endpoint `/revoke` (V3) + blocklist append. Lần này bổ sung **revoke-by-overlayIp** + toàn bộ đường NVR (client/service/route/UI). Code: `NebulaCaClient.revoke`, `GatewayService.revokeGateway`, `GatewayRouting` `POST /{id}/revoke`, `GatewaysPanel.tsx`, `store.markRevokedByOverlayIP`.
+
+---
+
+### G9 — Restream NVR phơi ra LAN/overlay (GĐ1 ✅ 2026-06-23; GĐ2 TODO)
+**Bối cảnh:** `go2rtc` của Frigate phục vụ RTSP restream ở `8554` và API/video ở `1984`. Tích hợp AiView Box (v1.2) cho Box **xác thực vào API NVR** (bcrypt + rate-limit) rồi kéo `rtsp://<LAN_IP>:8554/<chId>_main` để chạy AI — đây là luồng hợp lệ trong LAN tin cậy (`IntegrationService.streamUrl`, `lanIp()` đã cố ý bỏ qua interface overlay).
+
+**Lỗ:** compose publish `8554`/`1984` ở `0.0.0.0` → lộ ra **cả interface overlay `nebula1`**, nên không chỉ LAN mà **một gateway bị chiếm trên overlay** cũng kéo được mọi camera, KHÔNG cần mật khẩu (go2rtc `RTSP_AUTH=false`). Nặng hơn G5 (G5 chỉ lộ recon; G9 lộ luôn video).
+
+**GĐ1 (đã làm) — siết bind, không sửa code:** `docker-compose.yml`:
+- `1984` → `127.0.0.1:1984:1984` (chỉ nvr-wrapper dùng qua localhost; Box không cần).
+- `8554` → `127.0.0.1:8554:8554` + `${FRIGATE_HOST_IP}:8554:8554` (IP LAN), **bỏ** `0.0.0.0`.
+→ Box cùng LAN tới được (đúng URL API NVR trả); node overlay (`10.10.20.x`) KHÔNG; Frigate↔go2rtc nội bộ (cùng container, localhost) không đụng; cloud live WebRTC (`127.0.0.1:1984` + `8555/udp`) không đổi. ⚠️ **`FRIGATE_HOST_IP` phải set trong `.env`** — nếu trống, mapping thứ 2 thành `0.0.0.0` (phơi lại).
+
+**GĐ2 (TODO, khi test Box E2E) — chặn cả máy lạ cùng LAN:** dùng hook có sẵn `IntegrationService.RTSP_AUTH`: bật user/pass go2rtc trong `config.yml`, `streamUrl()` nhúng creds (`rtsp://user:pass@IP:8554/...`), `rtsp_auth=true`. Đánh đổi: phải nhúng creds vào path nội bộ `rtsp://127.0.0.1:8554/...` mà Frigate đọc (`CameraService.writeYaml`) nếu không record/detect gãy → invasive, test kỹ. **Bổ sung belt-and-suspenders:** siết inbound firewall Nebula phía NVR để gateway không với tới cổng quản trị/restream NVR qua overlay.
 
 ---
 

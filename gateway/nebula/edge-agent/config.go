@@ -61,7 +61,9 @@ func loadConfig() Config {
 		RenewThresholdDays: envInt("NEBULA_RENEW_THRESHOLD_DAYS", 30),
 	}
 	if c.Token == "" {
-		log.Println("WARN: EDGE_AGENT_TOKEN empty — remote (non-loopback) requests will be rejected")
+		// No longer fatal for the field-LAN path: the agent falls back to its per-gateway token (G2), and
+		// the NVR normally reaches it over the overlay via the cert group (G2:C). Just note it.
+		log.Println("INFO: EDGE_AGENT_TOKEN empty — using the per-gateway token + Nebula cert group (G2/G2:C) for auth")
 	}
 	if c.FieldSubnet != "" {
 		if _, n, err := net.ParseCIDR(c.FieldSubnet); err == nil {

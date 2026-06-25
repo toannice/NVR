@@ -120,6 +120,29 @@ object NebulaCaClient {
         } ?: false
     }
 
+    /**
+     * Revoke ("Thu hồi") a gateway by its overlay IP (the NVR tracks gateways by overlay IP, not the
+     * enrollment token). The signing service flags the request revoked (refusing renew/re-enroll so the
+     * short-lived cert lapses) and blocklists its cert fingerprint. Returns false if Nebula isn't wired
+     * or the call fails — the caller still removes the gateway locally so a down HQ never blocks revoke.
+     */
+    suspend fun revoke(overlayIp: String): Boolean {
+        val c = cfg() ?: return false
+        return withTimeoutOrNull(12_000) {
+            runCatching {
+                val resp = http.post("${c.url}/revoke") {
+                    bearer(c.token); contentType(ContentType.Application.Json); setBody("""{"overlayIp":"$overlayIp"}""")
+                }
+                if (!resp.status.isSuccess())
+                    AppLogger.warn(AppLogger.Module.SYSTEM, "GATEWAY", "NEBULA_REVOKE_FAIL", "status=${resp.status}")
+                resp.status.isSuccess()
+            }.getOrElse {
+                AppLogger.warn(AppLogger.Module.SYSTEM, "GATEWAY", "NEBULA_REVOKE_FAIL", it.message ?: "")
+                false
+            }
+        } ?: false
+    }
+
     /** Reject + drop a pending enrollment (frees its token for a retry). */
     suspend fun reject(token: String): Boolean {
         val c = cfg() ?: return false

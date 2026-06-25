@@ -1,0 +1,11 @@
+# Installed to /etc/sudoers.d/nvr-edge-agent by install.sh (mode 0440). Part of G4 (de-privilege): the
+# agent runs as the unprivileged `nvragent` user and is granted root for EXACTLY two commands — nothing
+# else — so an RCE in the agent cannot escalate to general root.
+#
+#   1. reload the nginx master after writing /etc/nginx/stream.d (camera proxies)
+#   2. restart the nebula unit after writing a fresh cert/config on enroll/renew
+#
+# Exact argv is pinned so the grant can't be repurposed (e.g. `systemctl restart` of any other unit).
+Cmnd_Alias NVR_EDGE = /usr/sbin/nginx -s reload, /usr/bin/systemctl restart nebula, /bin/systemctl restart nebula
+nvragent ALL=(root) NOPASSWD: NVR_EDGE
+Defaults:nvragent !requiretty

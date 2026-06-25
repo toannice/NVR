@@ -212,7 +212,25 @@ func (s *Store) markSigned(tokenStr, certPem, caPem, fingerprint string) error {
 func (s *Store) markRevoked(tokenStr string) (fingerprint string, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r := s.d.Requests[tokenStr]
+	return s.revokeLocked(s.d.Requests[tokenStr])
+}
+
+// markRevokedByOverlayIP is the same as markRevoked but keyed by the assigned overlay IP — the NVR
+// tracks a gateway by its overlay IP (it never sees the enrollment token), so the "Thu hồi" button
+// (G8) revokes by that instead. Returns "" if no request owns that IP.
+func (s *Store) markRevokedByOverlayIP(overlayIP string) (fingerprint string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.d.Requests {
+		if r.OverlayIP == overlayIP {
+			return s.revokeLocked(r)
+		}
+	}
+	return "", false
+}
+
+// revokeLocked flags a request revoked and returns its last signed cert fingerprint. Caller holds s.mu.
+func (s *Store) revokeLocked(r *Request) (fingerprint string, ok bool) {
 	if r == nil {
 		return "", false
 	}

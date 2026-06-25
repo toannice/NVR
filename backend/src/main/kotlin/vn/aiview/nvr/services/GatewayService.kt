@@ -53,6 +53,9 @@ object GatewayService {
     /** Warn (degraded) when a gateway's cert is within this many days of expiry. */
     const val CERT_WARN_DAYS = 30L
 
+    /** Tombstone status for a revoked gateway (G8) — kept in the table so the scanner can't resurrect it. */
+    const val STATUS_REVOKED = "revoked"
+
     /** Days until the RFC3339 cert NotAfter, or null if unparseable/blank. */
     fun certDaysLeft(certExpiry: String?): Long? {
         if (certExpiry.isNullOrBlank()) return null
@@ -83,6 +86,10 @@ object GatewayService {
         if (h.gatewayId.isBlank()) return
         transaction {
             val existing = Gateways.selectAll().where { Gateways.id eq h.gatewayId }.firstOrNull()
+            // A revoked gateway is a tombstone (G8): never refresh or auto-approve it back, even if its
+            // cert is still valid and the scanner keeps seeing it on the overlay. Admin must hard-delete
+            // the row to forget it (and re-enroll on the HQ) to bring it back.
+            if (existing != null && existing[Gateways.status] == STATUS_REVOKED) return@transaction
             if (existing == null) {
                 // If the admin authorized this node from the NVR, skip the manual "Phê duyệt" gate. On
                 // Nebula, presence on the overlay already means the admin signed the cert ("Cấp phép"),
@@ -131,13 +138,14 @@ object GatewayService {
             val online = lastSeen != null && Duration.between(lastSeen, LocalDateTime.now()) < ONLINE_WINDOW
             val certExpiry = row[Gateways.certExpiry]
             val daysLeft = certDaysLeft(certExpiry)
+            val status = row[Gateways.status]
             GatewayDto(
                 id = id,
                 name = row[Gateways.name],
                 zerotierIp = row[Gateways.zerotierIp],
                 ztAddress = row[Gateways.ztAddress],
                 agentPort = row[Gateways.agentPort],
-                status = row[Gateways.status],
+                status = status,
                 online = online,
                 fieldSubnet = row[Gateways.fieldSubnet],
                 installer = row[Gateways.installer],
@@ -146,7 +154,7 @@ object GatewayService {
                 cameraCount = counts[id] ?: 0,
                 certExpiry = certExpiry,
                 certDaysLeft = daysLeft,
-                health = healthOf(online, daysLeft),
+                health = if (status == STATUS_REVOKED) STATUS_REVOKED else healthOf(online, daysLeft),
             )
         }
     }
@@ -357,25 +365,59 @@ object GatewayService {
         val exists = transaction { Gateways.selectAll().where { Gateways.id eq id }.firstOrNull() != null }
         if (!exists) return null
 
-        // Snapshot the gateway's cameras (slug + localIp) before we start mutating.
+        val removed = cascadeRemoveCameras(id)
+        transaction { Gateways.deleteWhere { Gateways.id eq id } }
+        AppLogger.info(AppLogger.Module.SYSTEM, "GATEWAY", "DELETED", "id=$id camerasRemoved=$removed")
+        return DeleteResult(true, removed)
+    }
+
+    /**
+     * Revoke ("Thu hồi") a gateway when a Pi is lost/stolen or its SD is suspected cloned (G8). Unlike
+     * [deleteGateway] it does NOT drop the row — it tombstones it as [STATUS_REVOKED] so the scanner can't
+     * silently rediscover + auto-approve the Pi while its short-lived cert is still valid. Steps:
+     *   1. tell the HQ signing service to revoke this overlay IP (refuse renew/re-enroll + blocklist the
+     *      cert fingerprint) — best-effort: a down HQ must not block the local cut;
+     *   2. cascade-remove its cameras (frees proxies + DB/YAML/go2rtc/Frigate), so the NVR stops trusting
+     *      its proxy ports immediately;
+     *   3. flip the row to `revoked` (kept as a tombstone; admin can hard-delete later to forget it).
+     * Returns null if the gateway id is unknown.
+     */
+    suspend fun revokeGateway(id: String): DeleteResult? {
+        val overlayIp = transaction {
+            Gateways.selectAll().where { Gateways.id eq id }.firstOrNull()?.get(Gateways.zerotierIp)
+        } ?: return null
+
+        val hqRevoked = if (NebulaCaClient.isConfigured() && !overlayIp.isNullOrBlank())
+            NebulaCaClient.revoke(overlayIp) else false
+
+        val removed = cascadeRemoveCameras(id)
+        transaction {
+            Gateways.update({ Gateways.id eq id }) {
+                it[Gateways.status] = STATUS_REVOKED
+                it[Gateways.updatedAt] = LocalDateTime.now()
+            }
+        }
+        AppLogger.warn(AppLogger.Module.SYSTEM, "GATEWAY", "REVOKED",
+            "id=$id overlayIp=$overlayIp hqRevoked=$hqRevoked camerasRemoved=$removed")
+        return DeleteResult(true, removed)
+    }
+
+    /** Free agent proxy ports (best-effort) and remove every camera adopted through a gateway. Shared by
+     *  [deleteGateway] (then drops the row) and [revokeGateway] (then tombstones it). Returns the count. */
+    private suspend fun cascadeRemoveCameras(id: String): Int {
         val cams = transaction {
             Cameras.selectAll().where { Cameras.gatewayId eq id }
                 .map { it[Cameras.slug] to it[Cameras.localIp] }
         }
         val c = conn(id)
-
         var removed = 0
         for ((slug, localIp) in cams) {
-            // Free the proxy port on the agent first (best-effort; ignored if the gateway is unreachable).
             if (c != null && !localIp.isNullOrBlank()) {
                 runCatching { EdgeAgentClient.deleteProxy(c.ip, c.port, c.token, localIp) }
             }
             CameraService.removeAndPersist(slug).onSuccess { removed++ }
                 .onFailure { AppLogger.warn(AppLogger.Module.CAMERA, "GATEWAY", "DELETE_CAM_FAIL", "slug=$slug: ${it.message}") }
         }
-
-        transaction { Gateways.deleteWhere { Gateways.id eq id } }
-        AppLogger.info(AppLogger.Module.SYSTEM, "GATEWAY", "DELETED", "id=$id camerasRemoved=$removed/${cams.size}")
-        return DeleteResult(true, removed)
+        return removed
     }
 }

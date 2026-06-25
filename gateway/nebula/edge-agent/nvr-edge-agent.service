@@ -1,7 +1,7 @@
 [Unit]
-Description=NVR Edge Agent (passive L4 gateway provisioning)
+Description=NVR Edge Agent (passive L4 gateway provisioning, Nebula)
 Documentation=https://github.com/toannice/NVR
-After=network-online.target zerotier-one.service
+After=network-online.target nebula.service
 Wants=network-online.target
 
 [Service]
@@ -10,9 +10,26 @@ EnvironmentFile=/etc/nvr-edge-agent/agent.env
 ExecStart=/usr/local/bin/nvr-edge-agent
 Restart=always
 RestartSec=3
-# nginx -s reload needs privilege; agent writes /etc/nginx/stream.d + /var/lib/nvr-edge-agent.
-# Keep it simple on the Pi (runs as root); harden later if needed.
-User=root
+
+# G4 — least privilege. Run as a dedicated unprivileged user. The agent writes /etc/nginx/stream.d,
+# /etc/nebula and /var/lib/nvr-edge-agent (granted via ReadWritePaths), and gets root for ONLY two
+# commands (nginx -s reload, systemctl restart nebula) through /etc/sudoers.d/nvr-edge-agent.
+User=nvragent
+Group=nvragent
+# NoNewPrivileges is intentionally NOT set: the agent escalates the two whitelisted commands via sudo.
+
+# Sandbox: read-only filesystem except the three dirs the agent actually mutates.
+ProtectSystem=strict
+ReadWritePaths=/etc/nebula /etc/nginx/stream.d /var/lib/nvr-edge-agent
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
 # Low footprint guardrails for the 256MB Pi.
 MemoryMax=48M
 Nice=5
