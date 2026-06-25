@@ -89,6 +89,22 @@ else
   echo "    -> exists, left untouched."
 fi
 
+echo "==> G4: dedicated unprivileged user + narrow sudoers (agent no longer runs as root)"
+# System user with no login shell/home — owns the dirs the agent writes; root only via the 2 sudoers cmds.
+if ! id -u nvragent >/dev/null 2>&1; then
+  useradd --system --no-create-home --shell /usr/sbin/nologin nvragent
+fi
+# The agent (as nvragent) writes these; nebula/nginx run as root and only READ them.
+# (agent.env stays 0600 root — systemd reads EnvironmentFile as root before dropping to nvragent.)
+chown -R nvragent:nvragent /var/lib/nvr-edge-agent /etc/nebula /etc/nginx/stream.d
+# Narrow sudoers: nginx reload + nebula restart ONLY. Validate before installing so a typo can't lock sudo.
+install -m 0440 "$HERE/nvr-edge-agent.sudoers" /etc/sudoers.d/nvr-edge-agent
+if ! visudo -cf /etc/sudoers.d/nvr-edge-agent >/dev/null; then
+  echo "    !! sudoers file invalid — removing it; agent would fail to reload nginx/nebula." >&2
+  rm -f /etc/sudoers.d/nvr-edge-agent
+  exit 1
+fi
+
 echo "==> systemd unit (agent)"
 install -m 0644 "$HERE/nvr-edge-agent.service" /etc/systemd/system/nvr-edge-agent.service
 systemctl daemon-reload

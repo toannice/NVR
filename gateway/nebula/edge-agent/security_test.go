@@ -2,10 +2,38 @@ package main
 
 import (
 	"net"
+	"os"
 	"strings"
 	"testing"
 	"time"
 )
+
+// TestPrivilegedCmd covers G4: when the agent is unprivileged the two root-needing commands are routed
+// through `sudo -n`; when already root they run directly.
+func TestPrivilegedCmd(t *testing.T) {
+	cmd := privilegedCmd("nginx", "-s", "reload")
+	got := strings.Join(cmd.Args, " ")
+	if os.Geteuid() == 0 {
+		if got != "nginx -s reload" {
+			t.Fatalf("root should run directly, got %q", got)
+		}
+	} else {
+		if got != "sudo -n nginx -s reload" {
+			t.Fatalf("non-root should use sudo -n, got %q", got)
+		}
+	}
+}
+
+// TestNewToken covers G2: per-gateway tokens are 32-hex and unique per call.
+func TestNewToken(t *testing.T) {
+	a, b := newToken(), newToken()
+	if len(a) != 32 {
+		t.Fatalf("token len = %d, want 32 hex chars", len(a))
+	}
+	if a == b {
+		t.Fatal("two tokens collided")
+	}
+}
 
 // TestLocalIPInField covers the G1 whitelist: /camera may only target hosts on the configured field
 // subnet, and fails OPEN when no valid subnet is configured.

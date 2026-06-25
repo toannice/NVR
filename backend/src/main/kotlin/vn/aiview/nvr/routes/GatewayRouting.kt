@@ -93,6 +93,16 @@ fun Route.gatewayRouting() {
             call.respond(DeleteGatewayResponse(res.deleted, res.camerasRemoved))
         }
 
+        // Revoke a gateway (G8): Pi lost/stolen or SD suspected cloned. Tells the HQ to revoke the cert
+        // (refuse renew + blocklist), cascade-removes its cameras, and tombstones the row as `revoked`
+        // so the scanner can't rediscover + auto-approve it. Heavier than delete — keeps the tombstone.
+        post("/{id}/revoke") {
+            val id = call.parameters["id"] ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing id"))
+            val res = GatewayService.revokeGateway(id)
+                ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to "gateway not found"))
+            call.respond(DeleteGatewayResponse(res.deleted, res.camerasRemoved))
+        }
+
         // Cameras the NVR adopted through this gateway (from our DB) — drives the per-camera list/delete.
         get("/{id}/cameras") {
             val id = call.parameters["id"] ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing id"))

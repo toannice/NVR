@@ -31,8 +31,15 @@ services:
       - nvr-backend
     ports:
       - "127.0.0.1:5000:5000" # Frigate Web UI & API — bind localhost only (nvr-wrapper proxies via FRIGATE_URL=localhost:5000). Không expose UI gốc Frigate ra LAN (trademark + security). Dev xa: dùng SSH tunnel.
-      - "8554:8554" # RTSP re-stream feeds
-      - "1984:1984" # go2rtc API & video streams
+      # G9 — RTSP re-stream feeds. NOT 0.0.0.0: bind only localhost (host-internal consumers) + the LAN IP
+      # the AiView Box pulls from. This keeps the Box working on the same LAN (its URLs from the NVR API
+      # already use FRIGATE_HOST_IP) while cutting access over the Nebula overlay (nebula1) — a rogue
+      # gateway can no longer pull rtsp://<nvr>:8554/<cam>. ⚠️ FRIGATE_HOST_IP MUST be set in .env; if empty
+      # the second mapping degrades to 0.0.0.0 (re-exposing it). Frigate↔go2rtc is container-localhost, so
+      # these published bindings don't affect internal record/detect.
+      - "127.0.0.1:8554:8554"
+      - "${FRIGATE_HOST_IP}:8554:8554"
+      - "127.0.0.1:1984:1984" # go2rtc API & video — localhost only; only nvr-wrapper uses it (127.0.0.1), Box doesn't need it
       - "8555:8555/udp" # go2rtc WebRTC UDP (cloud live view ICE candidates)
     volumes:
       - /etc/localtime:/etc/localtime:ro

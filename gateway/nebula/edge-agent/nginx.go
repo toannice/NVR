@@ -23,7 +23,15 @@ func renderStreamConf(ztIP string, cams []Camera) string {
 		// IP-validated at ingest, so it's safe in the proxy_pass below.
 		fmt.Fprintf(&b, "# %s (%s)\n", sanitizeComment(c.Name), c.LocalIP)
 		fmt.Fprintf(&b, "server {\n    listen %s:%d;\n    proxy_pass %s:80;\n}\n", ztIP, c.OnvifPort, c.LocalIP)
-		fmt.Fprintf(&b, "server {\n    listen %s:%d;\n    proxy_pass %s:554;\n}\n\n", ztIP, c.RtspPort, c.LocalIP)
+		fmt.Fprintf(&b, "server {\n    listen %s:%d;\n    proxy_pass %s:554;\n}\n", ztIP, c.RtspPort, c.LocalIP)
+		if c.WebUIPort != 0 {
+			localPort := c.WebUILocalPort
+			if localPort <= 0 {
+				localPort = 80
+			}
+			fmt.Fprintf(&b, "server {\n    listen %s:%d;\n    proxy_pass %s:%d;\n}\n", ztIP, c.WebUIPort, c.LocalIP, localPort)
+		}
+		b.WriteString("\n")
 	}
 	return b.String()
 }
@@ -67,7 +75,9 @@ func reloadNginx() error {
 	if out, err := exec.Command("nginx", "-t").CombinedOutput(); err != nil {
 		return fmt.Errorf("nginx -t failed: %v: %s", err, bytes.TrimSpace(out))
 	}
-	if out, err := exec.Command("nginx", "-s", "reload").CombinedOutput(); err != nil {
+	// `nginx -s reload` signals the root-owned master, so it needs privilege (G4: via sudo -n when the
+	// agent runs unprivileged). `nginx -t` above only reads config and runs fine as nvragent.
+	if out, err := privilegedCmd("nginx", "-s", "reload").CombinedOutput(); err != nil {
 		return fmt.Errorf("nginx reload failed: %v: %s", err, bytes.TrimSpace(out))
 	}
 	return nil

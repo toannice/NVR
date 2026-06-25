@@ -132,8 +132,9 @@ firewall:
 }
 
 // restartNebula (re)starts the systemd nebula service so it picks up a freshly written config/cert.
+// Routed through privilegedCmd (sudo -n) since the agent runs unprivileged (G4).
 func restartNebula() (string, error) {
-	out, err := exec.Command("systemctl", "restart", "nebula").CombinedOutput()
+	out, err := privilegedCmd("systemctl", "restart", "nebula").CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
 

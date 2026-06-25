@@ -15,10 +15,12 @@ import (
 // NOTE: no credentials are stored on the gateway by design — the NVR admin types them on adopt.
 // (Unchanged from the ZeroTier agent — the L4 proxy is overlay-agnostic.)
 type Camera struct {
-	LocalIP   string `json:"localIp"`
-	Name      string `json:"name"`
-	OnvifPort int    `json:"onvifPort"`
-	RtspPort  int    `json:"rtspPort"`
+	LocalIP       string `json:"localIp"`
+	Name          string `json:"name"`
+	OnvifPort     int    `json:"onvifPort"`
+	RtspPort      int    `json:"rtspPort"`
+	WebUIPort     int    `json:"webUIPort,omitempty"`     // overlay port → camera web UI
+	WebUILocalPort int   `json:"webUILocalPort,omitempty"` // camera-side port (default 80)
 }
 
 // Enroll captures everything the app's /enroll handed us + what the HQ signing service assigned. It is
@@ -36,12 +38,17 @@ type Enroll struct {
 
 // State is persisted to disk so proxies + enrollment survive reboots.
 type State struct {
-	GatewayID string   `json:"gatewayId"`
-	Name      string   `json:"name,omitempty"`
-	Installer string   `json:"installer,omitempty"`
-	Location  string   `json:"location,omitempty"`
-	Enroll    Enroll   `json:"enroll"`
-	Cameras   []Camera `json:"cameras"`
+	GatewayID string `json:"gatewayId"`
+	// AgentToken (G2) is a per-gateway API secret generated on first boot. The agent accepts it ALONGSIDE
+	// the shared fleet token, so a stolen SD only leaks this one Pi's field-LAN secret — not a credential
+	// usable against the rest of the fleet. The NVR's main path is the Nebula cert group (G2:C), not a
+	// bearer token, so this is defense-in-depth for the field-LAN surface; see commercialization notes.
+	AgentToken string   `json:"agentToken,omitempty"`
+	Name       string   `json:"name,omitempty"`
+	Installer  string   `json:"installer,omitempty"`
+	Location   string   `json:"location,omitempty"`
+	Enroll     Enroll   `json:"enroll"`
+	Cameras    []Camera `json:"cameras"`
 
 	mu   sync.Mutex `json:"-"`
 	path string     `json:"-"`
@@ -53,6 +60,7 @@ func loadState(path string) (*State, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			s.GatewayID = newID()
+			s.AgentToken = newToken()
 			return s, s.save()
 		}
 		return nil, err
@@ -60,10 +68,27 @@ func loadState(path string) (*State, error) {
 	if err := json.Unmarshal(b, s); err != nil {
 		return nil, err
 	}
+	s.path = path
+	dirty := false
 	if s.GatewayID == "" {
 		s.GatewayID = newID()
+		dirty = true
 	}
-	s.path = path
+	if s.AgentToken == "" { // upgrade an older state.json that predates per-gateway tokens
+		s.AgentToken = newToken()
+		dirty = true
+	}
+	// Migrate cameras that predate WebUIPort — assign a port from the same pool.
+	for i := range s.Cameras {
+		if s.Cameras[i].WebUIPort == 0 {
+			s.Cameras[i].WebUIPort = s.allocLocked(8080, nil)
+			s.Cameras[i].WebUILocalPort = 80
+			dirty = true
+		}
+	}
+	if dirty {
+		_ = s.save()
+	}
 	return s, nil
 }
 
@@ -101,7 +126,7 @@ func (s *State) find(localIP string) (Camera, bool) {
 	return Camera{}, false
 }
 
-func (s *State) upsert(localIP, name string, poolStart int) (Camera, bool) {
+func (s *State) upsert(localIP, name string, webUILocalPort, poolStart int) (Camera, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.Cameras {
@@ -114,7 +139,11 @@ func (s *State) upsert(localIP, name string, poolStart int) (Camera, bool) {
 	}
 	onvif := s.allocLocked(poolStart, nil)
 	rtsp := s.allocLocked(poolStart, map[int]bool{onvif: true})
-	cam := Camera{LocalIP: localIP, Name: name, OnvifPort: onvif, RtspPort: rtsp}
+	webui := s.allocLocked(poolStart, map[int]bool{onvif: true, rtsp: true})
+	if webUILocalPort <= 0 {
+		webUILocalPort = 80
+	}
+	cam := Camera{LocalIP: localIP, Name: name, OnvifPort: onvif, RtspPort: rtsp, WebUIPort: webui, WebUILocalPort: webUILocalPort}
 	s.Cameras = append(s.Cameras, cam)
 	return cam, true
 }
@@ -195,6 +224,9 @@ func (s *State) allocLocked(poolStart int, extra map[int]bool) int {
 	for _, c := range s.Cameras {
 		used[c.OnvifPort] = true
 		used[c.RtspPort] = true
+		if c.WebUIPort != 0 {
+			used[c.WebUIPort] = true
+		}
 	}
 	for p := poolStart; p < 65535; p++ {
 		if used[p] || reservedPorts[p] || extra[p] {
@@ -211,6 +243,16 @@ func newID() string {
 		return fmt.Sprintf("gw-%d", os.Getpid())
 	}
 	return fmt.Sprintf("gw-%x", b)
+}
+
+// newToken returns a 32-hex (128-bit) per-gateway API token (G2). Falls back to a time seed only if the
+// CSPRNG is unavailable (never expected) so the agent still boots.
+func newToken() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("gwtok-%d", os.Getpid())
+	}
+	return fmt.Sprintf("%x", b)
 }
 
 func sortedCameras(in []Camera) []Camera {

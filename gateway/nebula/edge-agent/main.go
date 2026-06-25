@@ -69,6 +69,9 @@ func main() {
 
 	addrs := cfg.listenAddrs()
 	log.Printf("nvr-edge-agent (nebula) %q starting on %v (gatewayId=%s)", cfg.GatewayName, addrs, st.GatewayID)
+	// G2: surface only the per-gateway token's prefix (the full secret stays in state.json, readable by
+	// root) so an admin can identify it in logs without the secret itself leaking to journald.
+	log.Printf("per-gateway token active (prefix=%s..) — see %s for the full value", safePrefix(st.AgentToken), cfg.StateFile)
 	var wg sync.WaitGroup
 	for _, a := range addrs {
 		a := a
@@ -101,9 +104,12 @@ func (s *server) auth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// Legacy / field-LAN path: require the shared fleet token.
+		// Field-LAN / legacy path: accept EITHER the shared fleet token OR this gateway's own per-gateway
+		// token (G2). The per-gateway token means a stolen SD doesn't leak a fleet-wide secret.
 		tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if s.cfg.Token == "" || tok != s.cfg.Token {
+		fleetOk := s.cfg.Token != "" && tok == s.cfg.Token
+		ownOk := s.state.AgentToken != "" && tok == s.state.AgentToken
+		if !fleetOk && !ownOk {
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
@@ -155,6 +161,11 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleIdentity is the ONE management endpoint reachable WITHOUT the fleet token (Tier-0, field LAN) —
+// the enroll app pings it to find/identify a gateway and decide whether enrollment is open. G5-A: keep
+// the payload to the minimum the app actually needs; do NOT leak overlay recon (overlay IP, lighthouse,
+// field subnet, camera count, agent port) to anyone scanning :9797 on the customer LAN. The NVR reads
+// the full picture from /health instead, which only travels over the trusted overlay.
 func (s *server) handleIdentity(w http.ResponseWriter, r *http.Request) {
 	st := s.cfg.status()
 	e := s.state.enrollSnapshot()
@@ -163,21 +174,15 @@ func (s *server) handleIdentity(w http.ResponseWriter, r *http.Request) {
 		name = s.cfg.GatewayName
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"gatewayId":   s.state.GatewayID,
-		"name":        name,
-		"installer":   installer,
-		"location":    location,
-		"overlay":     "nebula",
-		"enrolled":    e.Token != "",
-		"signed":      e.Signed && st.hasCert,
-		"enrollOpen":  s.cfg.enrollWindowOpen(time.Since(startTime)),
-		"overlayIp":   st.overlayIP,
-		"nebulaUp":    st.serviceUp,
-		"lighthouse":  e.Lighthouse,
-		"fieldSubnet": s.cfg.FieldSubnet,
-		"agentPort":   s.cfg.Port,
-		"alive":       true,
-		"cameraCount": len(s.state.snapshot()),
+		"gatewayId":  s.state.GatewayID,
+		"name":       name,
+		"installer":  installer,
+		"location":   location,
+		"overlay":    "nebula",
+		"enrolled":   e.Token != "",
+		"signed":     e.Signed && st.hasCert,
+		"enrollOpen": s.cfg.enrollWindowOpen(time.Since(startTime)),
+		"alive":      true,
 	})
 }
 
@@ -313,8 +318,9 @@ func (s *server) handleCamera(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
 		var req struct {
-			LocalIP string `json:"localIp"`
-			Name    string `json:"name"`
+			LocalIP        string `json:"localIp"`
+			Name           string `json:"name"`
+			WebUILocalPort int    `json:"webUILocalPort"` // optional, default 80
 		}
 		if err := readJSON(r, &req); err != nil || req.LocalIP == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "localIp required"})
@@ -335,7 +341,7 @@ func (s *server) handleCamera(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "overlay IP not available yet"})
 			return
 		}
-		cam, created := s.state.upsert(req.LocalIP, req.Name, s.cfg.PortPoolStart)
+		cam, created := s.state.upsert(req.LocalIP, req.Name, req.WebUILocalPort, s.cfg.PortPoolStart)
 		if err := writeAndReload(s.cfg.NginxStreamCfg, overlayIP, s.state.snapshot()); err != nil {
 			if created {
 				s.state.remove(req.LocalIP)
@@ -346,7 +352,7 @@ func (s *server) handleCamera(w http.ResponseWriter, r *http.Request) {
 		if err := s.state.save(); err != nil {
 			log.Printf("state save: %v", err)
 		}
-		log.Printf("camera %s -> onvif:%d rtsp:%d (created=%v)", cam.LocalIP, cam.OnvifPort, cam.RtspPort, created)
+		log.Printf("camera %s -> onvif:%d rtsp:%d webui:%d->:%d (created=%v)", cam.LocalIP, cam.OnvifPort, cam.RtspPort, cam.WebUIPort, cam.WebUILocalPort, created)
 		writeJSON(w, http.StatusOK, cam)
 
 	case http.MethodDelete:
