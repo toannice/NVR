@@ -69,23 +69,23 @@ func writeAndReload(confPath, ztIP string, cams []Camera) error {
 	return reloadNginx()
 }
 
-// reloadNginx validates then reloads. `nginx -t` first so a bad config never takes down running
-// proxies (reload is skipped if the test fails).
+// reloadNginx reloads nginx. Skip pre-flight `nginx -t` because it tries to open /run/nginx.pid
+// even in test mode, which fails when the agent runs as nvragent (G4). nginx -s reload itself
+// validates before applying, so a bad config is still rejected safely.
 func reloadNginx() error {
-	if out, err := exec.Command("nginx", "-t").CombinedOutput(); err != nil {
-		return fmt.Errorf("nginx -t failed: %v: %s", err, bytes.TrimSpace(out))
-	}
-	// `nginx -s reload` signals the root-owned master, so it needs privilege (G4: via sudo -n when the
-	// agent runs unprivileged). `nginx -t` above only reads config and runs fine as nvragent.
+	// `nginx -s reload` signals the root-owned master, needs privilege (G4: via sudo -n).
 	if out, err := privilegedCmd("nginx", "-s", "reload").CombinedOutput(); err != nil {
 		return fmt.Errorf("nginx reload failed: %v: %s", err, bytes.TrimSpace(out))
 	}
 	return nil
 }
 
-// nginxOk reports whether nginx config currently validates (used by /health).
+// nginxOk reports whether nginx is running (used by /health).
+// Uses systemctl rather than "nginx -t" because nginx -t tries to open /run/nginx.pid
+// even in test mode, which fails when the agent runs as an unprivileged user (G4).
 func nginxOk() bool {
-	return exec.Command("nginx", "-t").Run() == nil
+	out, err := exec.Command("systemctl", "is-active", "nginx").Output()
+	return err == nil && strings.TrimSpace(string(out)) == "active"
 }
 
 // resyncOnBoot rebuilds the stream config from persisted state and reloads, so proxies come back
