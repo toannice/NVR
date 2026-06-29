@@ -18,11 +18,16 @@ config/.jwt_secret
 config/model_cache/
 config/backup.db
 config/config.yml
+config/.exports
+config/.timeline
+config/.vacuum
 
 docker-compose.override.yml
 *.py
+data/nvr.db
 data/nvr.db-shm
 data/nvr.db-wal
+data/session_secret
 
 # Editor directories and files
 .vscode/*
