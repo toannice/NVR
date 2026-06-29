@@ -3,7 +3,7 @@ package vn.aiview.nvr.cloud
 object DeviceConstants {
     const val MANUFACTURER = "Bkav"
     const val MODEL = "NVR"
-    const val PRODUCT_NUMBER = "E120-FCWP-001"
+    const val PRODUCT_NUMBER = "NVR-01"
     const val FIRMWARE_VERSION = "1.0.3.2"
     const val WEB_VERSION = "1.0.0"
     const val NUMBER_OF_CHANNEL = 16
