@@ -20,7 +20,7 @@ fun main() {
 
     val port = System.getenv("PORT")?.toIntOrNull() ?: 3000
     
-    embeddedServer(Netty, port = port, host = "127.0.0.1", module = Application::module)
+    embeddedServer(Netty, port = port, host = "0.0.0.0", module = Application::module)
         .start(wait = true)
 }
 

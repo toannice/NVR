@@ -176,5 +176,25 @@ object AIEvents : Table("ai_events") {
     // "frigate" or "box" — lets the UI filter/badge events by source
     val eventSource = varchar("source", 20).default("frigate")
 
+    // Short event clip cut by the NVR around the event timestamp (Box push flow).
+    // clipPath = absolute file path under /app/media/events/{slug}/{id}.mp4 once ready.
+    // clipStatus = "processing" | "ready" | "failed" (null for legacy/frigate events with no cut clip).
+    val clipPath = text("clip_path").nullable()
+    val clipStatus = varchar("clip_status", 20).nullable()
+
     override val primaryKey = PrimaryKey(id)
+}
+
+/**
+ * Generic single-value app settings (key/value). Currently holds `ai_source_mode`:
+ *   "all"      → show AI events from every source (default)
+ *   "box_only" → 5B mode: keep Frigate detect/recording running, but hide/skip persisting
+ *                Frigate AI events and only surface Box-pushed events in the UI.
+ */
+object AppSettings : Table("app_settings") {
+    val key = varchar("key", 64)
+    val value = text("value").default("")
+    val updatedAt = datetime("updated_at").defaultExpression(CurrentDateTime)
+
+    override val primaryKey = PrimaryKey(key)
 }

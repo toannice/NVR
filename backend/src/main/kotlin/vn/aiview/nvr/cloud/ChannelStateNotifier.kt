@@ -32,6 +32,18 @@ class ChannelStateNotifier(
         job = null
     }
 
+    /** Trigger an immediate notify_channels_state outside the periodic heartbeat loop. */
+    fun triggerNow() {
+        scope.launch {
+            try {
+                val count = sendHeartbeat()
+                AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "NOTIFY_TRIGGERED", "$count camera(s) notified immediately")
+            } catch (e: Exception) {
+                AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "NOTIFY_TRIGGER_ERROR", e.message ?: "")
+            }
+        }
+    }
+
     private fun sendHeartbeat(): Int {
         val topic = getMainPubTopic()
         val peerId = getMyPeerId()

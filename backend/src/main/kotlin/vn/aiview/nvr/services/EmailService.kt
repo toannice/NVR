@@ -9,6 +9,7 @@ import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.transactions.transaction
 import vn.aiview.nvr.models.OtpTokens
+import vn.aiview.nvr.utils.AppLogger
 import java.io.File
 import java.util.Properties
 
@@ -51,14 +52,27 @@ object EmailService {
         }
 
         // Skip SMTP in E2E test mode — OTP is already in DB, test reads it directly
-        if (System.getenv("E2E_TEST_MODE") != "true") {
-            withContext(Dispatchers.IO) {
-                val message = MimeMessage(getSession())
-                message.setFrom(InternetAddress(System.getenv("GMAIL_USER") ?: "nvr@aiview.vn"))
-                message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(toEmail))
-                message.subject = "NVR AI View - Mã xác thực bảo mật"
-                message.setText("Mã xác thực của bạn là: $code\n\nMã này sẽ hết hạn sau 5 phút.")
-                Transport.send(message)
+        if (System.getenv("E2E_TEST_MODE") == "true") {
+            AppLogger.info(AppLogger.Module.SYSTEM, "EMAIL", "OTP_SKIPPED_E2E",
+                "to=$toEmail (E2E_TEST_MODE=true, SMTP skipped)")
+        } else {
+            val fromUser = System.getenv("GMAIL_USER") ?: "nvr@aiview.vn"
+            AppLogger.info(AppLogger.Module.SYSTEM, "EMAIL", "OTP_SENDING",
+                "to=$toEmail from=$fromUser")
+            try {
+                withContext(Dispatchers.IO) {
+                    val message = MimeMessage(getSession())
+                    message.setFrom(InternetAddress(fromUser))
+                    message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(toEmail))
+                    message.subject = "NVR AI View - Mã xác thực bảo mật"
+                    message.setText("Mã xác thực của bạn là: $code\n\nMã này sẽ hết hạn sau 5 phút.")
+                    Transport.send(message)
+                }
+                AppLogger.info(AppLogger.Module.SYSTEM, "EMAIL", "OTP_SENT", "to=$toEmail")
+            } catch (e: Exception) {
+                AppLogger.warn(AppLogger.Module.SYSTEM, "EMAIL", "OTP_SEND_FAIL",
+                    "to=$toEmail err=${e.message}")
+                throw e
             }
         }
         return code

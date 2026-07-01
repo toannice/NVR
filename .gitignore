@@ -91,3 +91,5 @@ nginx/server.crt
 # Offline bundle artifacts
 .docker-cache/
 nvr-bundle-*.tar.gz
+ai-test/.env
+ai-test/screenshots/

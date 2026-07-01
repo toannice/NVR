@@ -6,12 +6,20 @@ import kotlinx.serialization.json.*
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.transactions.transaction
+import io.ktor.client.*
+import io.ktor.client.engine.cio.*
+import io.ktor.client.request.*
+import io.ktor.client.statement.*
+import io.ktor.http.*
 import vn.aiview.nvr.cloud.CommandDispatcher
 import vn.aiview.nvr.cloud.DeviceConstants
+import vn.aiview.nvr.cloud.SignalingManager
+import vn.aiview.nvr.models.AIEvents
 import vn.aiview.nvr.models.Cameras
 import vn.aiview.nvr.routes.OnvifSoapClient
 import vn.aiview.nvr.services.CameraService
 import vn.aiview.nvr.utils.AppLogger
+import java.util.Base64
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -26,6 +34,13 @@ object CameraCommandHandler {
         "get_discoverydevices" -> getDiscovery()
         "get_videosources" -> getVideoSources()
         "get_profiles_channel" -> getProfilesChannel(data)
+        "get_ai_event_image" -> getAiEventImage(data)
+        // Playback funcs arrive on channel_service — delegate to PlaybackCommandHandler
+        "post_search_calendar", "get_search_calendar",
+        "post_search_findrecordings", "get_search_findrecordings",
+        "get_recording_recordingjob",
+        "post_select_record", "post_select_record_timestamp",
+        "post_control_record" -> PlaybackCommandHandler.handle(func, data)
         else -> CommandDispatcher.errorResponse("E0008", "Function not supported: $func")
     }
 
@@ -149,6 +164,8 @@ object CameraCommandHandler {
                 return@runBlocking CommandDispatcher.errorResponse("E0007", it.message ?: "Failed to add camera")
             }
             val successMsg = if (func == "post_channels") "post.device.success" else "put.device.success"
+            // Notify cloud immediately so dashboard sees the new camera without waiting for heartbeat
+            SignalingManager.triggerChannelStateNotification()
             crudSuccessWithFrigate(successMsg, applied.frigateRestarted)
         }
     }
@@ -163,7 +180,76 @@ object CameraCommandHandler {
                 AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "CHANNEL_DEL_FAIL", it.message ?: "")
                 // idempotent — still respond success per spec FR-017
             }
+            // Notify cloud immediately so dashboard sees the removal without waiting for heartbeat
+            SignalingManager.triggerChannelStateNotification()
             crudSuccess("delete.device.success")
+        }
+    }
+
+    // ── AI Event Image ────────────────────────────────────────────────────────
+
+    private val frigateHttp = HttpClient(CIO) { engine { requestTimeout = 10_000 } }
+    private val frigateUrl get() = System.getenv("FRIGATE_URL") ?: "http://localhost:5000"
+
+    /**
+     * Fetch an AI event snapshot from Frigate and return it as base64 JSON.
+     * Params: event_id (Frigate event ID, also stored as AIEvents.id in SQLite).
+     */
+    private fun getAiEventImage(data: JsonObject): JsonObject {
+        val eventId = data["event_id"]?.jsonPrimitive?.content
+            ?: data["uuid"]?.jsonPrimitive?.content    // B01 compat: also accept "uuid"
+            ?: return CommandDispatcher.errorResponse("E0007", "Missing event_id")
+
+        AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "AI_EVENT_IMAGE_REQ", "eventId=$eventId")
+
+        // Verify event exists in our DB (snapshotPath may legitimately be null)
+        val eventRow = try {
+            transaction {
+                AIEvents.selectAll().where { AIEvents.id eq eventId }.firstOrNull()
+            }
+        } catch (e: Exception) {
+            AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "AI_EVENT_DB_FAIL",
+                "eventId=$eventId err=${e.message}")
+            null
+        }
+
+        if (eventRow == null) {
+            AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "AI_EVENT_NOT_FOUND",
+                "eventId=$eventId not in ai_events DB")
+            return CommandDispatcher.errorResponse("E0013", "Event not found: $eventId")
+        }
+        val snapshotPath = eventRow[AIEvents.snapshotPath]
+        AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "AI_EVENT_FOUND",
+            "eventId=$eventId snapshotPath=$snapshotPath")
+
+        // Fetch snapshot from Frigate
+        return runBlocking {
+            try {
+                val snapUrl = "$frigateUrl/api/events/$eventId/snapshot.jpg"
+                AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "AI_EVENT_FETCH",
+                    "eventId=$eventId url=$snapUrl")
+                val resp = frigateHttp.get(snapUrl)
+                if (!resp.status.isSuccess()) {
+                    AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "AI_EVENT_FRIGATE_FAIL",
+                        "eventId=$eventId status=${resp.status.value}")
+                    return@runBlocking CommandDispatcher.errorResponse("E0015",
+                        "Snapshot not available from Frigate (status ${resp.status.value})")
+                }
+                val bytes = resp.readBytes()
+                val base64 = Base64.getEncoder().encodeToString(bytes)
+                AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "AI_EVENT_IMAGE_OK",
+                    "eventId=$eventId size=${bytes.size}B base64Len=${base64.length}")
+                CommandDispatcher.successResponse(buildJsonObject {
+                    put("event_id", eventId)
+                    put("image", base64)
+                    put("content_type", "image/jpeg")
+                    put("size", bytes.size)
+                })
+            } catch (e: Exception) {
+                AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "AI_EVENT_FETCH_FAIL",
+                    "eventId=$eventId err=${e.message}")
+                CommandDispatcher.errorResponse("E0016", "Failed to fetch snapshot: ${e.message}")
+            }
         }
     }
 

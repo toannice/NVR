@@ -46,7 +46,7 @@ ENV DEPLOY_VERSION=${DEPLOY_VERSION}
 ENV APP_VERSION=${APP_VERSION}
 
 # Install tools for healthchecks and operations
-RUN apk add --no-cache bash docker-cli sqlite curl wget
+RUN apk add --no-cache bash docker-cli sqlite curl wget ffmpeg
 
 # Copy Frontend Build from the frontend-builder stage
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist

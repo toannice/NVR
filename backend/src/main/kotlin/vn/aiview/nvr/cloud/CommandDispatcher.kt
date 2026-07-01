@@ -44,7 +44,7 @@ object CommandDispatcher {
     }
 
     fun dispatchDataChannel(rawJson: String, reply: (String) -> Unit) {
-        AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "DC_CMD_IN", rawJson.take(300))
+        AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "DC_CMD_IN", rawJson.take(600))
         try {
             val json = Json.parseToJsonElement(rawJson).jsonObject
             // Try all possible envelope locations in priority order:
@@ -71,6 +71,8 @@ object CommandDispatcher {
                 return
             }
             val component = header["component"]?.jsonPrimitive?.content ?: ""
+            // Echo message_id back in response header so cloud can match response to camera/sourceToken
+            val messageId = header["message_id"]?.jsonPrimitive?.contentOrNull
             val (func, bodyData) = extractFuncAndData(body)
             if (func.isEmpty()) {
                 AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "DC_NO_FUNC", "component=$component bodyKeys=${body.keys}")
@@ -84,11 +86,14 @@ object CommandDispatcher {
             // Use bare {"envelope":{...}} to match the format the C# server sends and parses
             val response = buildJsonObject {
                 put("envelope", buildJsonObject {
-                    put("header", buildJsonObject { put("component", component) })
+                    put("header", buildJsonObject {
+                        put("component", component)
+                        if (messageId != null) put("message_id", messageId)
+                    })
                     put("body", body2)
                 })
             }
-            AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "DC_CMD_OUT", response.toString().take(300))
+            AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "DC_CMD_OUT", response.toString().take(2000))
             reply(response.toString())
         } catch (e: Exception) {
             AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "DC_DISPATCH_ERROR", e.message ?: "")
@@ -117,10 +122,17 @@ object CommandDispatcher {
 
     private fun routeCommand(component: String, func: String, data: JsonObject): JsonObject {
         return try {
+            // Playback control rides the PLAYBACK peer's DataChannel and the cloud tags it
+            // under the "ps_service" component (B01) — route by func so it always reaches the
+            // playback handler regardless of which component header the cloud sends.
+            if (func == "post_select_record" || func == "post_select_record_timestamp" ||
+                func == "post_control_record") {
+                return PlaybackCommandHandler.handle(func, data)
+            }
             when (component) {
                 "device", "device_service" -> DeviceCommandHandler.handle(func, data)
                 "channel_service", "media_service" -> CameraCommandHandler.handle(func, data)
-                "playback_service" -> PlaybackCommandHandler.handle(func, data)
+                "playback_service", "ps_service" -> PlaybackCommandHandler.handle(func, data)
                 else -> errorResponse("E0009", "Component not supported: $component")
             }
         } catch (e: Exception) {
@@ -133,7 +145,7 @@ object CommandDispatcher {
         val topic = SignalingManager.mainPubTopic
         val isSuccess = result["status"]?.jsonPrimitive?.booleanOrNull != false
         AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "STEP4_SEND_RESP",
-            "func=${func}_response status=$isSuccess topic=${topic.takeLast(30)}")
+            "func=${func}_response status=$isSuccess topic=${topic.takeLast(30)} body=${buildResponsePayload(component, func, result)}")
 
         val payload = buildJsonObject {
             put("context", "signal.manager")
@@ -167,9 +179,9 @@ object CommandDispatcher {
             put("message", message)
             put("data", buildJsonObject {
                 put("status", isSuccess)
+                put("error_code", errorCode)
                 put("message", message)
                 put("data", innerData)
-                put("error_code", "")
             })
         }
     }

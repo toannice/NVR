@@ -12,6 +12,7 @@ import org.jetbrains.exposed.sql.upsert
 import vn.aiview.nvr.cloud.CloudReconnectContext
 import vn.aiview.nvr.cloud.SignalingManager
 import vn.aiview.nvr.models.CloudConfig
+import vn.aiview.nvr.services.PlaybackStreamer
 import vn.aiview.nvr.utils.CryptoUtils
 
 @Serializable
@@ -100,6 +101,25 @@ fun Route.cloudRouting() {
         }
         val next = (match.groupValues[1].toInt() + 1).toString().padStart(6, '0')
         call.respond(mapOf("serial" to "VMSAV$next"))
+    }
+
+    // Real-time MPEG-TS stream served by PlaybackStreamer (ffmpeg -re subprocess).
+    // go2rtc (inside Frigate) fetches this from the bridge gateway IP.
+    // The -re flag in the subprocess paces delivery, giving go2rtc correct RTP timestamps.
+    get("/internal/playback-ts/{name}") {
+        val name = call.parameters["name"] ?: run {
+            call.respond(HttpStatusCode.BadRequest)
+            return@get
+        }
+        if (!PlaybackStreamer.isRunning(name)) {
+            call.respond(HttpStatusCode.NotFound)
+            return@get
+        }
+        call.response.header(HttpHeaders.ContentType, "video/mp2t")
+        call.response.header(HttpHeaders.CacheControl, "no-cache")
+        call.respondOutputStream(contentType = ContentType("video", "mp2t")) {
+            PlaybackStreamer.pipeTo(name, this)
+        }
     }
 
     post("/internal/dc/command") {

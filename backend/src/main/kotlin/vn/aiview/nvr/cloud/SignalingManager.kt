@@ -11,7 +11,9 @@ import org.eclipse.paho.client.mqttv3.*
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.transactions.transaction
+import vn.aiview.nvr.cloud.handlers.PlaybackCommandHandler
 import vn.aiview.nvr.models.Cameras
+import vn.aiview.nvr.services.PlaybackService
 import vn.aiview.nvr.utils.AppLogger
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
@@ -127,6 +129,21 @@ object SignalingManager {
         }
     }
 
+    /**
+     * Trigger an immediate notify_channels_state to cloud (e.g. after a camera is added/deleted
+     * from the local Web UI so the cloud sees the change without waiting for the 5-second heartbeat).
+     */
+    fun triggerChannelStateNotification() {
+        val n = notifier
+        if (n == null) {
+            AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "NOTIFY_TRIGGER_SKIP",
+                "No active notifier (not connected to cloud)")
+            return
+        }
+        AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "NOTIFY_TRIGGER", "Triggering immediate channel state notification")
+        n.triggerNow()
+    }
+
     private fun startNotifier(client: MqttAsyncClient) {
         notifier?.stop()
         notifier = ChannelStateNotifier(
@@ -187,6 +204,8 @@ object SignalingManager {
                     when {
                         extendType == "LIVE" || extendType == "LIVE_DEBUG" ->
                             handleLiveOffer(topic, json, dataObj)
+                        extendType == "PLAYBACK" || extendType == "PLAYBACK_DEBUG" ->
+                            handlePlaybackOffer(topic, json, dataObj)
                         extendType == "DATA" ->
                             handleDataOffer(topic, json, dataObj)
                         else ->
@@ -332,6 +351,136 @@ object SignalingManager {
         }
     }
 
+    /**
+     * Handle WebRTC PLAYBACK offer from cloud.
+     * Registers a go2rtc ffmpeg source for the requested recording file, then forwards the
+     * SDP offer to go2rtc (same pattern as LIVE) and publishes the answer back via MQTT.
+     *
+     * extend.src = recording token "{channelId}:{startSec}:{endSec}"
+     */
+    private suspend fun handlePlaybackOffer(topic: String, json: JsonObject, data: JsonObject?) {
+        val offerId = json["offerid"]?.jsonPrimitive?.content ?: return
+        val token = json["extend"]?.jsonObject?.get("src")?.jsonPrimitive?.content ?: run {
+            AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "PLAYBACK_NO_TOKEN",
+                "offerId=$offerId missing extend.src")
+            return
+        }
+        val sessionPubTopic = sessionPubBySubTopic[topic] ?: run {
+            AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "PLAYBACK_NO_SESSION",
+                "offerId=$offerId topic not in sessions")
+            return
+        }
+        val sdpText = when {
+            json["data_encode_type"]?.jsonPrimitive?.content == "base64" -> {
+                val decoded = String(Base64.getDecoder().decode(json["data"]?.jsonPrimitive?.content ?: ""))
+                Json.parseToJsonElement(decoded).jsonObject["sdp"]?.jsonPrimitive?.content
+            }
+            else -> data?.get("sdp")?.jsonPrimitive?.content
+        } ?: run {
+            AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "PLAYBACK_NO_SDP",
+                "offerId=$offerId no SDP in offer")
+            return
+        }
+
+        AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "STEP3_PLAYBACK_OFFER",
+            "offerId=$offerId token=$token")
+
+        val parsed = PlaybackService.parseToken(token) ?: run {
+            AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "PLAYBACK_TOKEN_INVALID",
+                "offerId=$offerId token=$token")
+            publishPlaybackErrorAnswer(json, sessionPubTopic, offerId, token)
+            return
+        }
+
+        val slug = PlaybackService.channelToSlug(parsed.channelId) ?: run {
+            AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "PLAYBACK_NO_SLUG",
+                "offerId=$offerId channelId=${parsed.channelId}")
+            publishPlaybackErrorAnswer(json, sessionPubTopic, offerId, token)
+            return
+        }
+
+        // Frigate HLS VOD endpoint — all segments in the session play continuously.
+        // dc-bridge's ffmpeg fetches the playlist from 127.0.0.1:5000 directly.
+        val vodUrl = PlaybackService.vodUrl(slug, parsed.startSec, parsed.endSec)
+
+        // dc-bridge (Pion) owns the playback peer so the cloud's control DataChannel
+        // (post_select_record / post_control_record) reaches the backend — go2rtc would
+        // swallow it. Bar switch / seek later swap the ffmpeg source on this same peer.
+        AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "PLAYBACK_STREAM_READY",
+            "offerId=$offerId vodUrl=$vodUrl — forwarding SDP to dc-bridge")
+
+        try {
+            val answerSdp = PlaybackPeerManager.handleOffer(sdpText, vodUrl, iceServers)
+            if (answerSdp == null) {
+                AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "PLAYBACK_DCBRIDGE_ERROR",
+                    "dc-bridge returned no answer for offerId=$offerId vodUrl=$vodUrl")
+                publishPlaybackErrorAnswer(json, sessionPubTopic, offerId, token)
+                return
+            }
+            PlaybackCommandHandler.onPlaybackStarted(parsed.channelId, token)
+
+            val answerJson = buildJsonObject {
+                put("type", "answer")
+                put("sdp", answerSdp)
+            }.toString()
+            val answerBase64 = Base64.getEncoder().encodeToString(answerJson.toByteArray())
+
+            val answerPayload = buildJsonObject {
+                put("context", "signal.webrtc")
+                put("type", "answer")
+                put("source_id", myPeerId)
+                put("target_id", json["source_id"]?.jsonPrimitive?.content ?: "server")
+                put("offerid", offerId)
+                put("channel_id", json["channel_id"]?.jsonPrimitive?.content ?: "")
+                put("auth", buildJsonObject { put("type", "inherit") })
+                put("version", "1.0.2.3")
+                put("data_encode_type", "base64")
+                put("data", answerBase64)
+                put("extend", buildJsonObject {
+                    put("type", "PLAYBACK")
+                    put("src", token)
+                })
+            }
+            publish(sessionPubTopic, answerPayload.toString())
+            AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "PLAYBACK_ANSWER_SENT",
+                "offerId=$offerId vodUrl=$vodUrl")
+        } catch (e: Exception) {
+            AppLogger.error(AppLogger.Module.SYSTEM, "CLOUD", "PLAYBACK_OFFER_ERROR", e.message ?: "", e)
+            publishPlaybackErrorAnswer(json, sessionPubTopic, offerId, token)
+        }
+    }
+
+    private suspend fun publishPlaybackErrorAnswer(
+        json: JsonObject,
+        sessionPubTopic: String,
+        offerId: String,
+        token: String,
+    ) {
+        val errorAnswer = buildJsonObject {
+            put("type", "answer")
+            put("sdp", "")
+            put("error_code", "E0013")
+            put("message", "Recording not found")
+        }.toString()
+        val payload = buildJsonObject {
+            put("context", "signal.webrtc")
+            put("type", "answer")
+            put("source_id", myPeerId)
+            put("target_id", json["source_id"]?.jsonPrimitive?.content ?: "server")
+            put("offerid", offerId)
+            put("channel_id", json["channel_id"]?.jsonPrimitive?.content ?: "")
+            put("auth", buildJsonObject { put("type", "inherit") })
+            put("version", "1.0.2.3")
+            put("data_encode_type", "base64")
+            put("data", Base64.getEncoder().encodeToString(errorAnswer.toByteArray()))
+            put("extend", buildJsonObject {
+                put("type", "PLAYBACK")
+                put("src", token)
+            })
+        }
+        publish(sessionPubTopic, payload.toString())
+    }
+
     private fun resolveStreamId(profileToken: String): String? {
         // Constructed token: "MediaProfile{NNN}01" (main) or "MediaProfile{NNN}02" (sub)
         val constructedMatch = Regex("^MediaProfile(\\d{3})(\\d{2})$").find(profileToken)
@@ -339,6 +488,12 @@ object SignalingManager {
             val channelId = constructedMatch.groupValues[1].trimStart('0').ifEmpty { "0" }
             val streamType = if (constructedMatch.groupValues[2] == "01") "main" else "sub"
             return "${channelId}_${streamType}"
+        }
+        // Playback stream registered by post_select_record — use directly as go2rtc stream name
+        if (profileToken.startsWith("playback_")) {
+            AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "RESOLVE_PLAYBACK_STREAM",
+                "token=$profileToken → using as go2rtc playback stream directly")
+            return profileToken
         }
         // Real ONVIF token stored in the unified Cameras table (003-cloud-data-sync)
         return try {

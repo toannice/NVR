@@ -39,7 +39,8 @@ fun Application.configureDatabases() {
             CloudCameras,
             Gateways,
             IntegrationSettings,
-            IntegrationConnections
+            IntegrationConnections,
+            AppSettings
         )
 
         migrateCloudCamerasIntoCameras()

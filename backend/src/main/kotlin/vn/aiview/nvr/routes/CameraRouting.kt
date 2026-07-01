@@ -175,6 +175,8 @@ fun Route.cameraRouting() {
                 return@post
             }
 
+            // Notify cloud immediately so camera list syncs without waiting for the 5-second heartbeat
+            vn.aiview.nvr.cloud.SignalingManager.triggerChannelStateNotification()
             call.respondText(
                 """{"success":true,"frigateRestarted":${applied.frigateRestarted},"message":"Camera added successfully"}""",
                 io.ktor.http.ContentType.Application.Json
@@ -289,6 +291,8 @@ fun Route.cameraRouting() {
                     call.respondText("""{"error":"${it.message}"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.InternalServerError)
                     return@post
                 }
+                // Notify cloud immediately so camera list syncs without waiting for the 5-second heartbeat
+                vn.aiview.nvr.cloud.SignalingManager.triggerChannelStateNotification()
                 call.respondText("""{"success":true,"removed":true}""", io.ktor.http.ContentType.Application.Json)
             } else {
                 call.respondText("""{"error":"Config file not found"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.NotFound)

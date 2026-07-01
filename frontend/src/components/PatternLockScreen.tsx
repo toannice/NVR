@@ -79,7 +79,7 @@ export default function PatternLockScreen({ isSetupMode, onUnlock, onSetupComple
             });
             const data = await res.json();
             if (res.ok && data.success) {
-                showSuccess('Mã xác thực đã được gửi đến Gmail!');
+                showSuccess(`Mã xác thực đã được gửi đến Gmail: ${targetEmail}`);
                 setResendCooldown(60);
                 return true;
             } else {
@@ -105,7 +105,7 @@ export default function PatternLockScreen({ isSetupMode, onUnlock, onSetupComple
             });
             const data = await res.json();
             if (res.ok && data.success) {
-                showSuccess('Mã khôi phục đã được gửi đến Gmail!');
+                showSuccess(`Mã khôi phục đã được gửi đến Gmail: ${targetEmail}`);
                 setResendCooldown(60);
                 return true;
             } else {

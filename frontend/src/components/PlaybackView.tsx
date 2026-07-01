@@ -63,27 +63,22 @@ export const PlaybackView = ({
   // Auto-play / Construct VOD URL
   useEffect(() => {
     if (playbackCam && timelineDate) {
-      // Determine Start/End for VOD Request
-      // If vodWindow is set, use it.
-      // If NOT set, default to last 2 hours of the day (or now)
-
-      let start: number, end: number;
-
-      if (vodWindow) {
-        start = vodWindow.start;
-        end = vodWindow.end;
-      } else {
-        // Default: Load last 2 hours max to be safe
+      if (!vodWindow) {
+        // Compute default window (last 2 hours of day or up to now) and trigger re-run.
+        // Do NOT set videoUrl here — setting both in one run causes a double HLS load:
+        // setVodWindow triggers this effect again, producing a second setVideoUrl with a
+        // different ?t= value, which destroys+recreates HLS before the first load completes.
         const dayEnd = Math.floor(new Date(timelineDate + 'T23:59:59').getTime() / 1000);
         const now = Math.floor(Date.now() / 1000);
-        end = Math.min(dayEnd, now);
-        start = end - 7200; // 2 hours back
-        setVodWindow({ start, end }); // Sync state
+        const end = Math.min(dayEnd, now);
+        const start = end - 7200;
+        setVodWindow({ start, end });
+        return;
       }
 
-      // Add a random parameter to prevent caching of the playlist
-      const url = `/api/frigate/vod/${playbackCam}/start/${start}/end/${end}/index.m3u8`;
-      setVideoUrl(`${url}?t=${Date.now()}`);
+      // Use vodWindow.start/end as cache key — same window = same URL = HLS not restarted.
+      const url = `/api/frigate/vod/${playbackCam}/start/${vodWindow.start}/end/${vodWindow.end}/index.m3u8`;
+      setVideoUrl(`${url}?t=${vodWindow.start}_${vodWindow.end}`);
     } else {
       setVideoUrl('');
     }
@@ -132,11 +127,8 @@ export const PlaybackView = ({
           if (!videoRef.current) return;
 
           let seekPos = 0;
-          // Seek Logic for VOD Window
-          // Note: vodWindow is captured from closure. Since this effect runs when videoUrl changes (which changes when vodWindow changes),
-          // it should be fresh.
-          if (vodWindow && !isMp4) { // Only offset for VOD playlist
-            seekPos = Math.max(0, (seekTarget as unknown as number) - vodWindow.start);
+          if (!isMp4) {
+            seekPos = Math.max(0, getPlayerTimeFromWallClock(seekTarget as unknown as number));
           }
 
           videoRef.current.currentTime = seekPos;
