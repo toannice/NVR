@@ -54,12 +54,16 @@ object PlaybackPeerManager {
         }
     }
 
-    /** Swap the ffmpeg source on the active playback peer (bar switch / seek). */
-    suspend fun swapSource(srcUrl: String): Boolean {
+    /**
+     * Swap the ffmpeg source on the active playback peer (bar switch / seek / speed change).
+     * [rate] is the playback speed multiplier (1,2,4,8); dc-bridge fast-forwards via
+     * -readrate + setpts when rate > 1.
+     */
+    suspend fun swapSource(srcUrl: String, rate: Double = 1.0): Boolean {
         return try {
             val response = client.post("$BASE/playback/source") {
                 header("Content-Type", "application/json")
-                setBody(buildJsonObject { put("src_url", srcUrl) }.toString())
+                setBody(buildJsonObject { put("src_url", srcUrl); put("rate", rate) }.toString())
             }
             if (!response.status.isSuccess()) {
                 AppLogger.warn(AppLogger.Module.SYSTEM, "PLAYBACK", "SWAP_SOURCE_FAIL",

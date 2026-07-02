@@ -45,8 +45,13 @@ ARG APP_VERSION=1.2.0
 ENV DEPLOY_VERSION=${DEPLOY_VERSION}
 ENV APP_VERSION=${APP_VERSION}
 
-# Install tools for healthchecks and operations
-RUN apk add --no-cache bash docker-cli sqlite curl wget ffmpeg
+# Install tools for healthchecks and operations.
+# libva + intel-media-driver (iHD): Intel VAAPI H.264 encode for dc-bridge playback
+# transcode (4K→1080p). Without the driver ffmpeg falls back to software libx264,
+# which can't encode 4K at realtime on the box → playback stutters ~5s. libva
+# auto-detects iHD for Gen8+ Intel iGPUs (e.g. UHD 630); older/other GPUs fall back
+# to software encode automatically via dc-bridge's startup VAAPI probe.
+RUN apk add --no-cache bash docker-cli sqlite curl wget ffmpeg libva intel-media-driver
 
 # Copy Frontend Build from the frontend-builder stage
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist

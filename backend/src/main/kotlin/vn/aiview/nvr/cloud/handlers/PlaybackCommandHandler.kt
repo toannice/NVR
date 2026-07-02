@@ -16,9 +16,42 @@ object PlaybackCommandHandler {
      */
     private val activePlaybackTokens = java.util.concurrent.ConcurrentHashMap<String, String>()
 
+    /**
+     * Position/speed bookkeeping for the active playback run, so a bare `scale`
+     * command (which carries no position) can restart ffmpeg at the CURRENT media
+     * position with the new speed. [startSec] is where the current ffmpeg run began,
+     * [wallStartMs] when it began; current position ≈ startSec + elapsed·rate.
+     */
+    private data class PlayPos(
+        val slug: String,
+        val startSec: Long,
+        val endSec: Long,
+        val wallStartMs: Long,
+        val rate: Double,
+    )
+    private val playPos = java.util.concurrent.ConcurrentHashMap<String, PlayPos>()
+
+    private fun setPlayPos(channelId: String, slug: String, startSec: Long, endSec: Long, rate: Double) {
+        playPos[channelId] = PlayPos(slug, startSec, endSec, System.currentTimeMillis(), rate)
+    }
+
+    private fun currentRate(channelId: String): Double = playPos[channelId]?.rate ?: 1.0
+
+    /** Estimated current media position (seconds) of the running ffmpeg, clamped to the range. */
+    private fun currentMediaSec(channelId: String): Long? {
+        val st = playPos[channelId] ?: return null
+        val elapsed = ((System.currentTimeMillis() - st.wallStartMs) / 1000.0) * st.rate
+        return (st.startSec + elapsed.toLong()).coerceIn(st.startSec, st.endSec)
+    }
+
     /** Called by SignalingManager when a PLAYBACK peer is established for the initial token. */
     fun onPlaybackStarted(channelId: String, token: String) {
         activePlaybackTokens[channelId] = token
+        PlaybackService.parseToken(token)?.let { p ->
+            PlaybackService.channelToSlug(p.channelId)?.let { slug ->
+                setPlayPos(channelId, slug, p.startSec, p.endSec, 1.0)
+            }
+        }
         AppLogger.info(AppLogger.Module.SYSTEM, "PLAYBACK", "PLAYBACK_STARTED",
             "channelId=$channelId token=$token")
     }
@@ -129,10 +162,12 @@ object PlaybackCommandHandler {
                 "Camera not found for channelId=${parsed.channelId}")
 
         val vodUrl = PlaybackService.vodUrl(slug, adjustedStartSec, parsed.endSec)
+        val rate = currentRate(parsed.channelId)
         return runBlocking {
             // Swap the ffmpeg source on the live playback peer (no renegotiation) — this is
             // the bar-switch path. dc-bridge keeps the same WebRTC track, so video continues.
-            val ok = PlaybackPeerManager.swapSource(vodUrl)
+            // Preserve the current speed so a bar jump while fast-forwarding stays fast.
+            val ok = PlaybackPeerManager.swapSource(vodUrl, rate)
             if (!ok) {
                 AppLogger.warn(AppLogger.Module.SYSTEM, "PLAYBACK", "SELECT_RECORD_SWAP_FAIL",
                     "vodUrl=$vodUrl — no active playback peer? (post_select_record before PLAYBACK offer)")
@@ -140,6 +175,7 @@ object PlaybackCommandHandler {
                     "No active playback peer to switch — open a PLAYBACK session first")
             }
             activePlaybackTokens[parsed.channelId] = token
+            setPlayPos(parsed.channelId, slug, adjustedStartSec, parsed.endSec, rate)
             AppLogger.info(AppLogger.Module.SYSTEM, "PLAYBACK", "SELECT_RECORD_OK",
                 "channelId=${parsed.channelId} vodUrl=$vodUrl")
             CommandDispatcher.successResponse(buildJsonObject {
@@ -182,11 +218,13 @@ object PlaybackCommandHandler {
                         ?: return CommandDispatcher.errorResponse("E0013", "Camera not found")
                     val adjustedStart = parsed.startSec + seekSec
                     val newVodUrl = PlaybackService.vodUrl(slug, adjustedStart, parsed.endSec)
+                    val rate = currentRate(parsed.channelId)
                     AppLogger.info(AppLogger.Module.SYSTEM, "PLAYBACK", "CONTROL_SEEK",
-                        "channelId=${parsed.channelId} seekSec=$seekSec adjustedStart=$adjustedStart vodUrl=$newVodUrl")
+                        "channelId=${parsed.channelId} seekSec=$seekSec adjustedStart=$adjustedStart rate=${rate}x vodUrl=$newVodUrl")
                     // Swap the ffmpeg source on the live playback peer at the seeked position.
-                    val ok = runBlocking { PlaybackPeerManager.swapSource(newVodUrl) }
+                    val ok = runBlocking { PlaybackPeerManager.swapSource(newVodUrl, rate) }
                     if (!ok) return CommandDispatcher.errorResponse("E0011", "No active playback peer to seek")
+                    setPlayPos(parsed.channelId, slug, adjustedStart, parsed.endSec, rate)
                     CommandDispatcher.successResponse(buildJsonObject { put("status", "seeking") })
                 } else {
                     AppLogger.warn(AppLogger.Module.SYSTEM, "PLAYBACK", "CONTROL_SEEK_NO_TOKEN",
@@ -200,11 +238,23 @@ object PlaybackCommandHandler {
                 CommandDispatcher.successResponse(buildJsonObject { put("status", "paused") })
             }
             "scale" -> {
-                val scale = data["scale"]?.jsonPrimitive?.doubleOrNull ?: 1.0
-                // True speed change requires re-encode; return success to prevent cloud from stopping video.
-                // Video continues at 1x speed.
-                AppLogger.info(AppLogger.Module.SYSTEM, "PLAYBACK", "CONTROL_SCALE_ACK",
-                    "channelId=$channelId scale=$scale acknowledged (1x delivery, cloud-side speed)")
+                val scale = data["scale"]?.jsonPrimitive?.doubleOrNull?.takeIf { it >= 1.0 } ?: 1.0
+                val st = playPos[channelId]
+                if (st == null) {
+                    AppLogger.warn(AppLogger.Module.SYSTEM, "PLAYBACK", "CONTROL_SCALE_NO_SESSION",
+                        "channelId=$channelId scale=$scale — no active playback session")
+                    return CommandDispatcher.errorResponse("E0003", "No active playback session")
+                }
+                // Bare scale carries no position → resume from the current media position at
+                // the new speed. dc-bridge fast-forwards via -readrate + setpts (real-time
+                // playout, content advances scale×).
+                val pos = currentMediaSec(channelId) ?: st.startSec
+                val newVodUrl = PlaybackService.vodUrl(st.slug, pos, st.endSec)
+                AppLogger.info(AppLogger.Module.SYSTEM, "PLAYBACK", "CONTROL_SCALE",
+                    "channelId=$channelId scale=${scale}x pos=$pos vodUrl=$newVodUrl")
+                val ok = runBlocking { PlaybackPeerManager.swapSource(newVodUrl, scale) }
+                if (!ok) return CommandDispatcher.errorResponse("E0011", "No active playback peer to scale")
+                setPlayPos(channelId, st.slug, pos, st.endSec, scale)
                 CommandDispatcher.successResponse(buildJsonObject { put("scale", scale) })
             }
             else -> {
@@ -218,6 +268,7 @@ object PlaybackCommandHandler {
     /** Called when a PLAYBACK session ends — tear down the dc-bridge playback peer + ffmpeg. */
     fun cleanupPlaybackStream(channelId: String) {
         if (activePlaybackTokens.remove(channelId) == null) return
+        playPos.remove(channelId)
         AppLogger.info(AppLogger.Module.SYSTEM, "PLAYBACK", "CLEANUP_STREAM",
             "channelId=$channelId")
         runBlocking { PlaybackPeerManager.stop() }
