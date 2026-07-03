@@ -15,7 +15,7 @@ class UpdateManager(
     private val log = LoggerFactory.getLogger(javaClass)
     private val docker = DockerApi()
     private val stateFile = File("/data/version_state.json")
-    private val hostname = System.getenv("HOSTNAME") ?: "nvr-node"
+    private val hostname = System.getenv("HOSTNAME") ?: "nvr-edge-node"
 
     suspend fun run() {
         val intervalMs = config.update.check_interval_minutes * 60_000L
@@ -83,23 +83,23 @@ class UpdateManager(
         }
 
         // Wait for health
-        val healthy = waitForHealth(healthEndpoint, config.update.health_wait_seconds)
+        val result = waitForHealth(healthEndpoint, config.update.health_wait_seconds)
 
-        if (healthy) {
+        if (result.healthy) {
             saveVersionState(containerName, newImageId)
-            
+
             // Try to get Version/Git SHA from labels
             val revision = docker.getImageLabel(image, "org.opencontainers.image.revision")?.take(7) ?: "unknown"
-            
+
             docker.removeImage(currentImageId)
             db.log(EventType.UPDATE_SUCCESS, "Updated $containerName to $newImageId ($revision)", severity = Severity.INFO)
             alertManager.sendAlert(AlertEvent(AlertType.UPDATE_SUCCESS,
                 "🖥️ <b>[$hostname]</b>\n✅ <b>$containerName</b> cập nhật thành công!\n📦 Version: <code>$revision</code>"))
         } else {
-            log.error("Health check failed after update — initiating rollback")
-            db.log(EventType.UPDATE_FAILED, "Update failed for $containerName — rolling back", severity = Severity.ERROR)
+            log.error("Health check failed after update (${result.reason}) — initiating rollback")
+            db.log(EventType.UPDATE_FAILED, "Update failed for $containerName — rolling back (${result.reason})", severity = Severity.ERROR)
             alertManager.sendAlert(AlertEvent(AlertType.UPDATE_FAILED,
-                "🖥️ <b>[$hostname]</b>\n⚠️ <b>$containerName</b> cập nhật THẤT BẠI! Đang rollback..."))
+                "🖥️ <b>[$hostname]</b>\n⚠️ <b>$containerName</b> cập nhật THẤT BẠI! Đang rollback...\n🔍 Lý do: <code>${result.reason}</code>"))
             performRollback(containerName, currentImageId, healthEndpoint)
         }
     }
@@ -107,10 +107,11 @@ class UpdateManager(
     private suspend fun performRollback(containerName: String, oldImageId: String, healthEndpoint: String) {
         if (!config.update.enable_rollback) {
             alertManager.sendAlert(AlertEvent(AlertType.UPDATE_FAILED,
-                "❌ Update thất bại, rollback bị tắt. Cần can thiệp thủ công cho <b>$containerName</b>!"))
+                "🖥️ <b>[$hostname]</b>\n❌ Update thất bại, rollback bị tắt. Cần can thiệp thủ công cho <b>$containerName</b>!"))
             return
         }
 
+        var lastReason = "unknown"
         var rollbackAttempt = 0
         while (rollbackAttempt < config.update.max_rollback_attempts) {
             rollbackAttempt++
@@ -120,14 +121,14 @@ class UpdateManager(
             try {
                 // Dừng và xoá lỗi
                 docker.exec("docker", "rm", "-f", containerName)
-                
+
                 // Rollback an toàn: Tag ID cũ đè lên tag hiện tại (đã resolve từ WRAPPER_TAG) để compose up
                 // dùng lại bản cũ. KHÔNG hardcode tag — fallback theo đúng WRAPPER_TAG (mặc định latest).
                 val resolvedTag = System.getenv("WRAPPER_TAG") ?: "latest"
                 val targetImage = config.containers.firstOrNull { it.name == containerName }?.image
                     ?: "ghcr.io/toannice/nvr:$resolvedTag"
                 docker.exec("docker", "tag", oldImageId, targetImage)
-                
+
                 // Chạy lại với cấu hình chuẩn
                 docker.exec("docker", "compose", "-f", "$projectDir/docker-compose.yml", "up", "-d", containerName)
             } catch (e: Exception) {
@@ -135,37 +136,45 @@ class UpdateManager(
                 docker.startContainer(containerName) // fallback
             }
 
-            val healthy = waitForHealth(healthEndpoint, 60)
-            if (healthy) {
+            val result = waitForHealth(healthEndpoint, 60)
+            lastReason = result.reason
+            if (result.healthy) {
                 db.log(EventType.ROLLBACK_SUCCESS, "Rollback to $oldImageId succeeded", severity = Severity.INFO)
                 alertManager.sendAlert(AlertEvent(AlertType.ROLLBACK_SUCCESS,
-                    "↩️ <b>$containerName</b> đã rollback thành công về image cũ!"))
+                    "🖥️ <b>[$hostname]</b>\n↩️ <b>$containerName</b> đã rollback thành công về image cũ!"))
                 return
             }
         }
 
         // All rollback attempts failed
-        db.log(EventType.ROLLBACK_FAILED, "All rollback attempts failed for $containerName", severity = Severity.CRITICAL)
+        db.log(EventType.ROLLBACK_FAILED, "All rollback attempts failed for $containerName ($lastReason)", severity = Severity.CRITICAL)
         alertManager.sendAlert(AlertEvent(AlertType.CRITICAL,
-            "🚨 <b>CRITICAL:</b> $containerName không thể rollback sau ${config.update.max_rollback_attempts} lần — cần can thiệp thủ công!"))
+            "🖥️ <b>[$hostname]</b>\n🚨 <b>CRITICAL:</b> <b>$containerName</b> không thể rollback sau ${config.update.max_rollback_attempts} lần — cần can thiệp thủ công!\n🔍 Lý do lần cuối: <code>$lastReason</code>"))
     }
 
-    private suspend fun waitForHealth(endpoint: String, maxSeconds: Long): Boolean {
+    private data class HealthResult(val healthy: Boolean, val reason: String)
+
+    private suspend fun waitForHealth(endpoint: String, maxSeconds: Long): HealthResult {
         if (endpoint.isBlank()) {
             delay(10_000)
-            return true // No endpoint configured — assume OK
+            return HealthResult(true, "no health_endpoint configured") // No endpoint — assume OK
         }
         val deadline = System.currentTimeMillis() + maxSeconds * 1000
+        var lastError = "no response received"
         while (System.currentTimeMillis() < deadline) {
             try {
                 val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
                     connectTimeout = 3000; readTimeout = 3000; requestMethod = "GET"
                 }
-                if (conn.responseCode in 200..299) return true
-            } catch (e: Exception) { /* not yet healthy */ }
+                val code = conn.responseCode
+                if (code in 200..299) return HealthResult(true, "ok ($code)")
+                lastError = "HTTP $code from $endpoint"
+            } catch (e: Exception) {
+                lastError = "${e.javaClass.simpleName}: ${e.message} ($endpoint)"
+            }
             delay(5000)
         }
-        return false
+        return HealthResult(false, "timeout after ${maxSeconds}s — last error: $lastError")
     }
 
     private fun saveVersionState(name: String, imageId: String) {

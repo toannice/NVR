@@ -16,6 +16,7 @@
 # docker-compose.override.yml instead — do NOT create that override here.
 #
 # Usage:  sudo ./install.sh              # full install
+#         sudo ./install.sh -n kho-hanoi # full install, force HOSTNAME (shown in Telegram alerts)
 #         ./install.sh --check           # validate env/secrets/cert, change nothing
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
@@ -24,7 +25,14 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 
 CHECK_ONLY=0
-[[ "${1:-}" == "--check" ]] && CHECK_ONLY=1
+FORCE_HOSTNAME=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --check) CHECK_ONLY=1; shift ;;
+        -n) FORCE_HOSTNAME="${2:-}"; shift 2 ;;
+        *) shift ;;
+    esac
+done
 
 c() { printf '\033[1;36m%s\033[0m\n' "$*"; }   # info
 ok() { printf '\033[1;32m  ✓ %s\033[0m\n' "$*"; }
@@ -63,6 +71,24 @@ ensure_env() {
         [[ -n "$ip" ]] && sed -i "s|^FRIGATE_HOST_IP=.*|FRIGATE_HOST_IP=$ip|" .env && ok "FRIGATE_HOST_IP auto-set to $ip"
     else
         ok ".env exists"
+    fi
+
+    # HOSTNAME shows in every Telegram/watchdog alert ([hostname] prefix) so you can tell which
+    # physical device is reporting — without this every machine reports the generic
+    # "nvr-edge-node" fallback. Rules: -n <name> always forces it (fresh install or re-run);
+    # otherwise auto-fill from the OS hostname ONLY if not already set (never clobber a name
+    # someone already chose). No interactive prompt — stays scriptable/non-interactive.
+    grep -qE '^HOSTNAME=' .env || printf '\nHOSTNAME=   # Shown in Telegram/watchdog alerts — rename to something recognizable (e.g. kho-hanoi)\n' >> .env
+    local current_hn; current_hn="$(grep -E '^HOSTNAME=' .env | head -1 | cut -d= -f2- | tr -d '"'"'"' \r\t ')"
+    if [[ -n "$FORCE_HOSTNAME" ]]; then
+        sed -i "s|^HOSTNAME=.*|HOSTNAME=$FORCE_HOSTNAME|" .env
+        ok "HOSTNAME set to '$FORCE_HOSTNAME' (via -n)"
+    elif [[ -z "$current_hn" ]]; then
+        local hn; hn="$(hostname 2>/dev/null || echo nvr-edge-node)"
+        sed -i "s|^HOSTNAME=.*|HOSTNAME=$hn|" .env
+        ok "HOSTNAME auto-set to '$hn' (rerun with -n <name> to rename, e.g. -n kho-hanoi)"
+    else
+        ok "HOSTNAME already set to '$current_hn' (unchanged; pass -n <name> to rename)"
     fi
 
     # Bake shared credentials — always inject after fresh template copy; skip if already set on re-run
