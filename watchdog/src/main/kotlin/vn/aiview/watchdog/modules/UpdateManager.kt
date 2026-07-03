@@ -30,11 +30,24 @@ class UpdateManager(
     }
 
     private suspend fun checkForUpdates() {
+        if (!isInOtaWindow()) {
+            log.info("Outside OTA window (ota_hour=${config.update.ota_hour}, tz=${config.schedule.timezone}) — skipping this tick")
+            return
+        }
         val managedContainers = config.containers.filter { it.managed }
         for (container in managedContainers) {
             log.info("Checking for updates: ${container.name} (${container.image})")
             tryUpdate(container.name, container.image, container.health_endpoint)
         }
+    }
+
+    // config.update.ota_hour < 0 → no gate, always allowed (legacy behavior). Otherwise only
+    // pull+apply during that hour of the day, in schedule.timezone, so OTA doesn't disrupt daytime use.
+    private fun isInOtaWindow(): Boolean {
+        val hour = config.update.ota_hour
+        if (hour < 0) return true
+        val now = java.time.ZonedDateTime.now(java.time.ZoneId.of(config.schedule.timezone))
+        return now.hour == hour
     }
 
     private suspend fun tryUpdate(containerName: String, image: String, healthEndpoint: String) {

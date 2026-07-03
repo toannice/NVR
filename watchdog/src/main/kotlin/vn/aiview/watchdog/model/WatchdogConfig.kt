@@ -28,7 +28,11 @@ data class UpdateConfig(
     val check_interval_minutes: Long = 60,
     val enable_rollback: Boolean = true,
     val max_rollback_attempts: Int = 2,
-    val health_wait_seconds: Long = 120
+    val health_wait_seconds: Long = 120,
+    // Hour (0-23, schedule.timezone) at which OTA is actually allowed to pull+apply new images.
+    // -1 = no gate (apply as soon as a new image is seen, at every check_interval_minutes tick —
+    // the old behavior, kept as the default so existing installs without this key are unaffected).
+    val ota_hour: Int = -1
 )
 
 data class SelfHealingConfig(
@@ -102,7 +106,8 @@ fun loadConfig(path: String): WatchdogConfig {
             check_interval_minutes = (it["check_interval_minutes"] as? Int)?.toLong() ?: 60L,
             enable_rollback = it["enable_rollback"] as? Boolean ?: true,
             max_rollback_attempts = (it["max_rollback_attempts"] as? Int) ?: 2,
-            health_wait_seconds = (it["health_wait_seconds"] as? Int)?.toLong() ?: 120L
+            health_wait_seconds = (it["health_wait_seconds"] as? Int)?.toLong() ?: 120L,
+            ota_hour = (it["ota_hour"] as? Int) ?: -1
         )
     } ?: UpdateConfig()
 

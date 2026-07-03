@@ -42,6 +42,7 @@ update:
   enable_rollback: true          # Tự rollback nếu bản mới lỗi
   max_rollback_attempts: 2       # Tối đa 2 lần rollback
   health_wait_seconds: 120       # Chờ tối đa 120s để verify health sau update
+  ota_hour: 3                    # Chỉ pull+apply OTA lúc 3h sáng (giờ schedule.timezone); -1 = bất kỳ lúc nào
 
 # SelfHealingEngine
 self_healing:
