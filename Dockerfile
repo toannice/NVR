@@ -39,11 +39,15 @@ RUN --mount=type=cache,target=/root/.gradle \
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 
-# Build-time version labels (injected by GitHub Actions)
+# Build-time version labels.
+# DEPLOY_VERSION = build identifier (git SHA), injected by CI or the staging-push/dev-deploy
+# skills via --build-arg. APP_VERSION is NOT an ARG anymore — it's read from the root VERSION
+# file (single source of truth, same pattern as WRAPPER_TAG): bump it by editing VERSION and
+# rebuilding, no build-arg to remember. SystemRouting.kt reads this file at runtime, with
+# System.getenv("APP_VERSION") as an optional override if ever needed.
 ARG DEPLOY_VERSION=dev
-ARG APP_VERSION=1.2.0
 ENV DEPLOY_VERSION=${DEPLOY_VERSION}
-ENV APP_VERSION=${APP_VERSION}
+COPY VERSION ./VERSION
 
 # Install tools for healthchecks and operations.
 # libva + intel-media-driver (iHD): Intel VAAPI H.264 encode for dc-bridge playback

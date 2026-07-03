@@ -27,7 +27,13 @@ data class StorageInfo(
 @Serializable
 data class GeneralResponse(val success: Boolean, val error: String? = null, val filename: String? = null, val size: Long? = null)
 
-val appVersion = System.getenv("APP_VERSION") ?: "1.2.0"
+// Product version: single source of truth is the root VERSION file baked into the image
+// (COPY VERSION ./VERSION in the Dockerfile) — bump it there, rebuild, done. APP_VERSION env
+// is an optional override, not set by default anywhere (docker-compose.yml deliberately does
+// NOT declare it, so it can't shadow the baked file the way it used to).
+val appVersion = System.getenv("APP_VERSION")?.takeIf { it.isNotBlank() }
+    ?: runCatching { File("VERSION").readText().trim() }.getOrNull()?.takeIf { it.isNotBlank() }
+    ?: "1.2.0"
 val deployVersion = System.getenv("DEPLOY_VERSION") ?: "dev"
 val startTime = System.currentTimeMillis()
 
