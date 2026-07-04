@@ -149,6 +149,9 @@ object MqttService {
     }
 
     private fun persistEventToDb(event: NormalizedEvent) {
+        // 5B mode: keep Frigate detect + motion recording running, but don't store Frigate AI
+        // events — the UI should surface Box-pushed events only. Live bounding boxes are untouched.
+        if (AppSettingsService.isBoxOnly()) return
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 transaction {
@@ -170,7 +173,7 @@ object MqttService {
                         }
                         
                         if (event.hasSnapshot) {
-                            it[snapshotPath] = "/api/frigate/events/\${event.id}/snapshot.jpg"
+                            it[snapshotPath] = "/api/frigate/api/events/${event.id}/snapshot.jpg"
                         }
                     }
                 }

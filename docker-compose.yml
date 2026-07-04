@@ -82,6 +82,8 @@ services:
       - /run/systemd/resolve/resolv.conf:/app/dns_config:ro
       - /etc/localtime:/etc/localtime:ro
       - /sys/class/drm:/sys/class/drm:ro  # GPU vendor detection for hwaccel config
+    devices:
+      - /dev/dri/renderD128 # Intel VAAPI — playback transcode 4K→1080p in dc-bridge (falls back to libx264 if absent)
     depends_on:
       frigate:
         condition: service_healthy
@@ -97,8 +99,10 @@ services:
       - MQTT_URL=tcp://localhost:1883
       - PORT=3000
       - CONFIG_PATH=config/config.yml
-      - APP_VERSION=${APP_VERSION:-1.2.0}
-      - DEPLOY_VERSION=${DEPLOY_VERSION:-dev}   # Injected by GitHub Actions — shows on Web UI
+      # APP_VERSION / DEPLOY_VERSION intentionally NOT set here — they're baked into the image at
+      # build time (Dockerfile ARG→ENV, from the root VERSION file + git SHA). Setting them here
+      # would override the baked value with this default on every container start, which is the
+      # bug that made the Web UI badge always show "dev" regardless of what was actually deployed.
       - TZ=${TZ:-Asia/Ho_Chi_Minh}
       - GMAIL_USER=${GMAIL_USER}               # Username is not sensitive, stays as env var
       - DC_BRIDGE_PATH=${DC_BRIDGE_PATH:-}    # Optional: path to dc-bridge binary (default: ~/.aiview/dc-bridge)

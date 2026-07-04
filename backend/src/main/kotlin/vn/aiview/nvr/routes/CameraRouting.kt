@@ -532,6 +532,90 @@ fun Route.cameraRouting() {
         }
     }
 
+    // Global toggle: disable Frigate's own object detection across ALL cameras at once, to save
+    // CPU/GPU when the customer relies on an external Box AI for detection instead. Independent
+    // from the per-camera zone editor above — writes the top-level `detect.enabled` plus forces
+    // every camera's own `detect.enabled` override (Frigate lets a camera override the global key,
+    // so leaving it untouched would keep detecting on cameras that have zones configured).
+    get("/api/settings/detect") {
+        try {
+            val configPath = System.getenv("CONFIG_PATH") ?: "config/config.yml"
+            val file = File(configPath)
+            if (!file.exists()) return@get call.respond(HttpStatusCode.NotFound, mapOf("error" to "Config file not found"))
+            val yaml = Yaml()
+            val configData = yaml.load<Map<String, Any>>(file.readText()) ?: emptyMap()
+            val detect = configData["detect"] as? Map<String, Any>
+            val enabled = detect?.get("enabled")?.toString()?.toBoolean() ?: true
+            call.respond(mapOf("enabled" to enabled))
+        } catch (e: Exception) {
+            call.application.environment.log.error("Error getting global detect status", e)
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Unknown error")))
+        }
+    }
+
+    post("/api/settings/detect") {
+        try {
+            val jsonStr = call.receiveText()
+            val json = Json.parseToJsonElement(jsonStr).jsonObject
+            val enabled = json["enabled"]?.jsonPrimitive?.content?.toBoolean() ?: true
+
+            val configPath = System.getenv("CONFIG_PATH") ?: "config/config.yml"
+            val file = File(configPath)
+            if (!file.exists()) return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to "Config file not found"))
+
+            configMutex.withLock {
+                val yaml = Yaml()
+                val configData = yaml.load<MutableMap<String, Any>>(file.readText()) ?: mutableMapOf()
+                configData["detect"] = mapOf("enabled" to enabled)
+
+                @Suppress("UNCHECKED_CAST")
+                val cameras = configData["cameras"] as? Map<String, Any>
+                cameras?.values?.forEach { camDataRaw ->
+                    @Suppress("UNCHECKED_CAST")
+                    val camConfig = camDataRaw as? MutableMap<String, Any> ?: return@forEach
+                    val detectRaw = camConfig["detect"] as? Map<*, *>
+                    val detect = if (detectRaw != null) (detectRaw as Map<String, Any>).toMutableMap() else mutableMapOf()
+                    detect["enabled"] = enabled
+                    camConfig["detect"] = detect
+                }
+
+                val options = org.yaml.snakeyaml.DumperOptions().apply {
+                    defaultFlowStyle = org.yaml.snakeyaml.DumperOptions.FlowStyle.BLOCK
+                }
+                java.io.FileWriter(file).use { writer -> Yaml(options).dump(configData, writer) }
+            }
+
+            call.respond(mapOf("success" to true, "enabled" to enabled))
+        } catch (e: Exception) {
+            call.application.environment.log.error("Error setting global detect status", e)
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Unknown error")))
+        }
+    }
+
+    // Explicitly restart Frigate to apply the global detect toggle (decoupled from save, same
+    // pattern as /api/cameras/{id}/ai/apply above — frontend polls /api/frigate/api/version after).
+    post("/api/settings/detect/apply") {
+        try {
+            val frigateUrl = System.getenv("FRIGATE_URL") ?: "http://localhost:5000"
+            try {
+                val restartUrl = java.net.URL("$frigateUrl/api/restart")
+                val conn = restartUrl.openConnection() as java.net.HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.connectTimeout = 5000
+                conn.readTimeout = 5000
+                conn.responseCode
+                call.application.environment.log.info("Frigate restart triggered via /settings/detect/apply")
+            } catch (e: Exception) {
+                // Expected: Frigate closes the connection as part of restarting.
+                call.application.environment.log.info("Frigate restart request sent (${e.message})")
+            }
+            call.respond(mapOf("success" to "true", "message" to "Frigate restart triggered"))
+        } catch (e: Exception) {
+            call.application.environment.log.error("Error in /settings/detect/apply", e)
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Unknown error")))
+        }
+    }
+
     patch("/api/cameras/{id}/ptz-enabled") {
         val id = call.parameters["id"] ?: return@patch call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
         try {

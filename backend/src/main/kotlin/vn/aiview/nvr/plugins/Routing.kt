@@ -25,6 +25,9 @@ fun Application.configureRouting() {
 
             // AiView Box integration — admin settings (enable + credentials)
             integrationAdminRouting()
+
+            // AI event list + clip/snapshot serving + source-mode (5B) toggle
+            eventsRouting()
         }
 
         // Dev/test helpers (active only when E2E_TEST_MODE=true)
@@ -35,6 +38,9 @@ fun Application.configureRouting() {
 
         // AiView Box integration — public contract endpoints (self-authenticate, v1.1)
         integrationRouting()
+
+        // Box → NVR push event (self-authenticate) — creates event + cuts -5/+5 clip
+        pushEventRouting()
 
         // ONVIF server — NVR advertises itself as ONVIF device for Box/VMS discovery (HTTP, no session auth)
         onvifServerRouting()

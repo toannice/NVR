@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import AIConfigView from './components/AIConfigView'
+import AITab from './components/AITab'
 import PatternLockScreen from './components/PatternLockScreen'
 import { useMqttEvents } from './hooks/useMqttEvents'
 import './App.css'
@@ -600,7 +600,7 @@ function App() {
         )}
         {activeTab === 'Downloads' && <DownloadsView />}
         {activeTab === 'Sự kiện AI' && (
-          <AIConfigView cameras={cameras} addToast={addToast} />
+          <AITab cameras={cameras} addToast={addToast} />
         )}
         {activeTab === 'Setup' && (
           <SetupView

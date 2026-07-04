@@ -308,7 +308,11 @@ fun Route.onvifRouting() {
             val deviceInfo = OnvifSoapClient.getDeviceInfoAndStream(ip, port, username, password)
 
             val rtspUrl = deviceInfo.rtspUrl
-            val path = rtspUrl.substringAfterLast("/")
+            // Full path after host:port (strip scheme + optional user:pass@), e.g.
+            // rtsp://admin:pass@192.168.2.64:554/profile1/live -> profile1/live.
+            // (Was substringAfterLast("/") which dropped "profile1/" and yielded a broken "/live".)
+            val authorityAndPath = rtspUrl.substringAfter("://").substringAfterLast('@')
+            val path = if (authorityAndPath.contains('/')) authorityAndPath.substringAfter('/') else ""
             val subUriJson = if (deviceInfo.subRtspUrl != null) "\"${deviceInfo.subRtspUrl}\"" else "null"
 
             call.respondText("""

@@ -29,7 +29,7 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
     setIsProbing(true);
     setError('');
     try {
-      const res = await fetch('/api/onvif/probe', {
+      const res = await fetch('/api/probe-onvif', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -88,9 +88,10 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
       // We'll reuse 'error' state for status temporarily or just let the spinner show.
 
       // Perform ONVIF Probe to get path if not provided manually (or if user wants auto logic)
+      let finalStreamUri: string | undefined;
       if (!showAdvanced || finalPath === '/stream1') {
         try {
-          const resProbe = await fetch('/api/onvif/probe', {
+          const resProbe = await fetch('/api/probe-onvif', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -102,10 +103,14 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
           });
           const probeData = await resProbe.json();
           if (resProbe.ok) {
+            // Prefer the full stream URI the camera advertised via ONVIF GetStreamUri —
+            // it already carries the correct path (e.g. /profile1/live), port and credentials.
+            // Rebuilding from a parsed path is what silently defaulted cameras to /stream1.
+            if (probeData.streamUri) finalStreamUri = probeData.streamUri;
             finalPath = probeData.path || finalPath;
             finalName = finalName || probeData.deviceInfo?.Model || finalName;
 
-            // Extract RTSP Port from auto-probe result
+            // Extract RTSP Port from auto-probe result (used only for the manual fallback)
             if (probeData.streamUri) {
               const match = probeData.streamUri.match(/rtsp:\/\/[^/]+:(\d+)\//);
               if (match && match[1]) {
@@ -133,10 +138,18 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
       // We should ideally have `finalRtspPort`.
 
 
+      // In auto mode (user didn't open Advanced) we rely entirely on the ONVIF probe. If it
+      // didn't return a stream URI, do NOT silently fall back to the hardcoded "/stream1" default
+      // (that produces an offline camera). Fail loudly so the user fixes creds or sets a path.
+      if (!showAdvanced && !finalStreamUri) {
+        throw new Error('Không lấy được luồng RTSP qua ONVIF. Kiểm tra IP / cổng ONVIF / tài khoản / mật khẩu, hoặc mở "Nâng cao" để nhập Path thủ công.');
+      }
+
       // Ensure path starts with /
       const normalizedPath = finalPath.startsWith('/') ? finalPath : `/${finalPath}`;
-      // Use RTSP Port for the stream URL
-      const rtspUrl = `rtsp://${formData.username}:${formData.password}@${formData.ip}:${finalRtspPort}${normalizedPath}`;
+      // Prefer the full URI from ONVIF (correct path/port/creds); otherwise build it manually.
+      const rtspUrl = finalStreamUri
+        || `rtsp://${formData.username}:${formData.password}@${formData.ip}:${finalRtspPort}${normalizedPath}`;
 
       const onvifPayload: any = { name: finalName, rtspUrl: rtspUrl, record: true, onvifPort: parseInt(formData.port) || 80 };
       if (finalSubStreamUri) onvifPayload.subRtspUrl = finalSubStreamUri;
