@@ -2,8 +2,8 @@
 
 ## Repository
 - **GitHub:** https://github.com/toannice/NVR.git
-- **Main branch:** `main` · **Active feature branch:** `003-cloud-data-sync`
-- **Active plan:** `specs/003-cloud-data-sync/plan.md` (cloud sync — mostly DONE)
+- **Main branch:** `main` — phát triển trực tiếp trên main (nhánh `003-cloud-data-sync` đã DONE, đóng 2026-07-06)
+- **Plan đã xong:** `specs/003-cloud-data-sync/plan.md` (cloud sync — DONE)
 - **Principles & gates:** [`.specify/memory/constitution.md`](./.specify/memory/constitution.md) · **Doc map:** [`docs/INDEX.md`](./docs/INDEX.md)
 - **Working directory on host:** `/home/toan/my-nvr`
 
