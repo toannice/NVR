@@ -96,3 +96,13 @@ ai-test/screenshots/
 
 # Local dev/dataset tooling scripts — not part of shipped product
 tools/
+harvest_dataset/
+stage2_out/
+
+# Python venv / bytecode + stray runtime DB (accidentally committed in a5933e9)
+ai-test/venv/
+__pycache__/
+*.pyc
+/nvr.db
+/nvr.db-shm
+/nvr.db-wal
