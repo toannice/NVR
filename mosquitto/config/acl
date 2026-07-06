@@ -1,0 +1,14 @@
+# ACL cho mosquitto nội bộ — mỗi client chỉ đụng được topic của mình.
+# User/hash ở /mosquitto/config/passwd (sinh bởi install.sh, git-ignored).
+
+# Frigate NVR engine — toàn quyền trên cây topic của nó (events, stats, control)
+user frigate
+topic readwrite frigate/#
+
+# nvr-wrapper backend — đọc sự kiện Frigate + ONVIF metadata, cây nvr/ riêng.
+# $SYS read để healthcheck của compose (mosquitto_sub -t '$SYS/#') hoạt động.
+user nvr-backend
+topic read frigate/#
+topic read onvif/metadata/#
+topic readwrite nvr/#
+topic read $SYS/#

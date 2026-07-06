@@ -14,8 +14,12 @@ services:
       - ./mosquitto/config:/mosquitto/config
       - ./mosquitto/data:/mosquitto/data
       - ./mosquitto/log:/mosquitto/log
+    environment:
+      # Chỉ dùng cho healthcheck bên dưới — broker auth thật nằm ở passwd/acl file
+      - MQTT_BACKEND_PASSWORD=${MQTT_BACKEND_PASSWORD:-}
     healthcheck:
-      test: [ "CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "healthcheck", "-W", "3" ]
+      # allow_anonymous=false nên healthcheck phải đăng nhập bằng user nvr-backend (ACL cho read $SYS/#)
+      test: [ "CMD-SHELL", "mosquitto_sub -t '$$SYS/#' -C 1 -i healthcheck -W 3 -u nvr-backend -P \"$$MQTT_BACKEND_PASSWORD\"" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -57,6 +61,9 @@ services:
     environment:
       - FRIGATE_HOST_IP=${FRIGATE_HOST_IP}
       - TZ=${TZ:-Asia/Ho_Chi_Minh}
+      # MQTT auth — config.yml tham chiếu {FRIGATE_MQTT_USER}/{FRIGATE_MQTT_PASSWORD} (Frigate substitute env FRIGATE_*)
+      - FRIGATE_MQTT_USER=frigate
+      - FRIGATE_MQTT_PASSWORD=${MQTT_FRIGATE_PASSWORD:-}
     healthcheck:
       test: [ "CMD-SHELL", "curl -f http://localhost:5000/api/version || exit 1" ]
       interval: 30s
@@ -97,6 +104,8 @@ services:
     environment:
       - FRIGATE_URL=http://localhost:5000
       - MQTT_URL=tcp://localhost:1883
+      - MQTT_USER=nvr-backend                 # Broker auth (mosquitto allow_anonymous=false); rỗng = kết nối anonymous như cũ
+      - MQTT_PASSWORD=${MQTT_BACKEND_PASSWORD:-}
       - PORT=3000
       - CONFIG_PATH=config/config.yml
       # APP_VERSION / DEPLOY_VERSION intentionally NOT set here — they're baked into the image at

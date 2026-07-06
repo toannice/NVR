@@ -160,6 +160,34 @@ ensure_secrets() {
     if [[ ! -f secrets/zt_controller_token ]]; then
         [[ $CHECK_ONLY -eq 1 ]] && warn "secrets/zt_controller_token missing (would touch empty)" || { : > secrets/zt_controller_token; chmod 600 secrets/zt_controller_token; ok "zt_controller_token (empty — ZeroTier dormant)"; }
     else ok "zt_controller_token present"; fi
+
+    ensure_mqtt_auth
+}
+
+# ── 4b. MQTT internal-bus auth ───────────────────────────────────────────────
+# mosquitto chạy allow_anonymous=false: cần 2 mật khẩu trong .env (frigate + nvr-backend)
+# và file hash mosquitto/config/passwd khớp với chúng. Tự sinh nếu thiếu.
+ensure_mqtt_auth() {
+    local fp bp regen=0
+    fp="$(grep -E '^MQTT_FRIGATE_PASSWORD=' .env 2>/dev/null | head -1 | cut -d= -f2- | sed 's/#.*//' | tr -d '"'"'"' \r\t ')"
+    bp="$(grep -E '^MQTT_BACKEND_PASSWORD=' .env 2>/dev/null | head -1 | cut -d= -f2- | sed 's/#.*//' | tr -d '"'"'"' \r\t ')"
+    grep -qE '^MQTT_FRIGATE_PASSWORD=' .env || printf '\nMQTT_FRIGATE_PASSWORD=\n' >> .env
+    grep -qE '^MQTT_BACKEND_PASSWORD=' .env || printf 'MQTT_BACKEND_PASSWORD=\n' >> .env
+    if [[ -z "$fp" ]]; then
+        [[ $CHECK_ONLY -eq 1 ]] && warn "MQTT_FRIGATE_PASSWORD empty (would generate)" || {
+            fp="$(rand_token)"; sed -i "s|^MQTT_FRIGATE_PASSWORD=.*|MQTT_FRIGATE_PASSWORD=$fp|" .env; regen=1; ok "MQTT_FRIGATE_PASSWORD generated"; }
+    fi
+    if [[ -z "$bp" ]]; then
+        [[ $CHECK_ONLY -eq 1 ]] && warn "MQTT_BACKEND_PASSWORD empty (would generate)" || {
+            bp="$(rand_token)"; sed -i "s|^MQTT_BACKEND_PASSWORD=.*|MQTT_BACKEND_PASSWORD=$bp|" .env; regen=1; ok "MQTT_BACKEND_PASSWORD generated"; }
+    fi
+    if [[ ! -s mosquitto/config/passwd || $regen -eq 1 ]]; then
+        [[ $CHECK_ONLY -eq 1 ]] && { warn "mosquitto/config/passwd missing/stale (would generate)"; return; }
+        docker run --rm -v "$PWD/mosquitto/config:/mc" eclipse-mosquitto:2 sh -c \
+            "mosquitto_passwd -c -b /mc/passwd frigate '$fp' && mosquitto_passwd -b /mc/passwd nvr-backend '$bp' && chown mosquitto:mosquitto /mc/passwd && chmod 600 /mc/passwd" \
+            && ok "mosquitto passwd file generated (frigate + nvr-backend)" \
+            || die "mosquitto_passwd generation failed"
+    else ok "mosquitto passwd present"; fi
 }
 
 # ── 5. GHCR login ────────────────────────────────────────────────────────────

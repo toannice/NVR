@@ -31,6 +31,11 @@ object MqttService {
                 isAutomaticReconnect = true
                 isCleanSession = true
                 connectionTimeout = 10
+                // Broker auth — optional: field machines chưa bật auth trên mosquitto vẫn chạy được
+                System.getenv("MQTT_USER")?.takeIf { it.isNotBlank() }?.let { u ->
+                    userName = u
+                    password = (System.getenv("MQTT_PASSWORD") ?: "").toCharArray()
+                }
             }
 
             client?.setCallback(object : MqttCallbackExtended {

@@ -50,6 +50,7 @@ backend/data/nvr.db-shm
 backend/data/*.migrated
 mosquitto/data/*.db
 mosquitto/log/
+mosquitto/config/passwd
 .env
 media/
 
