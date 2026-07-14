@@ -107,3 +107,6 @@ __pycache__/
 /nvr.db
 /nvr.db-shm
 /nvr.db-wal
+
+# Local working spreadsheets (không commit)
+*.xlsx

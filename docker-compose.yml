@@ -1,3 +1,11 @@
+# Chặn log json-file phình vô hạn ăn đầy đĩa OS (tối đa ~150MB/container).
+# Áp dụng khi container được RECREATE (không phải restart thường).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
 services:
 
   # ─── Message Broker ────────────────────────────────────────
@@ -5,6 +13,7 @@ services:
     container_name: mosquitto
     image: eclipse-mosquitto:2
     restart: unless-stopped
+    logging: *default-logging
     networks:
       - nvr-backend
     ports:
@@ -29,6 +38,7 @@ services:
     container_name: frigate
     privileged: true
     restart: unless-stopped
+    logging: *default-logging
     image: ghcr.io/blakeblackshear/frigate:${FRIGATE_VERSION:-0.16.3}
     shm_size: "1024mb"
     networks:
@@ -77,6 +87,7 @@ services:
     image: ghcr.io/toannice/nvr:${WRAPPER_TAG:-latest} # GHCR image để OTA. latest=stable(main), staging=beta. Prod để mặc định latest.
     # build: .
     restart: unless-stopped
+    logging: *default-logging
     network_mode: "host" # Required for ONVIF multicast (WS-Discovery) to work
     # ports:
     #   - "3000:3000" # Expose via Nginx (443) instead for security
@@ -139,6 +150,7 @@ services:
     container_name: nvr-nginx
     image: nginx:stable-alpine
     restart: unless-stopped
+    logging: *default-logging
     network_mode: "host" # Needs to talk to nvr-wrapper on localhost:3000
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
@@ -155,6 +167,7 @@ services:
     #image: ghcr.io/toannice/nvr-watchdog:latest
     build: ./watchdog
     restart: always             # Always restarts — must survive crashes
+    logging: *default-logging
     hostname: ${HOSTNAME:-nvr-edge-node}
     network_mode: "host"
     volumes:
