@@ -28,6 +28,7 @@ object PlaybackCommandHandler {
         val endSec: Long,
         val wallStartMs: Long,
         val rate: Double,
+        val paused: Boolean = false,
     )
     private val playPos = java.util.concurrent.ConcurrentHashMap<String, PlayPos>()
 
@@ -40,6 +41,7 @@ object PlaybackCommandHandler {
     /** Estimated current media position (seconds) of the running ffmpeg, clamped to the range. */
     private fun currentMediaSec(channelId: String): Long? {
         val st = playPos[channelId] ?: return null
+        if (st.paused) return st.startSec // frozen at the pause position
         val elapsed = ((System.currentTimeMillis() - st.wallStartMs) / 1000.0) * st.rate
         return (st.startSec + elapsed.toLong()).coerceIn(st.startSec, st.endSec)
     }
@@ -197,7 +199,17 @@ object PlaybackCommandHandler {
             "channelId=$channelId action=$action seek=$seekSec")
         return when (action) {
             "play" -> {
-                if (activePlaybackTokens.containsKey(channelId)) {
+                val st = playPos[channelId]
+                if (st?.paused == true) {
+                    // Resume from the frozen position at the speed active when paused.
+                    val vodUrl = PlaybackService.vodUrl(st.slug, st.startSec, st.endSec)
+                    val ok = runBlocking { PlaybackPeerManager.swapSource(vodUrl, st.rate) }
+                    if (!ok) return CommandDispatcher.errorResponse("E0011", "No active playback peer to resume")
+                    setPlayPos(channelId, st.slug, st.startSec, st.endSec, st.rate)
+                    AppLogger.info(AppLogger.Module.SYSTEM, "PLAYBACK", "CONTROL_RESUME_OK",
+                        "channelId=$channelId pos=${st.startSec} rate=${st.rate}x vodUrl=$vodUrl")
+                    CommandDispatcher.successResponse(buildJsonObject { put("status", "playing") })
+                } else if (activePlaybackTokens.containsKey(channelId)) {
                     AppLogger.info(AppLogger.Module.SYSTEM, "PLAYBACK", "CONTROL_PLAY_OK",
                         "channelId=$channelId already streaming")
                     CommandDispatcher.successResponse(buildJsonObject { put("status", "playing") })
@@ -233,9 +245,25 @@ object PlaybackCommandHandler {
                 }
             }
             "pause" -> {
-                AppLogger.info(AppLogger.Module.SYSTEM, "PLAYBACK", "CONTROL_PAUSE_NOOP",
-                    "channelId=$channelId pause not supported — acknowledging")
-                CommandDispatcher.successResponse(buildJsonObject { put("status", "paused") })
+                val st = playPos[channelId]
+                if (st == null) {
+                    AppLogger.warn(AppLogger.Module.SYSTEM, "PLAYBACK", "CONTROL_PAUSE_NO_SESSION",
+                        "channelId=$channelId no active playback session")
+                    CommandDispatcher.errorResponse("E0003", "No active playback session")
+                } else if (st.paused) {
+                    CommandDispatcher.successResponse(buildJsonObject { put("status", "paused") })
+                } else {
+                    // Freeze: dc-bridge stops ffmpeg (peer + last frame stay); remember the
+                    // position so play resumes exactly here. Seek/bar/scale while paused
+                    // also resume (they restart ffmpeg via swapSource).
+                    val pos = currentMediaSec(channelId) ?: st.startSec
+                    val ok = runBlocking { PlaybackPeerManager.pause() }
+                    if (!ok) return CommandDispatcher.errorResponse("E0011", "No active playback peer to pause")
+                    playPos[channelId] = PlayPos(st.slug, pos, st.endSec, System.currentTimeMillis(), st.rate, paused = true)
+                    AppLogger.info(AppLogger.Module.SYSTEM, "PLAYBACK", "CONTROL_PAUSE_OK",
+                        "channelId=$channelId pos=$pos rate=${st.rate}x")
+                    CommandDispatcher.successResponse(buildJsonObject { put("status", "paused") })
+                }
             }
             "scale" -> {
                 val scale = data["scale"]?.jsonPrimitive?.doubleOrNull?.takeIf { it >= 1.0 } ?: 1.0

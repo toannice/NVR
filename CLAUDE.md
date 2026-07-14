@@ -187,18 +187,15 @@ Chi tiết đầy đủ: **[connection_to_server.md](./connection_to_server.md)*
 | WebRTC LIVE | UDP/TCP qua ICE | Stream video | `go2rtc` @ `127.0.0.1:1984` |
 | WebRTC DATA | UDP/TCP qua ICE | **Device info, ethernet, time** (`device_service`) | **Binary `dc-bridge`** @ `data/dc-bridge` |
 
-### dc-bridge (BẮT BUỘC để dashboard hiện Device info)
-Cloud chỉ hỏi `get_information/get_ethernet/get_time` qua WebRTC DATA, KHÔNG qua MQTT. JVM `dev.onvoid.webrtc` không chạy headless Linux → cần sidecar Go (Pion).
+### dc-bridge (BẮT BUỘC để dashboard hiện Device info + playback)
+Cloud chỉ hỏi `get_information/get_ethernet/get_time` qua WebRTC DATA, KHÔNG qua MQTT. JVM `dev.onvoid.webrtc` không chạy headless Linux → cần sidecar Go (Pion). dc-bridge cũng own PLAYBACK peer (video + control DataChannel: seek/scale/pause).
+
+**Source nằm TRONG repo: `dc-bridge/`** (port 3000 bake sẵn, không cần sed). Đường dẫn cũ `~/Documents/1CodeBkav/B02/...` đã chết (ổ đĩa gộp vào mergerfs 2026-06-30; bản gốc không có playback còn ở `/mnt/nvr_disk2/home/hai/Documents/...`).
 ```bash
-SRC=~/Documents/1CodeBkav/B02/aiview_b02_box/dc-bridge
-mkdir -p /tmp/dc-bridge-build && cp "$SRC"/{main.go,go.mod,go.sum} /tmp/dc-bridge-build/
-# Patch JVM port 8080 → 3000 (backend NVR ở 3000)
-sed -i 's|127.0.0.1:8080/internal/dc/command|127.0.0.1:3000/internal/dc/command|' /tmp/dc-bridge-build/main.go
-cd /tmp/dc-bridge-build
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /home/toan/my-nvr/data/dc-bridge -ldflags='-s -w' .
-chmod +x /home/toan/my-nvr/data/dc-bridge && docker compose restart nvr-wrapper
+./dc-bridge/build.sh                      # → data/dc-bridge (linux/amd64)
+docker compose restart nvr-wrapper
 ```
-Verify log: `DC_BRIDGE_STARTED | dc-bridge started from /app/data/dc-bridge`. `DcBridgeManager` spawn tự động khi backend khởi động. Reference source + arm64 binary: `~/Documents/1CodeBkav/B02/aiview_b02_box/dc-bridge/`.
+Verify log: `DC_BRIDGE_STARTED | dc-bridge started from /app/data/dc-bridge`. `DcBridgeManager` spawn tự động khi backend khởi động.
 
 ---
 
@@ -277,7 +274,7 @@ Test Pi (runbook §5 B0–B6): cài tươi Pi (build `gateway/nebula/edge-agent`
 | OTP input bị browser validate như email | `renderInput()` dùng `title.includes('Mã')` | Dùng `isOtp?: boolean` param tường minh |
 | `otp_tokens` table không tự tạo trên DB cũ | Exposed WAL behavior | Tạo thủ công bằng sqlite3 |
 | Dashboard cloud online nhưng KHÔNG có Device info/Ethernet/Time | DATA channel fail vì thiếu `dc-bridge` | Build dc-bridge linux/amd64 port=3000 → `data/dc-bridge` (xem `connection_to_server.md`) |
-| `DC_OFFER_FAIL Connection refused` / cloud không nhận response | dc-bridge chưa start hoặc `main.go` hardcode port 8080 | `docker compose logs nvr-wrapper \| grep dc-bridge`; check `DC_BRIDGE_STARTED`; patch sed port 3000 |
+| `DC_OFFER_FAIL Connection refused` / cloud không nhận response | dc-bridge chưa start hoặc `main.go` hardcode port 8080 | `docker compose logs nvr-wrapper \| grep dc-bridge`; check `DC_BRIDGE_STARTED`; rebuild `./dc-bridge/build.sh` (source trong repo, port 3000 bake sẵn) |
 | Cloud dashboard chỉ hiện 2/N cameras | Cloud chỉ đếm cameras thêm qua `post_channels` | Thêm từ cloud dashboard; không phải bug device code |
 | Cloud live view không chạy — stream.mp4 500 liên tục | Cameras offline gây go2rtc retry liên tục | Xóa/tắt cameras offline |
 | Cloud live view — SDP có `{FRIGATE_HOST_IP}` literal | Frigate 0.16.3 không substitute placeholder cho go2rtc subprocess | `CloudService.applyIceServersToGo2Rtc()` + `CameraService.writeYaml()` dùng `detectLanIp()` |

@@ -77,6 +77,25 @@ object PlaybackPeerManager {
         }
     }
 
+    /**
+     * Pause: dc-bridge kills ffmpeg but keeps the peer + track — the browser freezes
+     * on the last frame. Resume is a normal [swapSource] at the paused position.
+     */
+    suspend fun pause(): Boolean {
+        return try {
+            val response = client.post("$BASE/playback/pause")
+            if (!response.status.isSuccess()) {
+                AppLogger.warn(AppLogger.Module.SYSTEM, "PLAYBACK", "PAUSE_FAIL",
+                    "dc-bridge ${response.status.value}: ${response.bodyAsText().take(200)}")
+                return false
+            }
+            true
+        } catch (e: Exception) {
+            AppLogger.warn(AppLogger.Module.SYSTEM, "PLAYBACK", "PAUSE_FAIL", e.message ?: "")
+            false
+        }
+    }
+
     /** Tear down the active playback peer + ffmpeg. */
     suspend fun stop() {
         try {
