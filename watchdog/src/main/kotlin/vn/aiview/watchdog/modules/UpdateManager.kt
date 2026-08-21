@@ -18,6 +18,14 @@ class UpdateManager(
     private val hostname = System.getenv("HOSTNAME") ?: "nvr-edge-node"
 
     suspend fun run() {
+        // Hard kill-switch. docker-compose declares DISABLE_OTA=true by default (and the offline
+        // override always did) but nothing used to read it, so a delivered machine still ran the
+        // pull loop against a registry it has no credentials for. Registry OTA is gone: new builds
+        // arrive as a bundle, so the whole updater stays parked unless someone opts back in.
+        if ((System.getenv("DISABLE_OTA") ?: "").lowercase() in setOf("1", "true", "yes")) {
+            log.info("DISABLE_OTA set — UpdateManager parked (updates arrive via bundle/deploy, not a registry)")
+            return
+        }
         val intervalMs = config.update.check_interval_minutes * 60_000L
         while (true) {
             try {
@@ -73,7 +81,7 @@ class UpdateManager(
         log.info("New image detected for $containerName. Upgrading $currentImageId → $newImageId")
         db.log(EventType.UPDATE_STARTED, "Starting update: $containerName → $newImageId")
 
-        val projectDir = System.getenv("PROJECT_DIR") ?: "/home/toan/my-nvr"
+        val projectDir = System.getenv("PROJECT_DIR") ?: "/home/toan/toanDoc/Documents/my-nvr"
 
         // Execute docker compose up -d to properly recreate the container with new image
         try {
@@ -117,16 +125,16 @@ class UpdateManager(
             rollbackAttempt++
             log.info("Rollback attempt $rollbackAttempt for $containerName with image $oldImageId")
 
-            val projectDir = System.getenv("PROJECT_DIR") ?: "/home/toan/my-nvr"
+            val projectDir = System.getenv("PROJECT_DIR") ?: "/home/toan/toanDoc/Documents/my-nvr"
             try {
                 // Dừng và xoá lỗi
                 docker.exec("docker", "rm", "-f", containerName)
 
-                // Rollback an toàn: Tag ID cũ đè lên tag hiện tại (đã resolve từ WRAPPER_TAG) để compose up
-                // dùng lại bản cũ. KHÔNG hardcode tag — fallback theo đúng WRAPPER_TAG (mặc định latest).
-                val resolvedTag = System.getenv("WRAPPER_TAG") ?: "latest"
+                // Rollback an toàn: tag ID cũ đè lên tên image hiện tại để compose up dùng lại bản cũ.
+                // KHÔNG hardcode registry — fallback theo WRAPPER_IMAGE (image local, mặc định
+                // nvr-wrapper:latest) vì máy không kéo image từ registry nào.
                 val targetImage = config.containers.firstOrNull { it.name == containerName }?.image
-                    ?: "ghcr.io/toannice/nvr:$resolvedTag"
+                    ?: (System.getenv("WRAPPER_IMAGE") ?: "nvr-wrapper:latest")
                 docker.exec("docker", "tag", oldImageId, targetImage)
 
                 // Chạy lại với cấu hình chuẩn

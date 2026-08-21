@@ -14,7 +14,7 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 
 @Serializable
-data class UserSession(val id: String) : Principal
+data class UserSession(val id: String, val issuedAt: Long = 0L) : Principal
 
 private val securityLog = LoggerFactory.getLogger("Security")
 
@@ -55,6 +55,17 @@ fun Application.configureSecurity() {
             cookie.extensions["SameSite"] = "lax"
             // Sign the cookie (HMAC-SHA256). Stops LAN forgery of NVR_SESSION={"id":"admin"}.
             transform(SessionTransportTransformerMessageAuthentication(sessionKey))
+        }
+    }
+
+    // Sliding session: re-issue the cookie (fresh 24h window) at most once per hour while
+    // the UI is being used, so an always-open live-view tab never expires mid-session.
+    // Only a machine idle for a full 24h straight falls back to the pattern lock.
+    // Old cookies without issuedAt decode as 0 → refreshed on their next request.
+    intercept(ApplicationCallPipeline.Plugins) {
+        val session = call.sessions.get<UserSession>()
+        if (session != null && System.currentTimeMillis() - session.issuedAt > 3600_000L) {
+            call.sessions.set(session.copy(issuedAt = System.currentTimeMillis()))
         }
     }
 

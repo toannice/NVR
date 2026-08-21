@@ -32,6 +32,7 @@ data class EdgeHealth(
     val overlayIp: String = "",   // Nebula agents report this instead of zerotierIp/ztAddress
     val nebulaUp: Boolean = false,
     val certExpiry: String = "",
+    val renewFails: Int = 0,      // consecutive failed cert renew attempts (0 = last renew OK / not yet due)
     val installer: String = "",
     val location: String = "",
     val fieldSubnet: String = "",

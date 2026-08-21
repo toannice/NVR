@@ -5,7 +5,7 @@
 # Implementation Plan: Gateway Onboarding (self-hosted ZeroTier + Android app)
 
 **Branch**: `004-gateway-onboarding` | **Date**: 2026-06-04 | **Builds on**: Plan A (`gateway/4-6-to-do-jobs.md`, gateway already DONE end-to-end on ZeroTier Central)
-**Working dir**: `/home/toan/my-nvr`
+**Working dir**: `/home/toan/toanDoc/Documents/my-nvr`
 
 ## Summary
 

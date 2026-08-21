@@ -7,6 +7,7 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
+import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.upsert
 import vn.aiview.nvr.cloud.CloudReconnectContext
@@ -70,7 +71,15 @@ fun Route.cloudRouting() {
             return@post
         }
 
-        val encryptedPassword = CryptoUtils.encrypt(req.password)
+        // Blank password = "keep what is stored". The UI no longer ships a default password
+        // (it would be readable in the JS bundle on every delivered machine), so re-saving any
+        // other field must not silently wipe the credential typed at install time.
+        val existingPassword = transaction {
+            CloudConfig.selectAll().firstOrNull()?.get(CloudConfig.passwordEncrypted)
+        }
+        val encryptedPassword =
+            if (req.password.isBlank() && !existingPassword.isNullOrBlank()) existingPassword
+            else CryptoUtils.encrypt(req.password)
 
         transaction {
             CloudConfig.upsert {

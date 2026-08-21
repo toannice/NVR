@@ -37,6 +37,21 @@ object Cameras : Table("cameras") {
     val localIp = varchar("local_ip", 50).nullable()
     val assignedRtspPort = integer("assigned_rtsp_port").nullable()
 
+    // ── Trạng thái AI View NVR ─────────────────────────────────────────────────────────────
+    // Phải nằm ở ĐÂY chứ không phải config.yml: schema Frigate đặt additionalProperties=False ở
+    // cả FrigateConfig, CameraConfig lẫn DetectConfig, nên nhét key lạ vào config.yml là
+    // validation error → crash-loop → mất cả live view lẫn ghi hình.
+    //
+    // aiIntent phân biệt hai trạng thái mà config.yml không tài nào phân biệt được (cả hai đều là
+    // "camera không có vùng nào"):
+    //   "unset" — chưa ai cấu hình → được đề nghị cấp vùng Toàn cảnh khi bật AI tổng
+    //   "on"    — đang có vùng chạy
+    //   "off"   — người dùng CỐ Ý xoá hết vùng → bật lại AI tổng không được tự bật camera này
+    val aiIntent = varchar("ai_intent", 10).default("unset")
+    // true = vùng "Toàn cảnh" hiện tại do hệ thống cấp và người dùng chưa sửa. Chỉ khi cờ này bật
+    // thì vùng đầu tiên người dùng vẽ mới được phép ghi đè nó.
+    val aiDefaultZone = bool("ai_default_zone").default(false)
+
     override val primaryKey = PrimaryKey(slug)
     init { uniqueIndex("cameras_channel_id_uq", channelId) }
 }
@@ -58,6 +73,7 @@ object Gateways : Table("gateways") {
     val installer = varchar("installer", 255).nullable()   // field-worker label set via the Android onboarding app
     val location = varchar("location", 255).nullable()     // site/location label set via the Android onboarding app
     val certExpiry = varchar("cert_expiry", 40).nullable() // Nebula cert NotAfter (RFC3339) from agent /health
+    val renewFails = integer("renew_fails").default(0)     // consecutive failed cert renews (from agent /health)
     val lastSeen = datetime("last_seen").nullable()
     val createdAt = datetime("created_at").defaultExpression(CurrentDateTime)
     val updatedAt = datetime("updated_at").defaultExpression(CurrentDateTime)
@@ -80,17 +96,22 @@ object LockConfig : Table("lock_config") {
     val id = integer("id").default(1)
     val hash = text("hash")
     val gmailHash = text("gmail_hash").nullable()
+    // Offline recovery code (GUID-style, bcrypt-hashed). Single-use: consuming it forces a new one.
+    val recoveryHash = text("recovery_hash").nullable()
+    val recoveryCreatedAt = long("recovery_created_at").nullable()
+    val recoveryUsedAt = long("recovery_used_at").nullable()
     val updatedAt = datetime("updated_at").defaultExpression(CurrentDateTime)
 
     override val primaryKey = PrimaryKey(id)
 }
 
-object OtpTokens : Table("otp_tokens") {
-    val email = varchar("email", 255)
-    val code = varchar("code", 6)
-    val expiry = long("expiry")
+/** Offline reset path #2 — 3 questions picked from a fixed catalog, answers bcrypt-hashed. */
+object SecurityQuestions : Table("security_questions") {
+    val idx = integer("idx")
+    val questionId = varchar("question_id", 64)
+    val answerHash = text("answer_hash")
 
-    override val primaryKey = PrimaryKey(email)
+    override val primaryKey = PrimaryKey(idx)
 }
 
 object CloudConfig : Table("cloud_config") {
@@ -164,6 +185,14 @@ object AIEvents : Table("ai_events") {
     val id = varchar("id", 255)
     val cameraSlug = varchar("camera_slug", 255).index()
     val label = varchar("label", 100)
+    // Tách từ label để hiển thị dịch được (đăng ký tra cứu ở frontend `ai/aiTypes.ts`):
+    //   aiType = mã bài AI thô ("vehicledetection", "facerecognition"...)
+    //   objectType = loại đối tượng ("car", "person"...)
+    //   extra = dữ liệu phụ hiển thị kèm (biển số, tên người...)
+    // label vẫn giữ để tương thích ngược (dedup theo label ở BkavEventRouting) và cho sự kiện cũ.
+    val aiType = varchar("ai_type", 50).nullable()
+    val objectType = varchar("object_type", 50).nullable()
+    val extra = varchar("extra", 200).nullable()
     val score = double("score").nullable()
     val boxX = double("box_x").nullable()
     val boxY = double("box_y").nullable()

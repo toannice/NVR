@@ -40,7 +40,7 @@ docker login ghcr.io -u toannice
 1. Gõ lệnh: `crontab -e`
 2. Thêm dòng này vào cuối cùng và lưu lại:
    ```bash
-   0 3 * * * /bin/bash /home/toan/my-nvr/deploy/edge_ota_update.sh v1.0.1 >> /home/toan/my-nvr/logs/ota.log 2>&1
+   0 3 * * * /bin/bash /home/toan/toanDoc/Documents/my-nvr/deploy/edge_ota_update.sh v1.0.1 >> /home/toan/toanDoc/Documents/my-nvr/logs/ota.log 2>&1
    ```
    *Lưu ý: Bạn có thể thay `v1.0.1` thành phiên bản bạn muốn máy trạm giữ ổn định.*
 
@@ -55,10 +55,10 @@ Script `/deploy/edge_ota_update.sh` đã được thiết kế cực kỳ an to�
 ---
 
 ## 4. XỬ LÝ SỰ CỐ
-- **Xem Log cập nhật:** `cat /home/toan/my-nvr/logs/ota.log`
+- **Xem Log cập nhật:** `cat /home/toan/toanDoc/Documents/my-nvr/logs/ota.log`
 - **Chạy thử ngay (Không đợi 3h sáng):**
   ```bash
-  /bin/bash /home/toan/my-nvr/deploy/edge_ota_update.sh v1.0.1
+  /bin/bash /home/toan/toanDoc/Documents/my-nvr/deploy/edge_ota_update.sh v1.0.1
   ```
 
 Chúc bạn vận hành hệ thống NVR mượt mà trên mọi công trình!

@@ -128,6 +128,12 @@ sqlite3 data/nvr.db '.schema gateways'        # confirm the table exists
    created proxies) → for each camera type a **name + ONVIF username/password** → **Thêm**.
 5. The camera now shows up in Live View / Playback / PTZ like any other camera.
 
+> **🔒 CHÍNH SÁCH LẮP ĐẶT (chốt 2026-07-07): camera LUÔN đặt IP tĩnh** (hoặc DHCP reservation trên
+> router field). Lý do: nginx `stream{}` trên Pi ghi cứng IP camera lúc adopt — nếu camera nhận IP
+> DHCP mới sau cúp điện/router cấp lại, proxy vẫn trỏ IP cũ → camera "offline" trên NVR dù đang chạy
+> bình thường. Kiểm tra khi lắp: đặt IP tĩnh **trên chính camera** (web UI camera) trước khi adopt,
+> nằm ngoài dải DHCP của router.
+
 ## How it maps to data
 
 For a gateway camera the NVR stores: `cameras.ip = <gateway ZeroTier IP>`,
@@ -146,3 +152,4 @@ ONVIF/PTZ/live-view code works unchanged** — the gateway layer only computes t
 | Live view black for gateway camera | camera offline on field LAN, or RTSP not TCP. go2rtc uses `#tcp` already; check the camera is reachable from the Pi: `curl <localIp>:554`. |
 | PTZ d-pad missing on a real PTZ cam | known false-negative for cams that reject ONVIF `ContinuousMove` (e.g. OSSD2MPVF33XPTZAI). Set **Kiểu PTZ** manually in Edit Camera. See `legacy/4-6-to-do-jobs.md` risks. |
 | Proxies gone after Pi reboot | should auto-restore from `/var/lib/nvr-edge-agent/state.json`; check `systemctl status nvr-edge-agent` and `nginx -t`. |
+| Camera "offline" trên NVR sau cúp điện field, nhưng camera vẫn chạy | camera DHCP đổi IP → nginx stream trên Pi vẫn `proxy_pass` IP cũ. Fix: đặt lại IP tĩnh cho camera đúng IP lúc adopt (xem chính sách IP tĩnh ở Part C); hoặc xóa + adopt lại camera. |

@@ -2,6 +2,25 @@
 
 All tests live in `/home/toan/e2e-generator/`. Built with Playwright (headless Chromium). No Claude API key needed.
 
+> **Trạng thái 2026-07-29 (chạy trên 192.168.2.107):**
+> `nvr.spec.ts` 10/10 PASS · `fuzz-click.spec.ts` 2/2 PASS · API smoke 26/26 PASS ·
+> `tests/test_recovery.sh` 41/41 PASS.
+> `forgot-password.spec.ts` **ĐÃ LỖI THỜI — 5 test FAIL là đúng**: nó test luồng OTP qua Gmail,
+> mà Gmail đã bỏ hẳn ngày 2026-07-29. Luồng thay thế (mã khôi phục + câu hỏi bảo mật) được phủ bởi
+> `bash tests/test_recovery.sh`. Cần xoá hoặc viết lại file spec này.
+>
+> **Cần container tạm cho `test_recovery.sh`** (nó KHÔNG tự tạo):
+> ```bash
+> mkdir -p /tmp/t/data /tmp/t/config && cp config/config.yml.template /tmp/t/config/config.yml
+> docker run -d --name nvr-test --network host -e PORT=3999 -e BIND_HOST=127.0.0.1 \
+>   -v /tmp/t/data:/app/data -v /tmp/t/config:/app/config nvr-wrapper:latest
+> bash tests/test_recovery.sh ; docker rm -f nvr-test ; rm -rf /tmp/t
+> ```
+>
+> `fuzz-click.spec.ts` — "bấm loạn" toàn UI, bắt lỗi JS + 5xx. Nút ghi cấu hình
+> (`Áp dụng|Lưu|Thêm mới|Cấp phép`) nằm trong danh sách CẤM bấm: lần chạy đầu nó bấm "Áp dụng"
+> vùng phát hiện và làm Frigate crash-loop thật (bug đó đã vá, xem CLAUDE.md).
+
 ---
 
 ## Prerequisites
@@ -73,7 +92,7 @@ node_modules/.bin/playwright test --headed --reporter=list
 1. **Skip SMTP** — OTP is written to SQLite but no email is sent
 2. **`/api/dev/inject-otp`** — dev-only endpoint that updates `gmail_hash` in `lock_config` to accept the test email `e2e@test.local`
 
-The test reads the OTP directly from the SQLite database at `/home/toan/my-nvr/data/nvr.db`.
+The test reads the OTP directly from the SQLite database at `/home/toan/toanDoc/Documents/my-nvr/data/nvr.db`.
 
 After the tests, `gmail_hash` is restored to the real email (`nvr.bkav@gmail.com`).
 

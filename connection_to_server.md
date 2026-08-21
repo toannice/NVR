@@ -168,8 +168,8 @@ sed -i 's|http://127.0.0.1:8080/internal/dc/command|http://127.0.0.1:3000/intern
 # Build static binary cho linux/amd64
 cd /tmp/dc-bridge-build
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
-    go build -o /home/toan/my-nvr/data/dc-bridge -ldflags='-s -w' .
-chmod +x /home/toan/my-nvr/data/dc-bridge
+    go build -o /home/toan/toanDoc/Documents/my-nvr/data/dc-bridge -ldflags='-s -w' .
+chmod +x /home/toan/toanDoc/Documents/my-nvr/data/dc-bridge
 ```
 
 Output ≈ 10MB ELF statically linked.
@@ -183,7 +183,7 @@ Output ≈ 10MB ELF statically linked.
 3. `~/.aiview/dc-bridge`
 4. `/usr/local/bin/dc-bridge`
 
-Vì `nvr-wrapper` mount `./data → /app/data`, chỉ cần để binary ở `/home/toan/my-nvr/data/dc-bridge`. `DcBridgeManager.start()` sẽ `ProcessBuilder(path).inheritIO().start()` khi backend khởi động.
+Vì `nvr-wrapper` mount `./data → /app/data`, chỉ cần để binary ở `/home/toan/toanDoc/Documents/my-nvr/data/dc-bridge`. `DcBridgeManager.start()` sẽ `ProcessBuilder(path).inheritIO().start()` khi backend khởi động.
 
 ### Verify
 

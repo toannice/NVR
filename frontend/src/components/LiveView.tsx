@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { Icon } from './Icon'
+import { useModalKeys } from '../hooks/useModalKeys'
 import { CameraGridItem } from './CameraGridItem'
+import { t } from '../i18n';
 
 // --- LIVE VIEW COMPONENTS --- //
 const LiveViewSidebar = ({ cameras, visibleCamIds, toggleCamera }: { cameras: any[], visibleCamIds: string[], toggleCamera: (id: string) => void }) => {
@@ -16,7 +18,7 @@ const LiveViewSidebar = ({ cameras, visibleCamIds, toggleCamera }: { cameras: an
           </span>
           <input
             className="w-full bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 border-none rounded-md py-1.5 pl-9 pr-3 text-sm focus:ring-1 focus:ring-[#EF4444]"
-            placeholder="Tìm kiếm..."
+            placeholder={t("Tìm kiếm...")}
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -26,9 +28,7 @@ const LiveViewSidebar = ({ cameras, visibleCamIds, toggleCamera }: { cameras: an
       <div className="flex-1 overflow-y-auto p-2">
         <ul className="space-y-1">
           {filteredCameras.length === 0 && (
-            <li className="text-center text-gray-500 text-sm py-4">
-              Không tìm thấy camera nào.
-            </li>
+            <li className="text-center text-gray-500 text-sm py-4">{t("Không tìm thấy camera nào.")}</li>
           )}
           {filteredCameras.map(cam => {
             const isSelected = visibleCamIds.includes(cam.id);
@@ -41,9 +41,9 @@ const LiveViewSidebar = ({ cameras, visibleCamIds, toggleCamera }: { cameras: an
                   }}
                   onClick={() => toggleCamera(cam.id)}
                   className={`w-full flex items-center px-2 py-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors group text-left cursor-grab active:cursor-grabbing ${isSelected ? 'bg-red-50 dark:bg-red-900/20' : ''}`}
-                  title="Kéo thả vào ô trống để thêm, hoặc Click để thêm tự động"
+                  title={t("Kéo thả vào ô trống để thêm, hoặc Click để thêm tự động")}
                 >
-                  <span className={`h-2.5 w-2.5 rounded-full mr-3 shrink-0 ${cam.isOnline ? 'bg-green-500' : 'bg-red-500'}`} title={cam.isOnline ? "Trực tuyến" : "Ngoại tuyến"}></span>
+                  <span className={`h-2.5 w-2.5 rounded-full mr-3 shrink-0 ${cam.isOnline ? 'bg-green-500' : 'bg-red-500'}`} title={cam.isOnline ? t("Trực tuyến") : t("Ngoại tuyến")}></span>
                   <div className="flex flex-col min-w-0 flex-1 pointer-events-none">
                     <span className={`text-sm font-medium truncate ${isSelected ? 'text-[#EF4444]' : 'text-gray-700 dark:text-gray-200'}`}>{cam.name}</span>
                     {cam.ip && <span className={`text-[10px] truncate ${isSelected ? 'text-red-400' : 'text-gray-500'}`}>{cam.ip}</span>}
@@ -71,6 +71,9 @@ export const LiveView = ({
   // Auto-hide toolbar logic
   const [showToolbar, setShowToolbar] = useState(true);
   const [isLayoutMenuOpen, setLayoutMenuOpen] = useState(false);
+
+  // Esc đóng menu chọn bố cục (trước đây chỉ đóng được khi click ra ngoài).
+  useModalKeys({ onClose: () => setLayoutMenuOpen(false), enabled: isLayoutMenuOpen });
   const [isFullscreen, setIsFullscreen] = useState(false);
   let hideTimeout: ReturnType<typeof setTimeout> | null = null;
   const handleMouseMove = () => {
@@ -182,7 +185,7 @@ export const LiveView = ({
       <main className="flex-1 flex flex-col bg-gray-100 dark:bg-gray-900 relative" id="live-view-container" onMouseMove={handleMouseMove}>
         {/* Grid Area */}
         <div className={`flex-1 p-2 grid gap-2 h-full overflow-hidden ${currentGridClass} `}>
-          {loading && <div className="text-gray-500 flex items-center justify-center col-span-full">Đang tải camera...</div>}
+          {loading && <div className="text-gray-500 flex items-center justify-center col-span-full">{t("Đang tải camera...")}</div>}
 
           {renderList.map((cam, idx) => (
             <div
@@ -219,7 +222,7 @@ export const LiveView = ({
                 className="flex items-center space-x-2 text-gray-700 dark:text-gray-200 hover:text-[#EF4444] transition-colors py-2"
               >
                 <Icon name="grid_view" className="text-2xl" />
-                <span className="font-medium">Bố cục: {typeof layout === 'number' ? `${layout}x${layout}` : layout}</span>
+                <span className="font-medium">{t('Bố cục:')} {typeof layout === 'number' ? `${layout}x${layout}` : layout}</span>
                 <Icon name="expand_more" className="text-sm" />
               </button>
               {/* Grid selector dropdown */}
@@ -255,7 +258,7 @@ export const LiveView = ({
             </div>
             <div className="h-6 w-px bg-gray-300 dark:bg-gray-600"></div>
             <div className="flex items-center space-x-2 text-gray-500 dark:text-gray-400 text-sm">
-              <span>Hiển thị: <span className="font-semibold text-gray-800 dark:text-white">{fullscreenCamId && activeCamera ? 1 : visibleCameras.filter(Boolean).length}</span> camera</span>
+              <span>{t("Hiển thị:")}<span className="font-semibold text-gray-800 dark:text-white">{fullscreenCamId && activeCamera ? 1 : visibleCameras.filter(Boolean).length}</span> camera</span>
             </div>
           </div>
           <div className="flex items-center space-x-3">
@@ -264,7 +267,7 @@ export const LiveView = ({
               className="flex items-center space-x-2 px-3 py-1.5 text-white rounded-md shadow-sm transition-colors" style={{ backgroundColor: '#EF4444' }}
             >
               <Icon name={(appFullscreen || document.fullscreenElement) ? "fullscreen_exit" : "fullscreen"} className="text-xl" />
-              <span className="text-sm font-medium">{(appFullscreen || document.fullscreenElement) ? "Thoát" : "Toàn màn hình"}</span>
+              <span className="text-sm font-medium">{(appFullscreen || document.fullscreenElement) ? t("Thoát") : t("Toàn màn hình")}</span>
             </button>
           </div>
         </div>

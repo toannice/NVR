@@ -54,3 +54,26 @@ body {
   display: flex;
   flex-direction: column;
 }
+/* ── Recovery-code printout ────────────────────────────────────────────
+   The recovery sheet is the only thing that may reach a printer. Everything
+   else is hidden so a stray Ctrl+P from the live view never prints camera
+   frames. Also drives the "Save as PDF" path when no printer is attached. */
+.print-sheet { display: none; }
+
+@media print {
+  body * { visibility: hidden !important; }
+  .print-sheet,
+  .print-sheet * { visibility: visible !important; }
+  .print-sheet {
+    display: block !important;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    padding: 24px;
+    color: #000;
+    background: #fff;
+    font-family: system-ui, sans-serif;
+  }
+  @page { size: A5; margin: 12mm; }
+}

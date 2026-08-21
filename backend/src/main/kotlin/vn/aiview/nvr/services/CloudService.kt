@@ -226,6 +226,8 @@ object CloudService {
             "Updated go2rtc config: ${iceServers.size} ICE server(s), host=$hostIp — restarting Frigate")
 
         return try {
+            // Hold camera off/on reporting across the restart (see StreamOnlineTracker).
+            vn.aiview.nvr.services.StreamOnlineTracker.noteFrigateRestart("ice_servers_apply")
             val conn = URL("${System.getenv("FRIGATE_URL") ?: "http://localhost:5000"}/api/restart")
                 .openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
@@ -240,30 +242,8 @@ object CloudService {
         }
     }
 
-    /** Detect the host's LAN IP by filtering active non-loopback/non-docker interfaces. */
-    private fun detectLanIp(): String {
-        // Prefer FRIGATE_HOST_IP env if set (e.g. via docker-compose.yml or .env)
-        val envIp = System.getenv("FRIGATE_HOST_IP")?.takeIf { it.isNotBlank() }
-        if (envIp != null) return envIp
-        return try {
-            java.net.NetworkInterface.getNetworkInterfaces()
-                .toList()
-                .asSequence()
-                .filter { it.isUp && !it.isLoopback && !it.isVirtual }
-                .filterNot {
-                    val n = it.name.lowercase()
-                    n.startsWith("docker") || n.startsWith("br-") || n.startsWith("veth") ||
-                        n.startsWith("zt")  // ZeroTier virtual mesh interfaces (10.34.x.x range)
-                }
-                .flatMap { it.inetAddresses.toList().asSequence() }
-                .filterIsInstance<java.net.Inet4Address>()
-                .map { it.hostAddress }
-                .firstOrNull { ip ->
-                    ip.startsWith("192.168.") || ip.startsWith("10.") ||
-                        ip.matches(Regex("^172\\.(1[6-9]|2\\d|3[01])\\..*"))
-                } ?: ""
-        } catch (_: Exception) { "" }
-    }
+    /** Reachable LAN IP — see utils/NetUtils (skips docker + every overlay/VPN interface). */
+    private fun detectLanIp(): String = vn.aiview.nvr.utils.NetUtils.lanIp()
 
     /** Poll until go2rtc's HTTP API responds or timeout is reached. */
     private suspend fun waitForGo2Rtc(timeoutMs: Long) {

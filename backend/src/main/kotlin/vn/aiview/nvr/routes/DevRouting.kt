@@ -6,48 +6,45 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
-import org.jetbrains.exposed.sql.*
-import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
-import org.jetbrains.exposed.sql.transactions.transaction
-import vn.aiview.nvr.models.LockConfig
-import vn.aiview.nvr.models.OtpTokens
-import vn.aiview.nvr.plugins.hashString
+import vn.aiview.nvr.services.RecoveryService
 
 @Serializable
-data class InjectOtpRequest(val email: String, val code: String = "123456")
+data class SeedRecoveryRequest(val code: String = "AAAAA-BBBBB-CCCCC-DDDDD")
 
 @Serializable
-data class InjectOtpResponse(val success: Boolean, val code: String)
+data class SeedRecoveryResponse(val success: Boolean, val code: String)
+
+@Serializable
+data class SeedQuestionsRequest(val items: List<QuestionItem>)
 
 fun Route.devRouting() {
     route("/api/dev") {
 
-        // Only active when E2E_TEST_MODE=true — returns 404 otherwise
-        post("/inject-otp") {
+        // Only active when E2E_TEST_MODE=true — returns 404 otherwise.
+        // Lets the E2E suite drive the offline recovery paths without scraping a one-time code.
+        post("/seed-recovery") {
             if (System.getenv("E2E_TEST_MODE") != "true") {
                 call.respond(HttpStatusCode.NotFound)
                 return@post
             }
+            val data = call.receive<SeedRecoveryRequest>()
+            val code = RecoveryService.normalizeCode(data.code)
+            RecoveryService.persistCode(code)
+            call.respond(SeedRecoveryResponse(true, code))
+        }
 
-            val data = call.receive<InjectOtpRequest>()
-            val expiry = System.currentTimeMillis() + 10 * 60 * 1000 // 10 min
-
-            transaction {
-                // Write OTP to otp_tokens for the test email
-                OtpTokens.deleteWhere { OtpTokens.email eq data.email }
-                OtpTokens.insert {
-                    it[OtpTokens.email] = data.email
-                    it[OtpTokens.code] = data.code
-                    it[OtpTokens.expiry] = expiry
-                }
-
-                // Update gmail_hash in lock_config so reset-request accepts this email
-                LockConfig.update {
-                    it[LockConfig.gmailHash] = hashString(data.email)
-                }
+        post("/seed-questions") {
+            if (System.getenv("E2E_TEST_MODE") != "true") {
+                call.respond(HttpStatusCode.NotFound)
+                return@post
             }
-
-            call.respond(InjectOtpResponse(true, data.code))
+            val data = call.receive<SeedQuestionsRequest>()
+            val err = RecoveryService.setQuestions(data.items.map { it.questionId to it.answer })
+            if (err != null) {
+                call.respond(HttpStatusCode.BadRequest, LockResponse(false, err))
+            } else {
+                call.respond(LockResponse(true))
+            }
         }
     }
 }

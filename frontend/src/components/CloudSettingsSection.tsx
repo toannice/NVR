@@ -1,13 +1,16 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Icon } from './Icon'
+import { t } from '../i18n';
 
 // ─── Cloud Settings Section ──────────────────────────────────────────────────
 
+// Endpoint + account id are configuration, not secrets. The password is deliberately NOT
+// here: anything in this file ends up in the built JS bundle, i.e. readable on every
+// machine we ship. It is typed once on install and kept server-side (AES-GCM, CloudConfig).
 const DEFAULT_CLOUD = {
   domain: 'https://ppbs.aiview.ai',
   port: 30004,
   username: '616fbb23773c9c73124d5ba4',
-  password: 'DAdHQqIDGI5G9FKPHwj8',
 };
 
 export const CloudSettingsSection = () => {
@@ -59,7 +62,7 @@ export const CloudSettingsSection = () => {
       setDomain(DEFAULT_CLOUD.domain);
       setPort(DEFAULT_CLOUD.port);
       setUsername(DEFAULT_CLOUD.username);
-      setPassword(DEFAULT_CLOUD.password);
+      setPassword('');
     }
   };
 
@@ -78,7 +81,7 @@ export const CloudSettingsSection = () => {
   const handleSave = async () => {
     setSaving(true); setSaveMsg('');
     const payload = mode === 'default'
-      ? { domain: DEFAULT_CLOUD.domain, port: DEFAULT_CLOUD.port, username: DEFAULT_CLOUD.username, password: DEFAULT_CLOUD.password, serial, enabled }
+      ? { domain: DEFAULT_CLOUD.domain, port: DEFAULT_CLOUD.port, username: DEFAULT_CLOUD.username, password, serial, enabled }
       : { domain, port, username, password, serial, enabled };
     try {
       const res = await fetch('/api/cloud/config', {
@@ -102,7 +105,7 @@ export const CloudSettingsSection = () => {
     DISABLED:   { color: 'text-gray-500 dark:text-gray-400', dot: 'bg-gray-400', label: 'Đã tắt' },
     CONNECTING: { color: 'text-yellow-500 dark:text-yellow-400', dot: 'bg-yellow-400 animate-pulse', label: 'Đang kết nối...' },
     CONNECTED:  { color: 'text-green-600 dark:text-green-400', dot: 'bg-green-500', label: 'Đã kết nối' },
-    ERROR:      { color: 'text-red-600 dark:text-red-400', dot: 'bg-red-500', label: lastError ? `Lỗi: ${lastError}` : 'Lỗi kết nối' },
+    ERROR:      { color: 'text-red-600 dark:text-red-400', dot: 'bg-red-500', label: 'Lỗi kết nối' },
   };
   const st = stateConfig[connectionState] ?? stateConfig.DISABLED;
   const isDefault = mode === 'default';
@@ -113,24 +116,22 @@ export const CloudSettingsSection = () => {
   return (
     <div className="max-w-lg">
       <h1 className="text-2xl font-bold text-gray-800 dark:text-white flex items-center mb-6">
-        <Icon name="cloud" className="text-[#EF4444] mr-3 text-3xl" />
-        Kết nối AIView Cloud
-      </h1>
+        <Icon name="cloud" className="text-[#EF4444] mr-3 text-3xl" />{t("Kết nối AIView Cloud")}</h1>
 
       <div className="bg-white dark:bg-[#1F2937] rounded-lg shadow border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700">
 
         {/* Status row */}
         <div className="flex items-center px-6 py-4 gap-4">
-          <span className="w-36 text-sm text-gray-600 dark:text-gray-400 shrink-0">Trạng thái kết nối</span>
+          <span className="w-36 text-sm text-gray-600 dark:text-gray-400 shrink-0">{t("Trạng thái kết nối")}</span>
           <div className={`flex items-center gap-2 text-sm font-semibold ${st.color}`}>
             <span className={`w-2.5 h-2.5 rounded-full ${st.dot}`} />
-            {st.label}
+            {connectionState === 'ERROR' && lastError ? t('Lỗi: {0}').replace('{0}', lastError) : t(st.label)}
           </div>
         </div>
 
         {/* Enable row */}
         <div className="flex items-center px-6 py-4 gap-4">
-          <span className="w-36 text-sm text-gray-600 dark:text-gray-400 shrink-0">Bật kết nối Cloud</span>
+          <span className="w-36 text-sm text-gray-600 dark:text-gray-400 shrink-0">{t("Bật kết nối Cloud")}</span>
           <button
             onClick={() => setEnabled(v => !v)}
             className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${enabled ? 'bg-[#EF4444]' : 'bg-gray-300 dark:bg-gray-600'}`}
@@ -141,7 +142,7 @@ export const CloudSettingsSection = () => {
 
         {/* Mode dropdown row */}
         <div className="flex items-center px-6 py-4 gap-4">
-          <span className="w-36 text-sm text-gray-600 dark:text-gray-400 shrink-0">Chế độ</span>
+          <span className="w-36 text-sm text-gray-600 dark:text-gray-400 shrink-0">{t("Chế độ")}</span>
           <select
             value={mode}
             onChange={e => handleModeChange(e.target.value as 'default' | 'manual')}
@@ -154,7 +155,7 @@ export const CloudSettingsSection = () => {
 
         {/* Domain row */}
         <div className="flex items-center px-6 py-4 gap-4">
-          <span className={`w-36 text-sm shrink-0 ${isDefault ? 'text-gray-400 dark:text-gray-600' : 'text-gray-600 dark:text-gray-400'}`}>Miền:</span>
+          <span className={`w-36 text-sm shrink-0 ${isDefault ? 'text-gray-400 dark:text-gray-600' : 'text-gray-600 dark:text-gray-400'}`}>{t("Miền:")}</span>
           <input
             value={isDefault ? DEFAULT_CLOUD.domain : domain}
             onChange={e => setDomain(e.target.value)}
@@ -165,7 +166,7 @@ export const CloudSettingsSection = () => {
 
         {/* Port row */}
         <div className="flex items-center px-6 py-4 gap-4">
-          <span className={`w-36 text-sm shrink-0 ${isDefault ? 'text-gray-400 dark:text-gray-600' : 'text-gray-600 dark:text-gray-400'}`}>Cổng:</span>
+          <span className={`w-36 text-sm shrink-0 ${isDefault ? 'text-gray-400 dark:text-gray-600' : 'text-gray-600 dark:text-gray-400'}`}>{t("Cổng:")}</span>
           <input
             type="number"
             value={isDefault ? DEFAULT_CLOUD.port : port}
@@ -177,7 +178,7 @@ export const CloudSettingsSection = () => {
 
         {/* Username row */}
         <div className="flex items-center px-6 py-4 gap-4">
-          <span className={`w-36 text-sm shrink-0 ${isDefault ? 'text-gray-400 dark:text-gray-600' : 'text-gray-600 dark:text-gray-400'}`}>Tên đăng nhập:</span>
+          <span className={`w-36 text-sm shrink-0 ${isDefault ? 'text-gray-400 dark:text-gray-600' : 'text-gray-600 dark:text-gray-400'}`}>{t("Tên đăng nhập:")}</span>
           <input
             value={isDefault ? DEFAULT_CLOUD.username : username}
             onChange={e => setUsername(e.target.value)}
@@ -188,14 +189,13 @@ export const CloudSettingsSection = () => {
 
         {/* Password row */}
         <div className="flex items-center px-6 py-4 gap-4">
-          <span className={`w-36 text-sm shrink-0 ${isDefault ? 'text-gray-400 dark:text-gray-600' : 'text-gray-600 dark:text-gray-400'}`}>Mật khẩu:</span>
+          <span className="w-36 text-sm shrink-0 text-gray-600 dark:text-gray-400">{t("Mật khẩu:")}</span>
           <input
             type="password"
-            value={isDefault ? DEFAULT_CLOUD.password : password}
+            value={password}
             onChange={e => setPassword(e.target.value)}
-            disabled={isDefault}
-            placeholder={isDefault ? '' : 'Nhập mật khẩu mới để thay đổi'}
-            className={`flex-1 ${inputBase} ${isDefault ? inputDisabled : inputActive}`}
+            placeholder={t("Nhập mật khẩu (để trống = giữ mật khẩu đã lưu)")}
+            className={`flex-1 ${inputBase} ${inputActive}`}
           />
         </div>
 
@@ -210,9 +210,7 @@ export const CloudSettingsSection = () => {
               className={`flex-1 ${inputBase} ${inputActive} font-mono`}
             />
             <button onClick={handleGenerateSerial}
-              className="px-3 py-2 text-xs bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors whitespace-nowrap">
-              Tạo tiếp theo
-            </button>
+              className="px-3 py-2 text-xs bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors whitespace-nowrap">{t("Tạo tiếp theo")}</button>
           </div>
         </div>
 
@@ -220,9 +218,9 @@ export const CloudSettingsSection = () => {
         <div className="flex items-center px-6 py-4 gap-3">
           <button onClick={handleSave} disabled={saving}
             className="px-6 py-2 bg-[#EF4444] text-white rounded shadow hover:bg-red-600 transition-colors text-sm font-medium disabled:opacity-50">
-            {saving ? 'Đang lưu...' : 'Áp dụng'}
+            {saving ? t('Đang lưu...') : t('Áp dụng')}
           </button>
-          {saveMsg && <span className={`text-sm ${saveMsg === 'Đã lưu' ? 'text-green-500' : 'text-red-500'}`}>{saveMsg}</span>}
+          {saveMsg && <span className={`text-sm ${saveMsg === 'Đã lưu' ? 'text-green-500' : 'text-red-500'}`}>{t(saveMsg)}</span>}
         </div>
       </div>
     </div>

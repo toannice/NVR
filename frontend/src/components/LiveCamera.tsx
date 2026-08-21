@@ -1,4 +1,5 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
+import { t } from '../i18n';
 
 // go2rtc serves fMP4 over plain HTTP (chunked transfer encoding).
 // The codec is declared in the Content-Type header as "video/mp4; codecs=avc1.640028".
@@ -8,6 +9,9 @@ const FALLBACK_MIME = 'video/mp4; codecs="avc1.640028"';
 
 // Remove buffered segments older than this to avoid unbounded memory use.
 const BUFFER_CLEANUP_BEHIND_S = 30;
+
+/** Camera HEVC mà trình duyệt (Chrome/Firefox) không giải mã được qua MSE — lùi sang transcode. */
+class HevcUnsupportedError extends Error {}
 
 const LiveCamera = ({
     name,
@@ -25,12 +29,57 @@ const LiveCamera = ({
     const imgRef = useRef<HTMLImageElement>(null);
     const [mode, setMode] = useState<'mse' | 'snapshot' | 'error'>('mse');
     const [mseKey, setMseKey] = useState(0);
+    // go2rtc stream tên phát thật — mặc định trùng `name`, đổi sang `${name}_h264` một lần nếu
+    // camera là HEVC và trình duyệt không giải mã được qua MSE (xem HevcUnsupportedError).
+    const [streamName, setStreamName] = useState(name);
+    const hevcFallbackTriedRef = useRef(false);
+
+    // Dò codec luồng chính TRƯỚC khi mở stream.mp4 — không được mở rồi bỏ dở khi là HEVC
+    // (đã gây go2rtc panic thật ngoài đời với camera P200-0802N: mở fetch, đọc Content-Type,
+    // ném lỗi ngay mà KHÔNG đọc/hủy body — go2rtc đã đẩy chunk MP4 vào response (push, không chờ
+    // client đọc); effect cleanup abort() kết nối giữa chừng trúng đúng race "ghi tiếp vào response
+    // đã đóng" trong go2rtc 1.9.9 (vendor trong Frigate 0.16.3, không vá được) →
+    // `panic: runtime error: invalid memory address or nil pointer dereference`, chết cả tiến trình
+    // go2rtc — mất live view + ghi hình của MỌI camera, không riêng camera vừa đổi). Endpoint dò
+    // (`/api/frigate/stream-codec/`) chỉ đọc SDP có sẵn từ go2rtc, không tạo consumer nào — an toàn.
+    useEffect(() => {
+        let cancelled = false;
+        hevcFallbackTriedRef.current = false;
+        setStreamName(name);
+
+        (async () => {
+            try {
+                const r = await fetch(`/api/frigate/stream-codec/${name}`);
+                if (!r.ok || cancelled) return;
+                const data = await r.json();
+                if (cancelled || data?.codec !== 'h265') return;
+                if (hevcFallbackTriedRef.current) return;
+                // Không tin MediaSource.isTypeSupported('...hvc1/hev1...') để quyết định phát HEVC
+                // trực tiếp: hàm này chỉ xác nhận trình duyệt HIỂU codec string, không đảm bảo giải mã
+                // đúng bitstream thật của camera. Test thật với P200-0802N: isTypeSupported() trả true
+                // nhưng hình bị vỡ nửa khung + đơ giữa 2 keyframe (giải mã lỗi phần cứng). Luôn lùi sang
+                // transcode H.264 khi nguồn là HEVC — không còn nhánh "thử phát trực tiếp".
+                hevcFallbackTriedRef.current = true;
+                console.warn(`[LiveCamera] ${name} is HEVC — always using transcode fallback (native HEVC-MSE decode is unreliable on this platform).`);
+                const fr = await fetch(`/api/frigate/live-fallback/${name}`);
+                if (!fr.ok || cancelled) return;
+                const fd = await fr.json();
+                if (!cancelled && fd?.stream) setStreamName(fd.stream);
+            } catch (e) {
+                // Dò thất bại (mạng, go2rtc chưa sẵn sàng...) → thử phát trực tiếp như bình thường;
+                // nhánh Content-Type bên dưới vẫn còn làm lưới an toàn cuối, giờ đã hủy body đúng cách.
+                console.warn(`[LiveCamera] ${name}: codec probe failed, will try direct play`, e);
+            }
+        })();
+
+        return () => { cancelled = true; };
+    }, [name]);
 
     // ── MSE streaming ──────────────────────────────────────────────────────────
     useEffect(() => {
         if (mode !== 'mse') return;
         const video = videoRef.current;
-        if (!video || !name) return;
+        if (!video || !name || !streamName) return;
 
         let cancelled = false;
         let mediaSource: MediaSource | null = null;
@@ -72,7 +121,7 @@ const LiveCamera = ({
         mediaSource.addEventListener('sourceopen', async () => {
             if (cancelled || !mediaSource) return;
 
-            const streamUrl = `/api/frigate/go2rtc/stream.mp4?src=${name}`;
+            const streamUrl = `/api/frigate/go2rtc/stream.mp4?src=${streamName}`;
 
             try {
                 // Start the fetch — go2rtc opens the RTSP pipeline on first request.
@@ -83,13 +132,19 @@ const LiveCamera = ({
 
                 // Determine MIME type from server (go2rtc declares the codec in Content-Type).
                 const serverMime = response.headers.get('content-type') ?? '';
-                const mimeType = MediaSource.isTypeSupported(serverMime)
-                    ? serverMime
-                    : FALLBACK_MIME;
+                const isHevc = /hvc1|hev1|h\.?265|hevc/i.test(serverMime);
 
-                if (!MediaSource.isTypeSupported(mimeType)) {
-                    throw new Error(`Unsupported MIME: ${mimeType}`);
+                if (!MediaSource.isTypeSupported(serverMime) && (isHevc || !MediaSource.isTypeSupported(FALLBACK_MIME))) {
+                    // Lưới an toàn cuối — bình thường codec probe ở effect trên đã chặn HEVC từ
+                    // trước khi tới đây. Nếu vẫn rơi vào đây (probe lỗi, camera đổi codec giữa lúc
+                    // probe và lúc mở stream...), PHẢI hủy body tường minh trước khi bỏ cuộc — không
+                    // được bỏ dở kết nối đang có go2rtc ghi dở dang vào (xem lý do ở effect dò codec
+                    // phía trên, đã gây go2rtc panic thật với camera P200-0802N).
+                    try { await response.body.cancel(); } catch { /* đã đóng thì thôi */ }
+                    if (isHevc) throw new HevcUnsupportedError();
+                    throw new Error(`Unsupported MIME: ${serverMime || FALLBACK_MIME}`);
                 }
+                const mimeType = MediaSource.isTypeSupported(serverMime) ? serverMime : FALLBACK_MIME;
 
                 sourceBuffer = mediaSource.addSourceBuffer(mimeType);
                 sourceBuffer.mode = 'segments';
@@ -116,6 +171,26 @@ const LiveCamera = ({
                 }
             } catch (e: any) {
                 if (cancelled || e?.name === 'AbortError') return;
+
+                if (e instanceof HevcUnsupportedError && !hevcFallbackTriedRef.current) {
+                    hevcFallbackTriedRef.current = true;
+                    console.warn(`[LiveCamera] ${name} is HEVC, trình duyệt không phát trực tiếp được — lùi sang luồng transcode...`);
+                    try {
+                        const r = await fetch(`/api/frigate/live-fallback/${name}`);
+                        if (r.ok) {
+                            const data = await r.json();
+                            if (!cancelled && data?.stream) {
+                                setStreamName(data.stream);
+                                return; // effect re-runs with the new stream name via the streamName dep
+                            }
+                        }
+                        console.warn(`[LiveCamera] ${name}: không đăng ký được luồng transcode H.264`);
+                    } catch (fallbackErr) {
+                        console.warn(`[LiveCamera] ${name}: lỗi gọi luồng transcode`, fallbackErr);
+                    }
+                    // Không lấy được luồng transcode → rơi xuống nhánh reconnect chung bên dưới.
+                }
+
                 console.warn(`[LiveCamera] MSE failed for ${name}, reconnecting in 3s...`, e);
                 setTimeout(() => {
                     if (!cancelled) setMseKey(k => k + 1);
@@ -129,8 +204,18 @@ const LiveCamera = ({
 
         video.play().catch(() => { /* autoplay policy; browser will play on user interaction */ });
 
+        // When the page enters back-forward cache or gets frozen, JS is suspended WITHOUT
+        // unmounting: the fetch stays open but unread, leaving a zombie connection that
+        // counts against Chrome's ~6-connections-per-host limit and starves every future
+        // stream request (all tiles stay black with no error). Close the stream up front.
+        const onPageHide = () => abortCtl?.abort();
+        window.addEventListener('pagehide', onPageHide);
+        document.addEventListener('freeze', onPageHide);
+
         return () => {
             cancelled = true;
+            window.removeEventListener('pagehide', onPageHide);
+            document.removeEventListener('freeze', onPageHide);
             abortCtl?.abort();
             URL.revokeObjectURL(objectUrl);
             if (video) {
@@ -139,7 +224,7 @@ const LiveCamera = ({
             }
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [name, mode, mseKey]);
+    }, [name, streamName, mode, mseKey]);
 
     useEffect(() => {
         let lastVisibleTime = Date.now();
@@ -157,10 +242,26 @@ const LiveCamera = ({
             }
         };
 
+        let lastTime = -1;
+        let lastProgressAt = Date.now();
         const checkLag = () => {
             const video = videoRef.current;
-            if (!video || mode !== 'mse' || video.paused) return;
-            
+            if (!video || mode !== 'mse') return;
+
+            // Watchdog: a silently dead pipeline (decoder stall, starved/queued fetch,
+            // zombie connection) shows up as currentTime frozen while the tab is visible.
+            // None of the other reconnect paths catch that, so force a fresh connection.
+            if (video.currentTime !== lastTime) {
+                lastTime = video.currentTime;
+                lastProgressAt = Date.now();
+            } else if (document.visibilityState === 'visible' && Date.now() - lastProgressAt > 10_000) {
+                lastProgressAt = Date.now();
+                console.warn(`[LiveCamera] No playback progress >10s for ${name}, forcing reconnect`);
+                setMseKey(k => k + 1);
+                return;
+            }
+            if (video.paused) return;
+
             if (video.buffered.length > 0) {
                 const latestBuffer = video.buffered.end(video.buffered.length - 1);
                 const lag = latestBuffer - video.currentTime;
@@ -181,12 +282,25 @@ const LiveCamera = ({
             }
         }, 5 * 60 * 1000); // 5 minutes
 
+        // Coming back from back-forward cache / frozen state: the stream was aborted on
+        // pagehide (or died while suspended) — always start a fresh connection.
+        const handlePageShow = (e: PageTransitionEvent) => {
+            if (e.persisted && mode === 'mse') setMseKey(k => k + 1);
+        };
+        const handleResume = () => {
+            if (mode === 'mse') setMseKey(k => k + 1);
+        };
+
         document.addEventListener('visibilitychange', handleVisibilityChange);
-        
+        window.addEventListener('pageshow', handlePageShow);
+        document.addEventListener('resume', handleResume);
+
         return () => {
             clearInterval(interval);
             clearInterval(reloadInterval);
             document.removeEventListener('visibilitychange', handleVisibilityChange);
+            window.removeEventListener('pageshow', handlePageShow);
+            document.removeEventListener('resume', handleResume);
         };
     }, [mode, name]);
 
@@ -199,8 +313,8 @@ const LiveCamera = ({
     useEffect(() => {
         if (mode !== 'snapshot') return;
         updateSnapshot();
-        const t = setInterval(updateSnapshot, 500);
-        return () => clearInterval(t);
+        const timer = setInterval(updateSnapshot, 500);
+        return () => clearInterval(timer);
     }, [mode, updateSnapshot]);
 
     // ── Render ─────────────────────────────────────────────────────────────────
@@ -230,7 +344,7 @@ const LiveCamera = ({
             {mode === 'error' && (
                 <div className="w-full h-full flex flex-col items-center justify-center bg-gray-950 text-gray-400 text-xs gap-2">
                     <span className="text-2xl">📡</span>
-                    <span>Không thể tải luồng video</span>
+                    <span>{t("Không thể tải luồng video")}</span>
                     <button
                         onClick={(e) => {
                             e.stopPropagation();
@@ -238,9 +352,7 @@ const LiveCamera = ({
                             setMseKey(k => k + 1);
                         }}
                         className="mt-1 px-3 py-1 text-xs bg-blue-700 text-white rounded hover:bg-blue-600"
-                    >
-                        Thử lại
-                    </button>
+                    >{t("Thử lại")}</button>
                 </div>
             )}
         </div>

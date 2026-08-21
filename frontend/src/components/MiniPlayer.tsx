@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Icon } from './Icon'
 import LiveCamera from './LiveCamera'
+import { t } from '../i18n';
 
 export const MiniPlayer = ({ camId, onClose, onExpand }: { camId: string, onClose: () => void, onExpand: () => void }) => {
   const [position, setPosition] = useState({ x: window.innerWidth - 340, y: window.innerHeight - 240 });
@@ -41,8 +42,8 @@ export const MiniPlayer = ({ camId, onClose, onExpand }: { camId: string, onClos
       >
         <span className="text-white text-xs truncate max-w-[150px] font-mono">{camId}</span>
         <div className="flex space-x-1">
-          <button onClick={onExpand} className="text-gray-300 hover:text-white p-1" title="Mở rộng"><Icon name="open_in_full" className="text-sm" /></button>
-          <button onClick={onClose} className="text-gray-300 hover:text-red-400 p-1" title="Đóng"><Icon name="close" className="text-sm" /></button>
+          <button onClick={onExpand} className="text-gray-300 hover:text-white p-1" title={t("Mở rộng")}><Icon name="open_in_full" className="text-sm" /></button>
+          <button onClick={onClose} className="text-gray-300 hover:text-red-400 p-1" title={t("Đóng")}><Icon name="close" className="text-sm" /></button>
         </div>
       </div>
       <div className="flex-1 bg-black overflow-hidden relative" onDoubleClick={onClose}>

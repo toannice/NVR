@@ -34,6 +34,23 @@ data class CameraStatus(val id: String, val name: String, val rtsp: String, val 
 @Serializable
 data class CameraStats(val isOnline: Boolean, val fps: Double)
 
+// Ktor không serialize được Map có giá trị khác kiểu nhau ("Serializing collections of different
+// element types is not yet supported") — lỗi chỉ lộ lúc chạy, không phải lúc biên dịch. Mọi
+// response trộn Boolean/String/List phải đi qua data class.
+@Serializable
+data class ApplyResponse(val success: Boolean, val rolledBack: Boolean, val message: String)
+
+@Serializable
+data class GlobalDetectResponse(
+    val success: Boolean,
+    val enabled: Boolean,
+    /** Camera chưa ai cấu hình AI — frontend hỏi có cấp vùng Toàn cảnh không. */
+    val camerasNeedingDefaultZone: List<String>,
+)
+
+@Serializable
+data class DefaultZonesResponse(val success: Boolean, val applied: Int, val cameras: List<String>)
+
 fun Route.cameraRouting() {
     get("/api/cameras") {
         try {
@@ -47,6 +64,11 @@ fun Route.cameraRouting() {
                 val configData = yaml.load<Map<String, Any>>(configFile.readText())
                 configData?.get("go2rtc").let { it as? Map<String, Any> }?.get("streams") as? Map<String, Any>
             } else null
+
+            fun maskRtspCredentials(rtsp: String): String {
+                if (rtsp.isBlank()) return rtsp
+                return Regex("://([^:@/]+):([^@/]+)@").replace(rtsp) { m -> "://${m.groupValues[1]}:****@" }
+            }
 
             fun rtspFromStreams(slug: String): String {
                 val streamList = go2rtcStreams?.get(slug) as? List<*> ?: return ""
@@ -71,7 +93,7 @@ fun Route.cameraRouting() {
                 cameras.add(CameraStatus(
                     id = slug,
                     name = row[Cameras.displayName].ifBlank { slug },
-                    rtsp = rtsp,
+                    rtsp = maskRtspCredentials(rtsp),
                     ip = ip,
                     manufacturer = row[Cameras.manufacturer],
                     model = row[Cameras.model],
@@ -93,7 +115,7 @@ fun Route.cameraRouting() {
                     cameras.add(CameraStatus(
                         id = slug,
                         name = slug,
-                        rtsp = rtsp,
+                        rtsp = maskRtspCredentials(rtsp),
                         ip = parseIpFromRtsp(rtsp),
                         manufacturer = "Unknown",
                         model = "Unknown"
@@ -357,8 +379,19 @@ fun Route.cameraRouting() {
             
             val zonesRaw = camConfig["zones"] as? Map<String, Any> ?: emptyMap()
             
+            val globalEnabled = (configData["detect"] as? Map<*, *>)
+                ?.get("enabled")?.toString()?.toBoolean() ?: true
+            val state = vn.aiview.nvr.services.AiConfigState
+
             val responseJson = buildJsonObject {
                 put("enabled", enabled)
+                // AI tổng tắt thì frontend chặn cấu hình từng camera — sửa vùng lúc đó chỉ gây
+                // hiểu nhầm là AI đang chạy.
+                put("globalEnabled", globalEnabled)
+                // Vùng Toàn cảnh còn nguyên trạng hệ thống cấp → vùng người dùng vẽ đầu tiên được
+                // phép thay thế nó. Người dùng đã sửa thì không.
+                put("defaultZoneUntouched", state.isDefaultZoneUntouched(id))
+                put("pendingApply", state.isDirty())
                 putJsonObject("zones") {
                     zonesRaw.forEach { (zName, zDataRaw) ->
                         val zData = zDataRaw as? Map<String, Any> ?: emptyMap()
@@ -391,9 +424,9 @@ fun Route.cameraRouting() {
             val zonesMap = mutableMapOf<String, Any>()
             zonesJson?.forEach { (zName, zDataElem) ->
                 val zData = zDataElem.jsonObject
-                val coords = zData["coordinates"]?.jsonPrimitive?.content ?: ""
+                val coords = sanitizeZoneCoordinates(zData["coordinates"]?.jsonPrimitive?.content ?: "")
                 val objs = zData["objects"]?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList<String>()
-                
+
                 val zoneConfig = mutableMapOf<String, Any>("coordinates" to coords)
                 if (objs.isNotEmpty()) {
                     zoneConfig["objects"] = objs
@@ -408,7 +441,18 @@ fun Route.cameraRouting() {
                 return@post
             }
 
+            // Chặn tên vùng mà Frigate sẽ từ chối. Đã test trực tiếp với validator của Frigate
+            // 0.16.3: tiếng Việt có dấu, khoảng trắng, gạch ngang đều OK — nhưng vùng TRÙNG TÊN
+            // CAMERA thì "Zones cannot share names with cameras" → config invalid → crash-loop.
+            // Bắt ở đây chứ không để tới lúc restart, vì lúc đó là đã ghi đè file rồi.
+            validateZoneNames(zonesMap.keys, file)?.let { err ->
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to err))
+                return@post
+            }
+
+            var savedEnabled = false
             configMutex.withLock {
+                vn.aiview.nvr.services.FrigateConfigGuard.snapshot(file)
                 val yaml = Yaml()
                 val configData = yaml.load<MutableMap<String, Any>>(file.readText())
                 val cameras = configData["cameras"] as? MutableMap<String, Any>
@@ -430,6 +474,7 @@ fun Route.cameraRouting() {
                 val finalEnabled = enabled && allObjects.isNotEmpty()
                 detect["enabled"] = finalEnabled
                 camConfig["detect"] = detect
+                savedEnabled = finalEnabled
 
                 val reviewRaw = camConfig["review"] as? Map<*, *>
                 val review = if (reviewRaw != null) (reviewRaw as Map<String, Any>).toMutableMap() else mutableMapOf()
@@ -462,31 +507,24 @@ fun Route.cameraRouting() {
                 val inputsRaw = ffmpeg["inputs"] as? List<*>
                 if (inputsRaw != null && inputsRaw.isNotEmpty()) {
                     val inputs = inputsRaw.toMutableList()
-                    if (finalEnabled) {
-                        // Add detect to sub-stream input if present, otherwise to first input
-                        val targetIdx = inputs.indexOfFirst {
-                            (it as? Map<*, *>)?.get("path")?.toString()?.contains("_sub") == true
-                        }.let { if (it >= 0) it else 0 }
-                        val targetRaw = inputs[targetIdx] as? Map<*, *>
-                        if (targetRaw != null) {
-                            val input = (targetRaw as Map<String, Any>).toMutableMap()
-                            val roles = ((input["roles"] as? List<*>)?.map { it.toString() } ?: emptyList()).toMutableList()
+                    // Frigate luôn đòi ĐÚNG một input mang role `detect`, kể cả khi
+                    // `detect.enabled: false`. Bật/tắt AI chỉ đổi `detect.enabled` —
+                    // gỡ role ra sẽ khiến config invalid → frigate crash-loop.
+                    val targetIdx = inputs.indexOfFirst {
+                        (it as? Map<*, *>)?.get("path")?.toString()?.contains("_sub") == true
+                    }.let { if (it >= 0) it else 0 }
+                    inputs.forEachIndexed { idx, inputRaw ->
+                        val inputMap = (inputRaw as? Map<*, *>) ?: return@forEachIndexed
+                        @Suppress("UNCHECKED_CAST")
+                        val input = (inputMap as Map<String, Any>).toMutableMap()
+                        val roles = ((input["roles"] as? List<*>)?.map { it.toString() } ?: emptyList()).toMutableList()
+                        if (idx == targetIdx) {
                             if (!roles.contains("detect")) roles.add("detect")
-                            input["roles"] = roles
-                            inputs[targetIdx] = input
+                        } else {
+                            roles.remove("detect")
                         }
-                    } else {
-                        // Remove detect from all inputs
-                        inputs.forEachIndexed { idx, inputRaw ->
-                            val inputMap = (inputRaw as? Map<*, *>) ?: return@forEachIndexed
-                            @Suppress("UNCHECKED_CAST")
-                            val input = (inputMap as Map<String, Any>).toMutableMap()
-                            val roles = ((input["roles"] as? List<*>)?.map { it.toString() } ?: emptyList()).toMutableList()
-                            if (roles.remove("detect")) {
-                                input["roles"] = roles
-                                inputs[idx] = input
-                            }
-                        }
+                        input["roles"] = roles
+                        inputs[idx] = input
                     }
                     ffmpeg["inputs"] = inputs
                 }
@@ -500,43 +538,47 @@ fun Route.cameraRouting() {
                 }
             }
 
-            // NOTE: No auto-restart here — user must call /ai/apply to restart Frigate
-            call.respond(mapOf("success" to true, "enabled" to enabled))
+            // Ghi lại ý định của người dùng. Xoá hết vùng = CỐ Ý tắt camera này, khác hẳn với
+            // camera chưa ai cấu hình — lần bật AI tổng sau sẽ tôn trọng lựa chọn này thay vì
+            // âm thầm cấp lại vùng Toàn cảnh.
+            val state = vn.aiview.nvr.services.AiConfigState
+            state.setIntent(id, if (savedEnabled) state.INTENT_ON else state.INTENT_OFF)
+            // Vùng nào cũng đã do người dùng quyết → vùng Toàn cảnh (nếu còn) không còn là bản
+            // mặc định hệ thống cấp nữa, không được tự xoá nó ở lần vẽ vùng sau.
+            if (savedEnabled) state.setDefaultZoneFlag(id, false)
+
+            // Không restart ở đây: người dùng bấm "Áp dụng" để gộp mọi thay đổi vào MỘT lần
+            // restart, thay vì mỗi camera một lần (mỗi lần ~1 phút thủng bản ghi).
+            state.markDirty()
+            call.respond(mapOf("success" to true, "enabled" to savedEnabled, "pendingApply" to true))
         } catch (e: Exception) {
             call.application.environment.log.error("Error setting camera AI status", e)
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Unknown error")))
         }
     }
 
-    // Explicitly restart Frigate to apply new config.
-    // Frontend calls this separately so Save and Restart are decoupled.
+    // Áp dụng cấu hình: restart Frigate rồi CHỜ xác nhận nó khoẻ lại. Không khoẻ → tự khôi phục
+    // bản config trước đó (FrigateConfigGuard) để máy không nằm im ở trạng thái crash-loop.
+    // Tách khỏi bước Lưu để nhiều thay đổi chỉ tốn một lần restart.
     post("/api/cameras/{id}/ai/apply") {
         try {
-            val frigateUrl = System.getenv("FRIGATE_URL") ?: "http://localhost:5000"
-            try {
-                val restartUrl = java.net.URL("$frigateUrl/api/restart")
-                val conn = restartUrl.openConnection() as java.net.HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.connectTimeout = 5000
-                conn.readTimeout = 5000
-                conn.responseCode
-                call.application.environment.log.info("Frigate restart triggered via /apply")
-            } catch (e: Exception) {
-                // Expected: Frigate closes connection when it restarts
-                call.application.environment.log.info("Frigate restart request sent (${e.message})")
-            }
-            call.respond(mapOf("success" to "true", "message" to "Frigate restart triggered"))
+            val configPath = System.getenv("CONFIG_PATH") ?: "config/config.yml"
+            val result = vn.aiview.nvr.services.FrigateConfigGuard
+                .restartAndVerify(File(configPath), "ai_config_apply")
+            if (result.ok) vn.aiview.nvr.services.AiConfigState.clearDirty()
+            call.respond(ApplyResponse(result.ok, result.rolledBack, result.message))
         } catch (e: Exception) {
             call.application.environment.log.error("Error in /ai/apply", e)
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Unknown error")))
         }
     }
 
-    // Global toggle: disable Frigate's own object detection across ALL cameras at once, to save
-    // CPU/GPU when the customer relies on an external Box AI for detection instead. Independent
-    // from the per-camera zone editor above — writes the top-level `detect.enabled` plus forces
-    // every camera's own `detect.enabled` override (Frigate lets a camera override the global key,
-    // so leaving it untouched would keep detecting on cameras that have zones configured).
+    // Công tắc tổng AI View NVR: bật/tắt nhận diện trên TOÀN BỘ camera một lần, để nhường CPU/GPU
+    // khi khách đã có Box AI ngoài lo phần nhận diện. Phải ép `detect.enabled` cho từng camera chứ
+    // không chỉ key global, vì Frigate cho camera override giá trị global.
+    //
+    // TẮT không xoá vùng: người dùng vẽ vùng mất hàng giờ, tắt AI thường chỉ là tạm thời. Tắt =
+    // vô hiệu hoá, bật lại = nguyên trạng. Muốn xoá thì có đường riêng, có cảnh báo.
     get("/api/settings/detect") {
         try {
             val configPath = System.getenv("CONFIG_PATH") ?: "config/config.yml"
@@ -546,7 +588,10 @@ fun Route.cameraRouting() {
             val configData = yaml.load<Map<String, Any>>(file.readText()) ?: emptyMap()
             val detect = configData["detect"] as? Map<String, Any>
             val enabled = detect?.get("enabled")?.toString()?.toBoolean() ?: true
-            call.respond(mapOf("enabled" to enabled))
+            call.respond(mapOf(
+                "enabled" to enabled,
+                "pendingApply" to vn.aiview.nvr.services.AiConfigState.isDirty(),
+            ))
         } catch (e: Exception) {
             call.application.environment.log.error("Error getting global detect status", e)
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Unknown error")))
@@ -563,19 +608,45 @@ fun Route.cameraRouting() {
             val file = File(configPath)
             if (!file.exists()) return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to "Config file not found"))
 
+            val state = vn.aiview.nvr.services.AiConfigState
+            // Camera chưa ai cấu hình AI bao giờ — frontend sẽ hỏi có cấp vùng Toàn cảnh không.
+            val needZone = mutableListOf<String>()
+
             configMutex.withLock {
+                vn.aiview.nvr.services.FrigateConfigGuard.snapshot(file)
                 val yaml = Yaml()
                 val configData = yaml.load<MutableMap<String, Any>>(file.readText()) ?: mutableMapOf()
                 configData["detect"] = mapOf("enabled" to enabled)
 
                 @Suppress("UNCHECKED_CAST")
                 val cameras = configData["cameras"] as? Map<String, Any>
-                cameras?.values?.forEach { camDataRaw ->
+                cameras?.forEach { (slug, camDataRaw) ->
                     @Suppress("UNCHECKED_CAST")
                     val camConfig = camDataRaw as? MutableMap<String, Any> ?: return@forEach
                     val detectRaw = camConfig["detect"] as? Map<*, *>
                     val detect = if (detectRaw != null) (detectRaw as Map<String, Any>).toMutableMap() else mutableMapOf()
-                    detect["enabled"] = enabled
+                    val hasZones = (camConfig["zones"] as? Map<*, *>)?.isNotEmpty() == true
+
+                    detect["enabled"] = if (!enabled) {
+                        // Tắt tổng: tắt sạch, nhưng KHÔNG đụng zones và KHÔNG đụng ai_intent —
+                        // bật lại là mọi thứ về đúng như cũ.
+                        false
+                    } else {
+                        // Bật tổng: khôi phục theo ý định đã lưu, không bật bừa.
+                        when (state.intentOf(slug)) {
+                            // Cố ý tắt riêng trước đó → giữ tắt. Bật tổng không được phép âm thầm
+                            // đảo ngược lựa chọn của người dùng.
+                            state.INTENT_OFF -> false
+                            // Có vùng thì bật lại đúng nguyên trạng.
+                            state.INTENT_ON -> hasZones
+                            // Chưa cấu hình bao giờ: chỉ bật nếu đã có sẵn vùng; không thì gom
+                            // vào danh sách để hỏi người dùng có muốn cấp vùng Toàn cảnh không.
+                            else -> {
+                                if (!hasZones) needZone.add(slug)
+                                hasZones
+                            }
+                        }
+                    }
                     camConfig["detect"] = detect
                 }
 
@@ -585,31 +656,83 @@ fun Route.cameraRouting() {
                 java.io.FileWriter(file).use { writer -> Yaml(options).dump(configData, writer) }
             }
 
-            call.respond(mapOf("success" to true, "enabled" to enabled))
+            state.markDirty()
+            // Frontend dùng needZone để bật dialog "Cấp vùng Toàn cảnh cho N camera này?"
+            call.respond(GlobalDetectResponse(true, enabled, needZone))
         } catch (e: Exception) {
             call.application.environment.log.error("Error setting global detect status", e)
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Unknown error")))
         }
     }
 
-    // Explicitly restart Frigate to apply the global detect toggle (decoupled from save, same
-    // pattern as /api/cameras/{id}/ai/apply above — frontend polls /api/frigate/api/version after).
+    // Cấp vùng "Toàn cảnh" mặc định cho nhiều camera trong MỘT lần ghi. Gọi sau khi người dùng
+    // đồng ý ở dialog lúc bật AI tổng — làm từng camera một sẽ tốn từng đó lần restart.
+    post("/api/settings/detect/default-zones") {
+        try {
+            val jsonStr = call.receiveText()
+            val json = Json.parseToJsonElement(jsonStr).jsonObject
+            val slugs = json["cameras"]?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList()
+            if (slugs.isEmpty()) return@post call.respond(DefaultZonesResponse(true, 0, emptyList()))
+
+            val configPath = System.getenv("CONFIG_PATH") ?: "config/config.yml"
+            val file = File(configPath)
+            if (!file.exists()) return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to "Config file not found"))
+
+            val state = vn.aiview.nvr.services.AiConfigState
+            val applied = mutableListOf<String>()
+
+            configMutex.withLock {
+                vn.aiview.nvr.services.FrigateConfigGuard.snapshot(file)
+                val yaml = Yaml()
+                val configData = yaml.load<MutableMap<String, Any>>(file.readText()) ?: mutableMapOf()
+                @Suppress("UNCHECKED_CAST")
+                val cameras = configData["cameras"] as? Map<String, Any> ?: emptyMap()
+
+                slugs.forEach { slug ->
+                    @Suppress("UNCHECKED_CAST")
+                    val camConfig = cameras[slug] as? MutableMap<String, Any> ?: return@forEach
+                    // Vùng mặc định không được đè lên vùng người dùng đã có.
+                    if ((camConfig["zones"] as? Map<*, *>)?.isNotEmpty() == true) return@forEach
+
+                    camConfig["zones"] = state.defaultZoneBlock()
+                    camConfig["detect"] = mapOf("enabled" to true)
+                    camConfig["objects"] = mapOf("track" to state.DEFAULT_ZONE_OBJECTS)
+                    val reviewRaw = camConfig["review"] as? Map<*, *>
+                    val review = if (reviewRaw != null) (reviewRaw as Map<String, Any>).toMutableMap() else mutableMapOf()
+                    review["alerts"] = mapOf("required_zones" to listOf(state.DEFAULT_ZONE_NAME))
+                    camConfig["review"] = review
+                    applied.add(slug)
+                }
+
+                val options = org.yaml.snakeyaml.DumperOptions().apply {
+                    defaultFlowStyle = org.yaml.snakeyaml.DumperOptions.FlowStyle.BLOCK
+                }
+                java.io.FileWriter(file).use { writer -> Yaml(options).dump(configData, writer) }
+            }
+
+            applied.forEach { slug ->
+                state.setIntent(slug, state.INTENT_ON)
+                // Đánh dấu đây là vùng hệ thống cấp: vùng đầu tiên người dùng tự vẽ được phép
+                // thay thế nó. Người dùng sửa vùng này thì cờ tắt đi và nó thành cấu hình của họ.
+                state.setDefaultZoneFlag(slug, true)
+            }
+            state.markDirty()
+            call.respond(DefaultZonesResponse(true, applied.size, applied))
+        } catch (e: Exception) {
+            call.application.environment.log.error("Error applying default zones", e)
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Unknown error")))
+        }
+    }
+
+    // Áp dụng công tắc tổng — cùng cơ chế bảo vệ như /api/cameras/{id}/ai/apply: restart, chờ
+    // Frigate khoẻ lại, không khoẻ thì tự khôi phục config cũ.
     post("/api/settings/detect/apply") {
         try {
-            val frigateUrl = System.getenv("FRIGATE_URL") ?: "http://localhost:5000"
-            try {
-                val restartUrl = java.net.URL("$frigateUrl/api/restart")
-                val conn = restartUrl.openConnection() as java.net.HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.connectTimeout = 5000
-                conn.readTimeout = 5000
-                conn.responseCode
-                call.application.environment.log.info("Frigate restart triggered via /settings/detect/apply")
-            } catch (e: Exception) {
-                // Expected: Frigate closes the connection as part of restarting.
-                call.application.environment.log.info("Frigate restart request sent (${e.message})")
-            }
-            call.respond(mapOf("success" to "true", "message" to "Frigate restart triggered"))
+            val configPath = System.getenv("CONFIG_PATH") ?: "config/config.yml"
+            val result = vn.aiview.nvr.services.FrigateConfigGuard
+                .restartAndVerify(File(configPath), "global_detect_apply")
+            if (result.ok) vn.aiview.nvr.services.AiConfigState.clearDirty()
+            call.respond(ApplyResponse(result.ok, result.rolledBack, result.message))
         } catch (e: Exception) {
             call.application.environment.log.error("Error in /settings/detect/apply", e)
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Unknown error")))
@@ -686,6 +809,59 @@ fun Route.cameraRouting() {
     }
 }
 
+
+/**
+ * Làm sạch toạ độ zone trước khi ghi vào config.yml của Frigate.
+ *
+ * Frigate 0.16.3 phân biệt toạ độ tương đối (0-1) với pixel tuyệt đối bằng **so sánh CHUỖI**
+ * (`frigate/config/camera/zone.py:132`):
+ *
+ *     explicit = any(p > "1.0" for p in points)
+ *
+ * `"1.000" > "1.0"` cho **True** — cùng tiền tố nhưng chuỗi dài hơn thì lớn hơn. Một zone chạm
+ * mép phải/mép dưới khung hình sinh ra token `1.000`, Frigate liền tưởng là pixel tuyệt đối rồi
+ * gọi `int("0.000")` → ValueError → **container crash-loop, mất cả live view lẫn ghi hình** cho
+ * tới khi có người sửa tay config.yml. Lỗi này do fuzz test UI phát hiện 2026-07-29.
+ *
+ * Cách chặn: kẹp mọi giá trị vào [0, 0.999]. Token lớn nhất còn "0.999" nên không bao giờ lớn hơn
+ * "1.0" dù so sánh kiểu chuỗi hay kiểu số. Mất 0,1% khung hình — không đáng kể so với việc sập máy.
+ * Làm ở backend để bịt cho cả Web UI lẫn đường cloud, thay vì chỉ vá phía frontend.
+ */
+/**
+ * Trả về thông báo lỗi nếu tập tên vùng sẽ làm Frigate từ chối config, null nếu hợp lệ.
+ *
+ * Kiểm chứng thực tế với validator của Frigate 0.16.3 (2026-08-03):
+ *   OK      — "toan_canh", "Toan Canh", "Toàn Cảnh", "Cổng chính", "cong-chinh", "Zone 1"
+ *   TỪ CHỐI — vùng trùng tên một camera bất kỳ ("Zones cannot share names with cameras")
+ * Nên KHÔNG cần bỏ dấu tiếng Việt; chỉ cần chặn đúng hai thứ Frigate/YAML không chịu được.
+ * Tên trùng nhau thì YAML tự nuốt mất một cái (key trùng) — người dùng mất vùng mà không hay,
+ * nên chặn luôn ở tầng JSON đầu vào.
+ */
+internal fun validateZoneNames(names: Collection<String>, configFile: File): String? {
+    val cameraNames: Set<String> = try {
+        @Suppress("UNCHECKED_CAST")
+        val data = Yaml().load<Map<String, Any>>(configFile.readText()) ?: emptyMap()
+        (data["cameras"] as? Map<String, Any>)?.keys ?: emptySet()
+    } catch (_: Exception) {
+        emptySet()
+    }
+
+    val seen = mutableSetOf<String>()
+    for (name in names) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return "Tên vùng không được để trống"
+        if (trimmed in cameraNames) return "Tên vùng \"$trimmed\" trùng tên một camera — hãy đặt tên khác"
+        if (!seen.add(trimmed.lowercase())) return "Có hai vùng cùng tên \"$trimmed\" — mỗi vùng phải một tên riêng"
+    }
+    return null
+}
+
+internal fun sanitizeZoneCoordinates(raw: String): String {
+    val parts = raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+    if (parts.isEmpty()) return raw
+    val nums = parts.map { it.toDoubleOrNull() ?: return raw }   // định dạng lạ → giữ nguyên, để Frigate tự báo
+    return nums.joinToString(",") { v -> String.format(java.util.Locale.US, "%.3f", v.coerceIn(0.0, 0.999)) }
+}
 
 private fun validateRtspUrl(url: String): String? {
     if (url.isBlank()) return "RTSP URL không được để trống"

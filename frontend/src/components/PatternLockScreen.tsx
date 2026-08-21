@@ -1,5 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import PatternLock from './PatternLock';
+import RecoveryCodeCard from './RecoveryCodeCard';
+import SecurityQuestionsForm, { type CatalogQuestion, type AnswerItem } from './SecurityQuestionsForm';
+import { t } from '../i18n';
 
 interface PatternLockScreenProps {
     isSetupMode: boolean;
@@ -7,53 +10,53 @@ interface PatternLockScreenProps {
     onSetupComplete: () => void;
 }
 
-type SetupStep = 'draw-first' | 'draw-confirm' | 'email-entry' | 'otp-verify';
-type ResetStep = 'email-entry' | 'otp-verify' | 'new-draw' | 'new-confirm';
-type ScreenMode = 'setup' | 'verify' | 'reset';
+type SetupStep = 'draw-first' | 'draw-confirm' | 'recovery-code' | 'questions';
+type RecoverStep = 'choose' | 'code' | 'questions' | 'new-draw' | 'new-confirm' | 'recovery-code';
+type ScreenMode = 'setup' | 'verify' | 'recover';
+
+const jsonPost = async (url: string, body: unknown) => {
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    let data: any = {};
+    try { data = await res.json(); } catch { /* empty body */ }
+    return { res, data };
+};
+
+/** Server phrases lockouts as "... 300 giây." — surface it as a live countdown. */
+const parseLockSeconds = (msg?: string): number | null => {
+    const m = msg?.match(/(\d+)\s*giây/);
+    return m ? parseInt(m[1], 10) : null;
+};
 
 export default function PatternLockScreen({ isSetupMode, onUnlock, onSetupComplete }: PatternLockScreenProps) {
     const [mode, setMode] = useState<ScreenMode>(isSetupMode ? 'setup' : 'verify');
     const [setupStep, setSetupStep] = useState<SetupStep>('draw-first');
-    const [resetStep, setResetStep] = useState<ResetStep>('email-entry');
+    const [recoverStep, setRecoverStep] = useState<RecoverStep>('choose');
 
     const firstPatternRef = useRef<string>('');
-    const [email, setEmail] = useState('');
-    const [otp, setOtp] = useState('');
+    const resetTokenRef = useRef<string>('');
+
+    const [recoveryCode, setRecoveryCode] = useState('');
+    const [afterCodeAction, setAfterCodeAction] = useState<'setup-questions' | 'unlock'>('unlock');
+
+    const [codeInput, setCodeInput] = useState('');
+    const [questions, setQuestions] = useState<CatalogQuestion[]>([]);
+    const [catalog, setCatalog] = useState<CatalogQuestion[]>([]);
+    const [answers, setAnswers] = useState<string[]>(['', '', '']);
+
+    const [hasRecoveryCode, setHasRecoveryCode] = useState(false);
+    const [hasQuestions, setHasQuestions] = useState(false);
 
     const [message, setMessage] = useState('');
     const [msgType, setMsgType] = useState<'info' | 'success' | 'error'>('info');
     const [isDisabled, setIsDisabled] = useState(false);
-    const [attempts, setAttempts] = useState(0);
     const [lockedUntil, setLockedUntil] = useState<number | null>(null);
     const [lockCountdown, setLockCountdown] = useState(0);
-    const [resendCooldown, setResendCooldown] = useState(0);
 
-    // Lockout countdown
-    useEffect(() => {
-        if (!lockedUntil) return;
-        const interval = setInterval(() => {
-            const remaining = Math.ceil((lockedUntil - Date.now()) / 1000);
-            if (remaining <= 0) {
-                setLockedUntil(null);
-                setIsDisabled(false);
-                setLockCountdown(0);
-                showInfo(mode === 'verify' ? 'Hãy thử lại' : '');
-                setAttempts(0);
-            } else {
-                setLockCountdown(remaining);
-            }
-        }, 500);
-        return () => clearInterval(interval);
-    }, [lockedUntil, mode]);
-
-    // Resend cooldown countdown
-    useEffect(() => {
-        if (resendCooldown <= 0) return;
-        const t = setTimeout(() => setResendCooldown(c => c - 1), 1000);
-        return () => clearTimeout(t);
-    }, [resendCooldown]);
-
-    const showInfo = (msg: string) => { setMessage(msg); setMsgType('info'); };
+    const showInfo = useCallback((msg: string) => { setMessage(msg); setMsgType('info'); }, []);
     const showSuccess = (msg: string) => { setMessage(msg); setMsgType('success'); };
     const showError = (msg: string, durationMs = 1800) => {
         setMessage(msg);
@@ -66,217 +69,260 @@ export default function PatternLockScreen({ isSetupMode, onUnlock, onSetupComple
     };
     const clearMsg = () => { setMessage(''); setMsgType('info'); };
 
-    // ─── API HANDLERS ─────────────────────────────────────────────
-
-    const requestOtp = async (targetEmail: string): Promise<boolean> => {
-        setIsDisabled(true);
-        showInfo('Đang gửi mã...');
+    // Which recovery paths this device actually has — drives the "Quên mật khẩu?" menu.
+    const refreshStatus = useCallback(async () => {
         try {
-            const res = await fetch('/api/lock/request-otp', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email: targetEmail }),
-            });
+            const res = await fetch('/api/lock/status');
             const data = await res.json();
-            if (res.ok && data.success) {
-                showSuccess(`Mã xác thực đã được gửi đến Gmail: ${targetEmail}`);
-                setResendCooldown(60);
-                return true;
-            } else {
-                showError(data.error || 'Không thể gửi email. Kiểm tra lại địa chỉ Gmail.');
-                return false;
-            }
-        } catch {
-            showError('Lỗi kết nối server. Vui lòng thử lại.');
-            return false;
-        } finally {
-            setIsDisabled(false);
-        }
-    };
+            setHasRecoveryCode(!!data.hasRecoveryCode);
+            setHasQuestions(!!data.hasQuestions);
+        } catch { /* offline UI still renders */ }
+    }, []);
 
-    const requestResetOtp = async (targetEmail: string): Promise<boolean> => {
-        setIsDisabled(true);
-        showInfo('Đang gửi mã...');
-        try {
-            const res = await fetch('/api/lock/reset-request', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email: targetEmail }),
-            });
-            const data = await res.json();
-            if (res.ok && data.success) {
-                showSuccess(`Mã khôi phục đã được gửi đến Gmail: ${targetEmail}`);
-                setResendCooldown(60);
-                return true;
+    useEffect(() => { if (!isSetupMode) refreshStatus(); }, [isSetupMode, refreshStatus]);
+
+    // Lockout countdown
+    useEffect(() => {
+        if (!lockedUntil) return;
+        const interval = setInterval(() => {
+            const remaining = Math.ceil((lockedUntil - Date.now()) / 1000);
+            if (remaining <= 0) {
+                setLockedUntil(null);
+                setIsDisabled(false);
+                setLockCountdown(0);
+                showInfo(t('Hãy thử lại'));
             } else {
-                showError(data.error || 'Gmail không đúng hoặc chưa đăng ký tài khoản.');
-                return false;
+                setLockCountdown(remaining);
             }
-        } catch {
-            showError('Lỗi kết nối server. Vui lòng thử lại.');
-            return false;
-        } finally {
-            setIsDisabled(false);
+        }, 500);
+        return () => clearInterval(interval);
+    }, [lockedUntil, showInfo]);
+
+    const applyLockIfAny = (data: any): boolean => {
+        const secs = parseLockSeconds(data?.error);
+        if (secs) {
+            setLockedUntil(Date.now() + secs * 1000);
+            setMessage(data.error);
+            setMsgType('error');
+            return true;
         }
+        return false;
     };
 
     // ─── SETUP FLOW ───────────────────────────────────────────────
 
     const handleSetupPattern1 = (pattern: string) => {
+        if (pattern.length < 4) { showError(t('Mã vẽ phải nối tối thiểu 4 điểm')); return; }
         firstPatternRef.current = pattern;
         setSetupStep('draw-confirm');
-        showInfo('Vẽ lại để xác nhận');
+        showInfo(t('Vẽ lại để xác nhận'));
     };
 
-    const handleSetupPattern2 = (pattern: string) => {
+    const handleSetupPattern2 = async (pattern: string) => {
         if (pattern !== firstPatternRef.current) {
-            firstPatternRef.current = '';
+            showError(t('Hai lần vẽ không khớp. Vẽ lại từ đầu.'));
             setSetupStep('draw-first');
-            showError('Hình không khớp! Vẽ lại từ đầu');
             return;
         }
-        setSetupStep('email-entry');
+        setIsDisabled(true);
+        showInfo(t('Đang thiết lập...'));
+        try {
+            const { res, data } = await jsonPost('/api/lock/setup', { pattern });
+            if (res.ok && data.success && data.recoveryCode) {
+                setRecoveryCode(data.recoveryCode);
+                setAfterCodeAction('setup-questions');
+                setSetupStep('recovery-code');
+                clearMsg();
+            } else {
+                showError(data.error || t('Thiết lập thất bại'));
+                setSetupStep('draw-first');
+            }
+        } catch {
+            showError(t('Lỗi kết nối server'));
+            setSetupStep('draw-first');
+        } finally {
+            setIsDisabled(false);
+        }
+    };
+
+    const loadCatalog = async () => {
+        try {
+            const res = await fetch('/api/lock/questions/catalog');
+            const data = await res.json();
+            setCatalog(data.questions || []);
+        } catch { setCatalog([]); }
+    };
+
+    const handleRecoveryAcknowledged = async () => {
+        if (afterCodeAction === 'setup-questions') {
+            await loadCatalog();
+            setSetupStep('questions');
+            clearMsg();
+        } else {
+            onUnlock();
+        }
+    };
+
+    const submitQuestions = async (items: AnswerItem[]) => {
+        setIsDisabled(true);
+        try {
+            const { res, data } = await jsonPost('/api/lock/questions/set', {
+                pattern: firstPatternRef.current,
+                items,
+            });
+            if (res.ok && data.success) {
+                onSetupComplete();
+            } else {
+                showError(data.error || t('Không lưu được câu hỏi bảo mật'));
+            }
+        } catch {
+            showError(t('Lỗi kết nối server'));
+        } finally {
+            setIsDisabled(false);
+        }
+    };
+
+    // ─── VERIFY ───────────────────────────────────────────────────
+
+    const handleVerifyDraw = async (pattern: string) => {
+        setIsDisabled(true);
+        try {
+            const { res, data } = await jsonPost('/api/lock/verify', { pattern });
+            if (res.ok && data.success) {
+                showSuccess(t('Mở khóa thành công'));
+                // Machines upgraded from the old Gmail-OTP build have no recovery code yet.
+                // Mint one now, while we still hold the pattern, instead of leaving them
+                // with no offline way back in.
+                if (!hasRecoveryCode) {
+                    const minted = await jsonPost('/api/lock/recovery/regenerate', { pattern });
+                    if (minted.res.ok && minted.data.recoveryCode) {
+                        setRecoveryCode(minted.data.recoveryCode);
+                        setAfterCodeAction('unlock');
+                        setMode('setup');
+                        setSetupStep('recovery-code');
+                        clearMsg();
+                        return;
+                    }
+                }
+                setTimeout(onUnlock, 250);
+            } else if (!applyLockIfAny(data)) {
+                showError(data.error || t('Mã vẽ không đúng'));
+            }
+        } catch {
+            showError(t('Lỗi kết nối server'));
+        } finally {
+            setIsDisabled(false);
+        }
+    };
+
+    // ─── RECOVERY ─────────────────────────────────────────────────
+
+    const openRecovery = async () => {
+        await refreshStatus();
+        setMode('recover');
+        setRecoverStep('choose');
+        setCodeInput('');
+        setAnswers(['', '', '']);
         clearMsg();
     };
 
-    const handleSetupEmailSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!email.includes('@')) return showError('Địa chỉ email không hợp lệ');
-        const ok = await requestOtp(email);
-        if (ok) { setOtp(''); setSetupStep('otp-verify'); }
+    const startCodePath = () => {
+        setRecoverStep('code');
+        setCodeInput('');
+        clearMsg();
     };
 
-    const handleSetupOtpSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (otp.length !== 6) return showError('Mã phải có đúng 6 chữ số');
-
-        setIsDisabled(true);
-        showInfo('Đang xác thực...');
+    const startQuestionPath = async () => {
         try {
-            const res = await fetch('/api/lock/setup', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ pattern: firstPatternRef.current, email, otp }),
-            });
+            const res = await fetch('/api/lock/recovery/questions');
             const data = await res.json();
-            if (res.ok && data.success) {
-                showSuccess('✓ Thiết lập thành công!');
-                setTimeout(() => onSetupComplete(), 800);
-            } else {
-                showError(data.error || 'Mã xác thực sai hoặc đã hết hạn');
+            setQuestions(data.questions || []);
+            setAnswers(['', '', '']);
+            setRecoverStep('questions');
+            clearMsg();
+        } catch {
+            showError(t('Không tải được câu hỏi bảo mật'));
+        }
+    };
+
+    const submitCode = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!codeInput.trim()) return;
+        setIsDisabled(true);
+        try {
+            const { res, data } = await jsonPost('/api/lock/recovery/code', { code: codeInput });
+            if (res.ok && data.success && data.resetToken) {
+                resetTokenRef.current = data.resetToken;
+                showSuccess(t('Xác minh thành công'));
+                setTimeout(() => { clearMsg(); setRecoverStep('new-draw'); }, 600);
+            } else if (!applyLockIfAny(data)) {
+                showError(data.error || t('Mã khôi phục không đúng'));
+                setCodeInput('');
             }
         } catch {
-            showError('Lỗi kết nối server. Vui lòng thử lại.');
+            showError(t('Lỗi kết nối server'));
         } finally {
             setIsDisabled(false);
         }
     };
 
-    // ─── VERIFY FLOW ──────────────────────────────────────────────
-
-    const handleVerifyDraw = async (pattern: string) => {
-        if (isDisabled || lockedUntil) return;
+    const submitAnswers = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (answers.some((a) => !a.trim())) { showError(t('Hãy trả lời cả 3 câu')); return; }
         setIsDisabled(true);
         try {
-            const res = await fetch('/api/lock/verify', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ pattern }),
-            });
-            const data = await res.json();
-            if (res.ok && data.success) {
-                showSuccess('✓ Đã mở khóa');
-                setTimeout(() => onUnlock(), 400);
-            } else {
-                const newAttempts = attempts + 1;
-                setAttempts(newAttempts);
-                if (newAttempts >= 5) {
-                    const until = Date.now() + 60000;
-                    setLockedUntil(until);
-                    showError('Đã khóa 60 giây', 60000);
-                } else {
-                    showError(`Sai mật khẩu! Còn ${5 - newAttempts} lần thử`);
-                }
+            const { res, data } = await jsonPost('/api/lock/recovery/questions', { answers });
+            if (res.ok && data.success && data.resetToken) {
+                resetTokenRef.current = data.resetToken;
+                showSuccess(t('Xác minh thành công'));
+                setTimeout(() => { clearMsg(); setRecoverStep('new-draw'); }, 600);
+            } else if (!applyLockIfAny(data)) {
+                showError(data.error || t('Câu trả lời không chính xác'));
+                setAnswers(['', '', '']);
             }
         } catch {
-            showError('Lỗi kết nối server');
-        } finally {
-            setIsDisabled(false);
-        }
-    };
-
-    // ─── RESET (FORGOT) FLOW ──────────────────────────────────────
-
-    const handleResetEmailSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!email.includes('@')) return showError('Địa chỉ email không hợp lệ');
-        const ok = await requestResetOtp(email);
-        if (ok) { setOtp(''); setResetStep('otp-verify'); }
-    };
-
-    const handleResetOtpSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (otp.length !== 6) return showError('Mã phải có đúng 6 chữ số');
-
-        setIsDisabled(true);
-        showInfo('Đang xác thực mã...');
-        try {
-            const res = await fetch('/api/lock/verify-otp', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, otp }),
-            });
-            const data = await res.json();
-            if (res.ok && data.success) {
-                showSuccess('✓ Mã hợp lệ!');
-                setTimeout(() => { clearMsg(); setResetStep('new-draw'); }, 700);
-            } else {
-                showError(data.error || 'Mã không đúng hoặc đã hết hạn');
-            }
-        } catch {
-            showError('Lỗi kết nối server. Vui lòng thử lại.');
+            showError(t('Lỗi kết nối server'));
         } finally {
             setIsDisabled(false);
         }
     };
 
     const handleResetNewPattern1 = (pattern: string) => {
+        if (pattern.length < 4) { showError(t('Mã vẽ phải nối tối thiểu 4 điểm')); return; }
         firstPatternRef.current = pattern;
-        setResetStep('new-confirm');
-        showInfo('Vẽ lại để xác nhận');
+        setRecoverStep('new-confirm');
+        showInfo(t('Xác nhận mã mới'));
     };
 
     const handleResetNewPattern2 = async (pattern: string) => {
         if (pattern !== firstPatternRef.current) {
-            firstPatternRef.current = '';
-            setResetStep('new-draw');
-            showError('Không khớp! Vẽ lại mã mới');
+            showError(t('Hai lần vẽ không khớp. Vẽ lại.'));
+            setRecoverStep('new-draw');
             return;
         }
-
         setIsDisabled(true);
-        showInfo('Đang lưu...');
+        showInfo(t('Đang cập nhật...'));
         try {
-            const res = await fetch('/api/lock/reset-complete', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ pattern, email, otp }),
+            const { res, data } = await jsonPost('/api/lock/reset-complete', {
+                resetToken: resetTokenRef.current,
+                pattern,
             });
-            const data = await res.json();
-            if (res.ok && data.success) {
-                showSuccess('✓ Đổi mật khẩu thành công!');
-                setTimeout(() => onUnlock(), 800);
+            if (res.ok && data.success && data.recoveryCode) {
+                setRecoveryCode(data.recoveryCode);
+                setAfterCodeAction('unlock');
+                setRecoverStep('recovery-code');
+                clearMsg();
             } else {
-                showError(data.error || 'Lỗi khôi phục. Vui lòng thử lại.');
+                showError(data.error || t('Khôi phục thất bại'));
+                setRecoverStep('new-draw');
             }
         } catch {
-            showError('Lỗi kết nối server. Vui lòng thử lại.');
+            showError(t('Lỗi kết nối server'));
+            setRecoverStep('new-draw');
         } finally {
             setIsDisabled(false);
         }
     };
-
-    // ─── ROUTER ───────────────────────────────────────────────────
 
     const onPatternComplete = (pattern: string) => {
         if (mode === 'setup') {
@@ -284,19 +330,10 @@ export default function PatternLockScreen({ isSetupMode, onUnlock, onSetupComple
             else if (setupStep === 'draw-confirm') handleSetupPattern2(pattern);
         } else if (mode === 'verify') {
             handleVerifyDraw(pattern);
-        } else if (mode === 'reset') {
-            if (resetStep === 'new-draw') handleResetNewPattern1(pattern);
-            else if (resetStep === 'new-confirm') handleResetNewPattern2(pattern);
+        } else if (mode === 'recover') {
+            if (recoverStep === 'new-draw') handleResetNewPattern1(pattern);
+            else if (recoverStep === 'new-confirm') handleResetNewPattern2(pattern);
         }
-    };
-
-    const handleForgotClick = () => {
-        setMode('reset');
-        setResetStep('email-entry');
-        setEmail('');
-        setOtp('');
-        setResendCooldown(0);
-        clearMsg();
     };
 
     // ─── RENDERERS ────────────────────────────────────────────────
@@ -310,7 +347,7 @@ export default function PatternLockScreen({ isSetupMode, onUnlock, onSetupComple
         <div className="flex flex-col items-center">
             <div className="h-8 flex items-center justify-center mb-2">
                 <p className={`text-sm font-medium transition-colors ${lockedUntil ? 'text-red-400' : msgColorClass}`}>
-                    {lockedUntil ? `🔒 Khóa ${lockCountdown}s` : customMessage || message}
+                    {lockedUntil ? t('🔒 Khóa {0}s').replace('{0}', String(lockCountdown)) : customMessage || message}
                 </p>
             </div>
             <div className={`${msgType === 'error' ? 'animate-shake' : ''}`} style={{ width: 260, height: 260 }}>
@@ -324,93 +361,176 @@ export default function PatternLockScreen({ isSetupMode, onUnlock, onSetupComple
         </div>
     );
 
-    const renderInput = (
-        title: string,
-        placeholder: string,
-        value: string,
-        onChange: (v: string) => void,
-        onSubmit: (e: React.FormEvent) => void,
-        btnLabel: string,
-        onResend?: () => void,
-        isOtp?: boolean,
-    ) => (
-        <form onSubmit={onSubmit} className="w-full max-w-[260px] flex flex-col items-center">
-            <div className="h-8 flex items-center justify-center mb-2 text-center">
-                <p className={`text-sm font-medium transition-colors ${msgColorClass}`}>{message}</p>
+    const backButton = (onClick: () => void, label = t('Quay lại')) => (
+        <button type="button" onClick={onClick} className="mt-3 text-white/40 text-xs hover:text-white/60 underline">
+            {label}
+        </button>
+    );
+
+    const renderChoose = () => {
+        const none = !hasRecoveryCode && !hasQuestions;
+        return (
+            <div className="w-full max-w-[280px] flex flex-col items-center">
+                <h2 className="text-white text-lg font-semibold mb-1">{t("Khôi phục mật khẩu")}</h2>
+                <p className="text-white/50 text-xs mb-4 text-center">
+                    {none ? t('Thiết bị này chưa cài phương thức khôi phục nào.') : t('Chọn cách xác minh:')}
+                </p>
+
+                {hasRecoveryCode && (
+                    <button
+                        type="button"
+                        onClick={startCodePath}
+                        className="w-full flex items-center gap-3 bg-white/5 hover:bg-white/10 border border-white/15 rounded-xl px-4 py-3 mb-2 text-left transition-colors"
+                    >
+                        <span className="material-icons text-amber-400">vpn_key</span>
+                        <span className="flex-1">
+                            <span className="block text-white text-sm font-medium">{t("Nhập mã khôi phục")}</span>
+                            <span className="block text-white/40 text-[11px]">{t("Không cần mạng")}</span>
+                        </span>
+                        <span className="material-icons text-white/30 text-base">chevron_right</span>
+                    </button>
+                )}
+
+                {hasQuestions && (
+                    <button
+                        type="button"
+                        onClick={startQuestionPath}
+                        className="w-full flex items-center gap-3 bg-white/5 hover:bg-white/10 border border-white/15 rounded-xl px-4 py-3 mb-2 text-left transition-colors"
+                    >
+                        <span className="material-icons text-blue-400">help_outline</span>
+                        <span className="flex-1">
+                            <span className="block text-white text-sm font-medium">{t("Câu hỏi bảo mật")}</span>
+                            <span className="block text-white/40 text-[11px]">{t("Không cần mạng")}</span>
+                        </span>
+                        <span className="material-icons text-white/30 text-base">chevron_right</span>
+                    </button>
+                )}
+
+                {none && (
+                    <p className="text-white/50 text-xs leading-relaxed text-center bg-white/5 rounded-xl px-4 py-3">{t("Liên hệ kỹ thuật để đặt lại tại chỗ trên máy (cần có mặt vật lý).")}</p>
+                )}
+
+                {backButton(() => { setMode('verify'); clearMsg(); })}
             </div>
-            <h2 className="text-white text-lg font-semibold mb-4">{title}</h2>
+        );
+    };
+
+    const renderCodeEntry = () => (
+        <form onSubmit={submitCode} className="w-full max-w-[280px] flex flex-col items-center">
+            <div className="h-8 flex items-center justify-center mb-2 text-center">
+                <p className={`text-sm font-medium ${lockedUntil ? 'text-red-400' : msgColorClass}`}>
+                    {lockedUntil ? t('🔒 Khóa {0}s').replace('{0}', String(lockCountdown)) : message}
+                </p>
+            </div>
+            <h2 className="text-white text-lg font-semibold mb-4">{t("Nhập mã khôi phục")}</h2>
             <input
                 autoFocus
-                type={isOtp ? 'text' : 'email'}
-                inputMode={isOtp ? 'numeric' : undefined}
-                maxLength={isOtp ? 6 : undefined}
-                className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4 transition-all"
-                placeholder={placeholder}
-                value={value}
-                onChange={(e) => onChange(e.target.value)}
-                disabled={isDisabled}
+                type="text"
+                autoComplete="off"
+                spellCheck={false}
+                className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white font-mono tracking-widest text-center uppercase focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
+                placeholder="XXXXX-XXXXX-XXXXX-XXXXX"
+                value={codeInput}
+                onChange={(e) => setCodeInput(e.target.value.toUpperCase())}
+                disabled={isDisabled || !!lockedUntil}
             />
             <button
                 type="submit"
-                disabled={isDisabled}
-                className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold py-3 rounded-xl shadow-lg focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-900 transition-all"
+                disabled={isDisabled || !!lockedUntil}
+                className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold py-3 rounded-xl shadow-lg transition-all"
             >
-                {isDisabled ? 'Đang xử lý...' : btnLabel}
+                {isDisabled ? t('Đang kiểm tra...') : t('Xác nhận')}
             </button>
-            {onResend && (
-                <button
-                    type="button"
-                    onClick={onResend}
-                    disabled={resendCooldown > 0 || isDisabled}
-                    className="mt-3 text-xs disabled:opacity-40 disabled:cursor-default text-blue-400/70 hover:text-blue-300 transition-colors"
-                >
-                    {resendCooldown > 0 ? `Gửi lại sau ${resendCooldown}s` : 'Gửi lại mã'}
-                </button>
-            )}
-            <button
-                type="button"
-                onClick={() => {
-                    if (mode === 'reset') { setMode('verify'); setResendCooldown(0); }
-                    else if (mode === 'setup') { setSetupStep('draw-first'); setResendCooldown(0); }
-                    clearMsg();
-                }}
-                className="mt-3 text-white/40 text-xs hover:text-white/60 underline"
-            >
-                Quay lại
-            </button>
+            {backButton(() => { setRecoverStep('choose'); clearMsg(); })}
         </form>
     );
 
-    let content;
+    const renderQuestionEntry = () => (
+        <form onSubmit={submitAnswers} className="w-full max-w-[280px] flex flex-col items-center">
+            <div className="h-8 flex items-center justify-center mb-2 text-center">
+                <p className={`text-sm font-medium ${lockedUntil ? 'text-red-400' : msgColorClass}`}>
+                    {lockedUntil ? t('🔒 Khóa {0}s').replace('{0}', String(lockCountdown)) : message}
+                </p>
+            </div>
+            <h2 className="text-white text-lg font-semibold mb-4">{t("Câu hỏi bảo mật")}</h2>
+            {questions.map((q, i) => (
+                <div key={q.id} className="w-full mb-3">
+                    <p className="text-white/70 text-xs mb-1.5">{q.text}</p>
+                    <input
+                        type="text"
+                        autoComplete="off"
+                        className="w-full bg-white/10 border border-white/20 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        value={answers[i] ?? ''}
+                        onChange={(e) => setAnswers((prev) => { const n = [...prev]; n[i] = e.target.value; return n; })}
+                        disabled={isDisabled || !!lockedUntil}
+                    />
+                </div>
+            ))}
+            <button
+                type="submit"
+                disabled={isDisabled || !!lockedUntil}
+                className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold py-3 rounded-xl shadow-lg transition-all mt-1"
+            >
+                {isDisabled ? t('Đang kiểm tra...') : t('Xác nhận')}
+            </button>
+            {backButton(() => { setRecoverStep('choose'); clearMsg(); })}
+        </form>
+    );
+
+    let content: React.ReactNode = null;
     if (mode === 'setup') {
-        if (setupStep === 'draw-first') content = renderPattern('Vẽ mã mở khóa mới');
-        else if (setupStep === 'draw-confirm') content = renderPattern('Vẽ lại để xác nhận');
-        else if (setupStep === 'email-entry') content = renderInput('Nhập Gmail bảo mật', 'example@gmail.com', email, setEmail, handleSetupEmailSubmit, 'Gửi mã xác thực');
-        else if (setupStep === 'otp-verify') content = renderInput('Xác thực Gmail', '6 chữ số', otp, setOtp, handleSetupOtpSubmit, 'Hoàn tất thiết lập', () => requestOtp(email), true);
+        if (setupStep === 'draw-first') content = renderPattern(t('Vẽ mã mở khóa mới'));
+        else if (setupStep === 'draw-confirm') content = renderPattern(t('Vẽ lại để xác nhận'));
+        else if (setupStep === 'recovery-code') content = (
+            <RecoveryCodeCard
+                code={recoveryCode}
+                onConfirm={handleRecoveryAcknowledged}
+                confirmLabel={afterCodeAction === 'setup-questions' ? t('Tiếp tục') : t('Vào hệ thống')}
+                intro={afterCodeAction === 'setup-questions'
+                    ? t('Dùng mã này để đặt lại mật khẩu khi không có Internet.')
+                    : t('Thiết bị chưa có mã khôi phục. Đây là mã mới của bạn.')}
+            />
+        );
+        else if (setupStep === 'questions') content = (
+            <div className="w-full max-w-[300px] flex flex-col items-center">
+                <h2 className="text-white text-lg font-semibold mb-1">{t("Câu hỏi bảo mật")}</h2>
+                <p className="text-white/50 text-xs mb-4 text-center leading-relaxed">
+                    {t('Tuỳ chọn — thêm một cách đặt lại mật khẩu khi không có mạng. Bỏ qua thì bạn chỉ còn mã khôi phục.')}
+                </p>
+                <SecurityQuestionsForm
+                    catalog={catalog}
+                    onSubmit={submitQuestions}
+                    onCancel={onSetupComplete}
+                    cancelLabel={t("Bỏ qua")}
+                    submitLabel={t("Lưu & hoàn tất")}
+                    busy={isDisabled}
+                />
+            </div>
+        );
     } else if (mode === 'verify') {
         content = (
             <div className="flex flex-col items-center">
-                {renderPattern('Vẽ hình để mở khóa')}
-                {!lockedUntil && (
-                    <button
-                        onClick={handleForgotClick}
-                        className="mt-6 text-blue-400/80 text-sm hover:text-blue-300 transition-colors underline decoration-blue-400/30 underline-offset-4"
-                    >
-                        Quên mật khẩu?
-                    </button>
-                )}
-                <div className="flex gap-1.5 mt-4">
-                    {Array.from({ length: 5 }).map((_, i) => (
-                        <div key={i} className={`w-2 h-2 rounded-full transition-all ${i < attempts ? 'bg-red-400' : 'bg-white/20'}`} />
-                    ))}
-                </div>
+                {renderPattern(t('Vẽ hình để mở khóa'))}
+                <button
+                    onClick={openRecovery}
+                    className="mt-6 text-blue-400/80 text-sm hover:text-blue-300 transition-colors underline decoration-blue-400/30 underline-offset-4"
+                >{t("Quên mật khẩu?")}</button>
             </div>
         );
-    } else if (mode === 'reset') {
-        if (resetStep === 'email-entry') content = renderInput('Khôi phục mật khẩu', 'Nhập Gmail đã đăng ký', email, setEmail, handleResetEmailSubmit, 'Gửi mã khôi phục');
-        else if (resetStep === 'otp-verify') content = renderInput('Nhập mã xác thực', 'Nhập mã 6 số từ Gmail', otp, setOtp, handleResetOtpSubmit, 'Xác thực mã', () => requestResetOtp(email), true);
-        else if (resetStep === 'new-draw') content = renderPattern('Vẽ mật mã mới');
-        else if (resetStep === 'new-confirm') content = renderPattern('Xác nhận mã mới');
+    } else if (mode === 'recover') {
+        if (recoverStep === 'choose') content = renderChoose();
+        else if (recoverStep === 'code') content = renderCodeEntry();
+        else if (recoverStep === 'questions') content = renderQuestionEntry();
+        else if (recoverStep === 'new-draw') content = renderPattern(t('Vẽ mật mã mới'));
+        else if (recoverStep === 'new-confirm') content = renderPattern(t('Xác nhận mã mới'));
+        else if (recoverStep === 'recovery-code') content = (
+            <RecoveryCodeCard
+                code={recoveryCode}
+                onConfirm={onUnlock}
+                confirmLabel={t("Vào hệ thống")}
+                intro={t("Mã khôi phục cũ đã hết hiệu lực. Đây là mã mới — hãy lưu lại.")}
+            />
+        );
     }
 
     return (
@@ -427,7 +547,7 @@ export default function PatternLockScreen({ isSetupMode, onUnlock, onSetupComple
                     </div>
                     <h1 className="text-white text-xl font-bold tracking-wide">NVR AI View</h1>
                     <p className="text-white/50 text-xs mt-1 tracking-widest uppercase">
-                        {mode === 'setup' ? 'Thiết lập bảo mật' : mode === 'reset' ? 'Khôi phục mật khẩu' : 'Xác thực hệ thống'}
+                        {mode === 'setup' ? t('Thiết lập bảo mật') : mode === 'recover' ? t('Khôi phục mật khẩu') : t('Xác thực hệ thống')}
                     </p>
                 </div>
 
@@ -437,7 +557,7 @@ export default function PatternLockScreen({ isSetupMode, onUnlock, onSetupComple
                     NVR v2.1 • Secured with AI View
                 </p>
             </div>
-            <p className="absolute bottom-4 text-white/20 text-xs">Phát triển bởi AI View Team</p>
+            <p className="absolute bottom-4 text-white/20 text-xs">{t("Phát triển bởi AI View Team")}</p>
         </div>
     );
 }

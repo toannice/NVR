@@ -1,0 +1,18 @@
+{
+  "DOC_TITLE_VERSION": "Changelog &\nRelease Notes",
+  "TEMPLATE_VERSION": "1.0.0.3",
+  "TEMPLATE_DATE": "15/07/2026",
+  "DOC_TITLE": "Changelog & Release Notes — AIView NVR",
+  "DOC_NUMBER": "V1.0.0.3",
+  "UNIT": "Bộ phận AI View - Công ty Cổ phần Bkav AI",
+  "DATE_WRITTEN": "15/07/2026",
+  "DATE_ISSUED": "15/07/2026",
+  "PREPARED_BY": "Bkav AIView Team",
+  "AUTHORS": "ToanHM",
+  "APPROVER": "HaDM",
+  "DOC_VERSION": "1.0.0.3",
+  "INITIAL_DESCRIPTION": "Changelog AIView NVR từ v1.0.0.0 đến v1.0.0.3",
+  "HISTORY": [
+    {"version": "1.0.0.0", "date": "17/06/2026", "authors": "ToanHM", "approver": "HaDM", "description": "Khởi tạo changelog (release đầu tiên)"}
+  ]
+}

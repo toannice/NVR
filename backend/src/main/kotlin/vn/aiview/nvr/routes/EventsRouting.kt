@@ -17,6 +17,7 @@ import org.jetbrains.exposed.sql.transactions.transaction
 import vn.aiview.nvr.models.AIEvents
 import vn.aiview.nvr.models.Cameras
 import vn.aiview.nvr.services.AppSettingsService
+import vn.aiview.nvr.services.BoxCalibrationService
 import vn.aiview.nvr.services.EventClipService
 import vn.aiview.nvr.services.IntegrationService
 import vn.aiview.nvr.services.PlaybackService
@@ -112,6 +113,8 @@ fun Route.pushEventRouting() {
                         it[id] = eventId
                         it[cameraSlug] = slug
                         it[AIEvents.label] = label
+                        it[AIEvents.aiType] = req.ai_type.takeIf { it.isNotBlank() }
+                        it[AIEvents.objectType] = req.objects.firstOrNull()?.name?.takeIf { it.isNotBlank() }
                         it[AIEvents.score] = score
                         it[startTime] = tsSec - EventClipService.PRE_SEC
                         it[endTime] = tsSec + EventClipService.POST_SEC
@@ -150,6 +153,13 @@ private data class EventView(
     val camera: String,
     val camera_name: String,
     val label: String,
+    val ai_type: String?,
+    val object_type: String?,
+    val extra: String?,
+    val box_x: Double?,
+    val box_y: Double?,
+    val box_w: Double?,
+    val box_h: Double?,
     val score: Double?,
     val start_time: Long,
     val end_time: Long?,
@@ -183,20 +193,40 @@ fun Route.eventsRouting() {
         }
     }
 
+    // Ô cấu hình chỉnh lại khoanh vùng AI khi lệch (xem BoxCalibrationService).
+    route("/api/events/box-calibration/{slug}") {
+        get {
+            val slug = call.parameters["slug"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+            call.respond(BoxCalibrationService.get(slug))
+        }
+        put {
+            val slug = call.parameters["slug"] ?: return@put call.respond(HttpStatusCode.BadRequest)
+            val body = try { call.receive<BoxCalibrationService.BoxCalibration>() } catch (_: Exception) {
+                return@put call.respond(HttpStatusCode.BadRequest, PushErrorResponse("BAD_REQUEST", "Yêu cầu không hợp lệ."))
+            }
+            BoxCalibrationService.set(slug, body)
+            call.respond(body)
+        }
+    }
+
     // Event list from the ai_events table (unlike the legacy Frigate-only list).
     get("/api/events") {
         val sourceParam = call.request.queryParameters["source"]?.takeIf { it.isNotBlank() }
         val cameraParam = call.request.queryParameters["camera"]?.takeIf { it.isNotBlank() }
+        val aiTypeParam = call.request.queryParameters["ai_type"]?.takeIf { it.isNotBlank() }
         val after = call.request.queryParameters["after"]?.toLongOrNull()   // epoch sec
         val before = call.request.queryParameters["before"]?.toLongOrNull() // epoch sec
         val limit = (call.request.queryParameters["limit"]?.toIntOrNull() ?: 100).coerceIn(1, 500)
 
         // View filter (client-controlled): ?source=all → no filter, ?source=box|frigate → that source.
         // If the caller sends nothing, fall back to the 5B server mode (box-only) or show everything.
-        val effectiveSource = when {
+        // "box" là NHÓM "Bkav AI View" trên giao diện: gộp AiView Box (box) và camera Bkav tự nhận
+        // diện rồi đẩy về (bkav) — cùng một hệ sinh thái, người dùng không cần phân biệt.
+        val effectiveSources: List<String>? = when {
             sourceParam == "all" -> null
-            sourceParam != null -> sourceParam
-            AppSettingsService.isBoxOnly() -> "box"
+            sourceParam == "box" -> listOf("box", SOURCE_BKAV)
+            sourceParam != null -> listOf(sourceParam)
+            AppSettingsService.isBoxOnly() -> listOf("box", SOURCE_BKAV)
             else -> null
         }
 
@@ -206,8 +236,9 @@ fun Route.eventsRouting() {
 
         val rows = transaction {
             var q = AIEvents.selectAll()
-            effectiveSource?.let { s -> q = q.andWhere { AIEvents.eventSource eq s } }
+            effectiveSources?.let { list -> q = q.andWhere { AIEvents.eventSource inList list } }
             cameraParam?.let { c -> q = q.andWhere { AIEvents.cameraSlug eq c } }
+            aiTypeParam?.let { t -> q = q.andWhere { AIEvents.aiType eq t } }
             after?.let { a -> q = q.andWhere { AIEvents.startTime greaterEq a } }
             before?.let { b -> q = q.andWhere { AIEvents.startTime lessEq b } }
             q.orderBy(AIEvents.startTime, SortOrder.DESC).limit(limit).map { r ->
@@ -228,6 +259,13 @@ fun Route.eventsRouting() {
                     camera = slug,
                     camera_name = nameBySlug[slug] ?: slug,
                     label = r[AIEvents.label],
+                    ai_type = r[AIEvents.aiType],
+                    object_type = r[AIEvents.objectType],
+                    extra = r[AIEvents.extra],
+                    box_x = r[AIEvents.boxX],
+                    box_y = r[AIEvents.boxY],
+                    box_w = r[AIEvents.boxW],
+                    box_h = r[AIEvents.boxH],
                     score = r[AIEvents.score],
                     start_time = r[AIEvents.startTime],
                     end_time = r[AIEvents.endTime],

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import Hls from 'hls.js'
 import { Icon } from './Icon'
 import { PlaybackSidebar, PlaybackRightPanel } from './PlaybackPanels'
+import { t, locale } from '../i18n';
 
 // --- Moved HLS and Video State into PlaybackView to fix tab-switching black screen --- //
 export const PlaybackView = ({
@@ -157,6 +158,13 @@ export const PlaybackView = ({
       }
     }
   }, [playbackRate]);
+
+  // Seek current clip forward/backward by a fixed offset (seconds), clamped to clip bounds
+  const seekBy = (delta: number) => {
+    const video = videoRef.current;
+    if (!video || isNaN(video.duration)) return;
+    video.currentTime = Math.min(Math.max(0, video.currentTime + delta), video.duration);
+  };
 
   // --- Zoom & Pan Handlers ---
   const handleWheel = (e: React.WheelEvent) => {
@@ -353,15 +361,33 @@ export const PlaybackView = ({
     // View covers [viewOffset, viewOffset + zoomLevel]
     const clickedHour = viewOffset + (ratio * zoomLevel);
     const dayStart = new Date(timelineDate + 'T00:00:00').getTime() / 1000;
-    const clickTime = dayStart + (clickedHour * 3600);
+    let clickTime = dayStart + (clickedHour * 3600);
+
+    // Check if inside a segment
+    let hitSegment = recordings.find((r: any) => clickTime >= r.start_time && clickTime <= r.end_time);
+
+    // Bấm vào vùng xám (không có bản ghi): trước đây nhảy về currentTime = 0 của playlist
+    // đang tải — playhead đỏ thì đứng ở chỗ vừa bấm còn video lại phát ở chỗ khác, nhìn
+    // như tua hỏng. Giờ nhích sang đoạn ghi GẦN NHẤT và nói rõ đã làm gì.
+    if (!hitSegment) {
+      if (!recordings || recordings.length === 0) {
+        addToast?.({ type: 'info', title: t('Không có bản ghi'), message: t('Ngày này chưa có dữ liệu ghi hình cho camera đã chọn.') });
+        return;
+      }
+      const nearest = recordings.reduce((best: any, r: any) => {
+        const d = clickTime < r.start_time ? r.start_time - clickTime : clickTime - r.end_time;
+        return !best || d < best.d ? { seg: r, d } : best;
+      }, null as any);
+      hitSegment = nearest.seg;
+      clickTime = clickTime < nearest.seg.start_time ? nearest.seg.start_time : nearest.seg.end_time - 1;
+      const hhmm = new Date(clickTime * 1000).toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit' });
+      addToast?.({ type: 'info', title: t('Chỗ này không có bản ghi'), message: t('Đã chuyển tới đoạn ghi gần nhất lúc {0}.').replace('{0}', hhmm) });
+    }
 
     // Update Playback immediately
     setCurrentPlaybackTime(clickTime);
 
-    // Check if inside a segment
-    const hitSegment = recordings.find((r: any) => clickTime >= r.start_time && clickTime <= r.end_time);
-
-    if (hitSegment) {
+    {
       // Check if clickTime is inside valid VOD window
       if (vodWindow && clickTime >= vodWindow.start && clickTime <= vodWindow.end) {
         // Inside window: Just seek
@@ -416,15 +442,19 @@ export const PlaybackView = ({
         (window as any).pendingSeekTime = clickTime;
 
       }
-    } else {
-      // Grey area click -> Jump to start of day or nearest future segment?
-      // User: "chạy về đầu lúc có video của ngày hôm đó" (Jump to start of day's video)
-      if (recordings.length > 0) {
-        // Seek to 0 (beginning of playlist) which corresponds to first segment start
-        videoRef.current.currentTime = 0;
-        videoRef.current.play().catch(() => { });
-      }
     }
+  };
+
+  // Con trỏ phải cho biết chỗ đang rê có bản ghi hay không — trước đây cả thanh đều
+  // là cursor-pointer nên không phân biệt được "không có video" với "tua hỏng".
+  const [hoverHasRecording, setHoverHasRecording] = useState(true);
+  const updateHoverState = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!recordings || recordings.length === 0) { setHoverHasRecording(false); return; }
+    const rect = e.currentTarget.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const dayStart = new Date(timelineDate + 'T00:00:00').getTime() / 1000;
+    const tSec = dayStart + ((viewOffset + ratio * zoomLevel) * 3600);
+    setHoverHasRecording(recordings.some((r: any) => tSec >= r.start_time && tSec <= r.end_time));
   };
 
   const captureScreenshot = async () => {
@@ -459,8 +489,8 @@ export const PlaybackView = ({
         // Only show success if fetch actually succeeded
         addToast({
           type: 'success',
-          title: 'Chụp ảnh thành công',
-          message: `Ảnh đã được lưu vào thư viện với tên "${filename}".`
+          title: t('Chụp ảnh thành công'),
+          message: t('Ảnh đã được lưu vào thư viện với tên "{0}".').replace('{0}', filename)
         });
       } else {
         const errorData = await response.json().catch(() => ({}));
@@ -470,8 +500,8 @@ export const PlaybackView = ({
       console.error('Screenshot failed:', err);
       addToast({
         type: 'error',
-        title: 'Lỗi chụp ảnh',
-        message: err.message || 'Không thể lưu hình ảnh vào hệ thống.'
+        title: t('Lỗi chụp ảnh'),
+        message: err.message || t('Không thể lưu hình ảnh vào hệ thống.')
       });
     }
   };
@@ -574,7 +604,7 @@ export const PlaybackView = ({
               style={{ cursor: transform.scale > 1 ? 'grab' : 'zoom-in' }}
             >
               <div className="absolute top-2 right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button onClick={() => setVideoUrl('')} className="bg-black/60 text-white p-2 rounded-full hover:bg-red-500 transition-colors" title="Đóng">
+                <button onClick={() => setVideoUrl('')} className="bg-black/60 text-white p-2 rounded-full hover:bg-red-500 transition-colors" title={t("Đóng")}>
                   <Icon name="close" className="text-sm" />
                 </button>
               </div>
@@ -620,7 +650,7 @@ export const PlaybackView = ({
           ) : (
             <div className="flex flex-col items-center justify-center text-gray-500">
               <Icon name="videocam_off" className="text-4xl mb-2" />
-              <span className="text-sm">Chọn camera để xem lại</span>
+              <span className="text-sm">{t("Chọn camera để xem lại")}</span>
             </div>
           )}
           {playbackCam && (
@@ -644,9 +674,26 @@ export const PlaybackView = ({
                   }
                 }}
                 className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded text-gray-600 dark:text-gray-300"
-                title={isPlaying ? "Tạm dừng" : "Phát"}
+                title={isPlaying ? t("Tạm dừng") : t("Phát")}
               >
                 <Icon name={isPlaying ? "pause" : "play_arrow"} />
+              </button>
+
+              <button
+                onClick={() => seekBy(-10)}
+                className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded text-gray-600 dark:text-gray-300"
+                title={t("Lùi 10 giây")}
+                disabled={!videoUrl}
+              >
+                <Icon name="replay_10" />
+              </button>
+              <button
+                onClick={() => seekBy(10)}
+                className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded text-gray-600 dark:text-gray-300"
+                title={t("Tiến 10 giây")}
+                disabled={!videoUrl}
+              >
+                <Icon name="forward_10" />
               </button>
 
               <div className="h-6 w-px bg-gray-300 dark:bg-gray-600 mx-2"></div>
@@ -673,7 +720,7 @@ export const PlaybackView = ({
               <button
                 onClick={captureScreenshot}
                 className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded text-gray-600 dark:text-gray-300"
-                title="Chụp ảnh"
+                title={t("Chụp ảnh")}
                 disabled={!videoUrl}
               >
                 <Icon name="camera_alt" />
@@ -684,7 +731,7 @@ export const PlaybackView = ({
                   setTransform(prev => ({ ...prev, scale: newScale }));
                 }}
                 className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded text-gray-600 dark:text-gray-300"
-                title="Zoom video (lăn chuột để zoom)"
+                title={t("Zoom video (lăn chuột để zoom)")}
                 disabled={!videoUrl}
               >
                 <Icon name="zoom_in" />
@@ -711,7 +758,7 @@ export const PlaybackView = ({
                 {(() => {
                   if (currentPlaybackTime <= 0) return "--:--:--";
                   const date = new Date(currentPlaybackTime * 1000);
-                  return date.toLocaleTimeString('vi-VN', { hour12: false });
+                  return date.toLocaleTimeString(locale(), { hour12: false });
                 })()}
               </div>
 
@@ -728,15 +775,16 @@ export const PlaybackView = ({
 
           {/* Timeline Area */}
           <div
-            className="flex-1 relative overflow-hidden bg-gray-900 select-none cursor-pointer group"
+            className={`flex-1 relative overflow-hidden bg-gray-900 select-none group ${hoverHasRecording ? 'cursor-pointer' : 'cursor-not-allowed'}`}
             ref={timelineRef}
             onWheel={handleWheel}
             onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
+            onMouseMove={e => { handleMouseMove(e); updateHoverState(e); }}
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
             onClick={handleTimelineClick}
-            title="Lăn chuột để Zoom, Kéo để di chuyển"
+            /* Giữ nguyên chuỗi title: bộ test e2e dò thanh timeline bằng đúng chuỗi này. */
+            title={t("Lăn chuột để Zoom, Kéo để di chuyển")}
           >
             {/* Center Line (Playhead) - Fixed at 50% */}
             <div className="absolute top-0 bottom-0 left-1/2 w-0.5 bg-red-500 z-50 transform -translate-x-1/2 pointer-events-none">
@@ -774,7 +822,7 @@ export const PlaybackView = ({
             </div>
 
             {/* Loading State */}
-            {isLoadingRecordings && <div className="absolute inset-0 flex items-center justify-center text-xs text-white/50 z-20">Đang tải bản ghi...</div>}
+            {isLoadingRecordings && <div className="absolute inset-0 flex items-center justify-center text-xs text-white/50 z-20">{t("Đang tải bản ghi...")}</div>}
 
             {/* Timeline Data */}
             <div className="absolute top-8 left-0 right-0 h-16 flex items-center w-full">
@@ -817,7 +865,7 @@ export const PlaybackView = ({
 
           {/* Legend */}
           <div className="h-8 bg-white dark:bg-[#1F2937] border-t border-gray-200 dark:border-gray-700 flex items-center px-4 text-xs gap-4">
-            <div className="flex items-center gap-1"><span className="font-bold text-gray-500">HD:</span> <span className="text-gray-400">Lăn chuột để Zoom • Kéo để di chuyển • Click để xem</span></div>
+            <div className="flex items-center gap-1"><span className="font-bold text-gray-500">HD:</span> <span className="text-gray-400">{t("Lăn chuột để Zoom • Kéo để di chuyển • Click để xem")}</span></div>
           </div>
         </div>
       </section>

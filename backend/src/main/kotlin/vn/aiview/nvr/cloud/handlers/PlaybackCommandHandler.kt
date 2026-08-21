@@ -92,12 +92,19 @@ object PlaybackCommandHandler {
 
     private fun getRecordingJob(data: JsonObject): JsonObject {
         AppLogger.info(AppLogger.Module.SYSTEM, "PLAYBACK", "GET_RECORDING_JOB", "data=$data")
-        // Return a placeholder job — Frigate always records based on its config.
+        // B01 contract: cloud reads `jobItems[]` with {jobToken, mode, profileToken}; mode is the
+        // ONVIF enum ("Active"/"Idle"), NOT a Frigate word. The cloud needs an Active job on a
+        // profile before it treats that channel as having a playback timeline.
+        // Frigate records the MAIN stream only → main=Active, sub=Idle.
+        val jobs = PlaybackService.listRecordingJobs()
         return CommandDispatcher.successResponse(buildJsonObject {
-            putJsonArray("recordingjobs") {
-                addJsonObject {
-                    put("token", "job_default")
-                    put("mode", "Continuous")
+            putJsonArray("jobItems") {
+                jobs.forEach { job ->
+                    addJsonObject {
+                        put("jobToken", job.jobToken)
+                        put("mode", job.mode)
+                        put("profileToken", job.profileToken)
+                    }
                 }
             }
         })
@@ -107,12 +114,24 @@ object PlaybackCommandHandler {
 
     private fun searchCalendar(data: JsonObject): JsonObject {
         val channelId = resolveChannelId(data)
+        val sourceToken = data["sourceToken"]?.jsonPrimitive?.contentOrNull
+            ?: data["channel_id"]?.jsonPrimitive?.contentOrNull ?: ""
+        val timeRange = data["timeRange"]?.jsonObject
+        val startMs = timeRange?.get("startTime")?.jsonPrimitive?.doubleOrNull?.toLong() ?: 0L
+        val endMs = timeRange?.get("endTime")?.jsonPrimitive?.doubleOrNull?.toLong() ?: 0L
+        val offsetMs = data["offset"]?.jsonPrimitive?.doubleOrNull?.toLong()
+            ?: PlaybackService.defaultOffsetMs()
         AppLogger.info(AppLogger.Module.SYSTEM, "PLAYBACK", "SEARCH_CALENDAR_REQ",
-            "channelId=$channelId")
-        val dates = PlaybackService.getCalendar(channelId)
+            "channelId=$channelId offset=$offsetMs range=[$startMs,$endMs]")
+        val dates = PlaybackService.getCalendar(channelId, offsetMs, startMs, endMs)
         AppLogger.info(AppLogger.Module.SYSTEM, "PLAYBACK", "SEARCH_CALENDAR_OK",
             "channelId=$channelId dates=$dates")
         return CommandDispatcher.successResponse(buildJsonObject {
+            // B01 contract: the cloud reads `calendar` (+ echoed sourceToken) to learn which days
+            // have footage, then auto-loads that day's recordings and starts at the first one.
+            // `dates` kept for older/local callers.
+            put("sourceToken", sourceToken)
+            putJsonArray("calendar") { dates.forEach { add(JsonPrimitive(it)) } }
             putJsonArray("dates") { dates.forEach { add(JsonPrimitive(it)) } }
         })
     }

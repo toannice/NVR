@@ -74,13 +74,51 @@ object PlaybackService {
         null
     }
 
+    // ── Recording jobs ─────────────────────────────────────────────────────────
+
+    data class RecordingJob(val jobToken: String, val mode: String, val profileToken: String)
+
+    /**
+     * One recording job per media profile, B01-style. Frigate records the MAIN stream of every
+     * configured camera continuously, so main profiles are "Active" and sub profiles "Idle".
+     */
+    fun listRecordingJobs(): List<RecordingJob> = try {
+        transaction {
+            Cameras.selectAll().mapNotNull { row ->
+                val chId = row[Cameras.channelId] ?: return@mapNotNull null
+                val main = row[Cameras.mainToken].takeIf { it.isNotBlank() }
+                val sub = row[Cameras.subToken].takeIf { it.isNotBlank() }
+                listOfNotNull(
+                    main?.let { RecordingJob("RecordingJob_${chId}01", "Active", it) },
+                    sub?.let { RecordingJob("RecordingJob_${chId}02", "Idle", it) },
+                )
+            }.flatten()
+        }
+    } catch (e: Exception) {
+        AppLogger.warn(AppLogger.Module.SYSTEM, "PLAYBACK", "RECORDING_JOBS_FAIL", e.message ?: "")
+        emptyList()
+    }
+
     // ── Calendar ───────────────────────────────────────────────────────────────
 
     /**
      * Return list of dates (YYYY-MM-DD) that have recordings for a given camera channel.
      * If channelId is null, returns dates that have recordings for ANY camera.
+     *
+     * Recording dirs on disk are UTC (`YYYY-MM-DD/HH/{slug}/MM.SS.mp4`) but the cloud UI shows
+     * the operator's LOCAL calendar, so every hour bucket is shifted by [offsetMs] (the cloud
+     * sends its tz offset in ms; defaults to the device tz) before the date is taken. Without
+     * this, recordings between 00:00 and 07:00 local land on the previous day's calendar entry.
+     *
+     * [startMs]/[endMs] (epoch ms, already local-agnostic) narrow the range when the cloud asks
+     * for a window; 0 means "unbounded".
      */
-    fun getCalendar(channelId: String?): List<String> {
+    fun getCalendar(
+        channelId: String?,
+        offsetMs: Long = defaultOffsetMs(),
+        startMs: Long = 0L,
+        endMs: Long = 0L,
+    ): List<String> {
         return try {
             val slug = channelId?.let {
                 channelToSlug(it) ?: run {
@@ -100,23 +138,43 @@ object PlaybackService {
             root.listFiles()
                 ?.filter { it.isDirectory && it.name.matches(Regex("\\d{4}-\\d{2}-\\d{2}")) }
                 ?.forEach { dateDir ->
-                    val hasRecording = if (slug != null) {
-                        dateDir.walkTopDown().any { it.isDirectory && it.name == slug }
-                    } else {
-                        dateDir.walkTopDown().any { it.extension == "mp4" }
-                    }
-                    if (hasRecording) dates.add(dateDir.name)
+                    dateDir.listFiles()
+                        ?.filter { it.isDirectory && it.name.matches(Regex("\\d{2}")) }
+                        ?.forEach { hourDir ->
+                            val hasRecording = if (slug != null) {
+                                File(hourDir, slug).listFiles { f -> f.extension == "mp4" }
+                                    ?.isNotEmpty() == true
+                            } else {
+                                hourDir.walkTopDown().any { it.extension == "mp4" }
+                            }
+                            if (!hasRecording) return@forEach
+                            val hourStartSec = mp4ToEpochSec(dateDir.name, hourDir.name, "00.00")
+                                ?: return@forEach
+                            val hourMs = hourStartSec * 1000L
+                            // Keep the hour if it can overlap the requested window at all.
+                            if (startMs > 0 && hourMs + 3_600_000L <= startMs) return@forEach
+                            if (endMs > 0 && hourMs > endMs) return@forEach
+                            dates.add(localDate(hourMs, offsetMs))
+                        }
                 }
 
             val sorted = dates.sorted().reversed()
             AppLogger.info(AppLogger.Module.SYSTEM, "PLAYBACK", "CALENDAR_OK",
-                "channelId=$channelId slug=$slug dates=${sorted.size}")
+                "channelId=$channelId slug=$slug offsetMs=$offsetMs dates=${sorted.size}")
             sorted
         } catch (e: Exception) {
             AppLogger.warn(AppLogger.Module.SYSTEM, "PLAYBACK", "CALENDAR_FAIL", e.message ?: "")
             emptyList()
         }
     }
+
+    /** Device timezone offset in ms — fallback when the cloud omits `offset`. */
+    fun defaultOffsetMs(): Long =
+        java.time.ZoneId.systemDefault().rules.getOffset(Instant.now()).totalSeconds * 1000L
+
+    /** epoch ms + tz offset → "YYYY-MM-DD" (the date the operator sees). */
+    private fun localDate(epochMs: Long, offsetMs: Long): String =
+        Instant.ofEpochMilli(epochMs + offsetMs).atZone(ZoneOffset.UTC).toLocalDate().toString()
 
     // ── Recording search ───────────────────────────────────────────────────────
 

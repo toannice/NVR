@@ -3,6 +3,7 @@ import { PtzControls } from './PtzControls'
 import BoundingBoxCanvas from './BoundingBoxCanvas'
 import LiveCamera from './LiveCamera'
 import customLogo from '../assets/aicam-logo-white1.png'
+import { t } from '../i18n';
 
 // ============================================
 // LIVE CAMERA WITH HLS STREAMING
@@ -53,7 +54,7 @@ export const CameraGridItem = ({
       {!cam.isOnline && (
         <div className="absolute inset-0 bg-black flex flex-col items-center justify-center z-10">
           <Icon name="videocam_off" className="text-gray-500 text-4xl mb-2" />
-          <span className="text-gray-400 text-sm font-medium">Mất kết nối</span>
+          <span className="text-gray-400 text-sm font-medium">{t("Mất kết nối")}</span>
         </div>
       )}
 
@@ -73,14 +74,14 @@ export const CameraGridItem = ({
         <button
           onClick={(e) => { e.stopPropagation(); setFullscreenCamId(fullscreenCamId ? null : cam.id); }}
           className="bg-black/60 text-white p-1 rounded hover:bg-black/80"
-          title={fullscreenCamId ? "Thu nhỏ" : "Phóng to"}
+          title={fullscreenCamId ? t("Thu nhỏ") : t("Phóng to")}
         >
           <Icon name={fullscreenCamId ? "fullscreen_exit" : "fullscreen"} className="text-sm" />
         </button>
         <button
           onClick={(e) => { e.stopPropagation(); toggleCamera(cam.id); }}
           className={`bg-black/60 text-white p-1 rounded hover:bg-black/80 hover:text-red-400 ${fullscreenCamId ? 'hidden' : ''}`}
-          title="Đóng camera"
+          title={t("Đóng camera")}
         >
           <Icon name="close" className="text-sm" />
         </button>

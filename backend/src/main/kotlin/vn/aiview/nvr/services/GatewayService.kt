@@ -37,6 +37,7 @@ data class GatewayDto(
     val cameraCount: Int,
     val certExpiry: String? = null,    // Nebula cert NotAfter (RFC3339), null on ZeroTier/unknown
     val certDaysLeft: Long? = null,    // days until cert expiry, null if unknown
+    val renewFails: Int = 0,           // consecutive failed cert renews reported by the agent
     val health: String = "offline",    // online | degraded (cert<30d) | offline — for the tab + alerts
 )
 
@@ -107,6 +108,7 @@ object GatewayService {
                     it[Gateways.installer] = h.installer.ifBlank { null }
                     it[Gateways.location] = h.location.ifBlank { null }
                     it[Gateways.certExpiry] = h.certExpiry.ifBlank { null }
+                    it[Gateways.renewFails] = h.renewFails
                     it[Gateways.lastSeen] = LocalDateTime.now()
                 }
                 AppLogger.info(AppLogger.Module.SYSTEM, "GATEWAY", if (autoApproved) "DISCOVERED_AUTOAPPROVED" else "DISCOVERED", "id=${h.gatewayId} ip=$ip name=${h.gatewayName}")
@@ -120,6 +122,7 @@ object GatewayService {
                     if (h.installer.isNotBlank()) it[Gateways.installer] = h.installer
                     if (h.location.isNotBlank()) it[Gateways.location] = h.location
                     if (h.certExpiry.isNotBlank()) it[Gateways.certExpiry] = h.certExpiry
+                    it[Gateways.renewFails] = h.renewFails
                     it[Gateways.lastSeen] = LocalDateTime.now()
                     it[Gateways.updatedAt] = LocalDateTime.now()
                 }
@@ -154,6 +157,7 @@ object GatewayService {
                 cameraCount = counts[id] ?: 0,
                 certExpiry = certExpiry,
                 certDaysLeft = daysLeft,
+                renewFails = row[Gateways.renewFails],
                 health = if (status == STATUS_REVOKED) STATUS_REVOKED else healthOf(online, daysLeft),
             )
         }

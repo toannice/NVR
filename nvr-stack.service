@@ -7,9 +7,17 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=/home/toan/my-nvr
+WorkingDirectory=/home/toan/toanDoc/Documents/my-nvr
+Environment=NVR_INSTALL_DIR=/home/toan/toanDoc/Documents/my-nvr
 # Đợi network ổn định 10 giây trước khi cho Docker bật các container
 ExecStartPre=/bin/sleep 10
+# Đồng bộ FRIGATE_HOST_IP với IP LAN hiện tại TRƯỚC khi up.
+# Vì sao: compose publish cổng restream theo ${FRIGATE_HOST_IP}. Máy đổi mạng/đổi IP
+# mà .env còn IP cũ thì docker không bind được ("cannot assign requested address") và
+# frigate không khởi động nổi — mất cả live view lẫn ghi hình, dù container khác vẫn
+# healthy. Đã xảy ra thật 15-08-2026 (boot 09:34 fail 09:35).
+# Tiền tố "-": guard hỏng thì vẫn cho stack lên với IP cũ, còn hơn không lên gì.
+ExecStartPre=-/home/toan/toanDoc/Documents/my-nvr/scripts/nvr-ip-guard.sh --env-only
 ExecStart=/usr/bin/docker compose up -d
 ExecStop=/usr/bin/docker compose down
 TimeoutStartSec=600

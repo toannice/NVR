@@ -19,8 +19,16 @@ fun main() {
     AppLogger.info(AppLogger.Module.SYSTEM, "CORE", "SYSTEM_START", "Starting NVR Wrapper | Mode: Normal")
 
     val port = System.getenv("PORT")?.toIntOrNull() ?: 3000
-    
-    embeddedServer(Netty, port = port, host = "0.0.0.0", module = Application::module)
+
+    // Bind loopback by default. The container runs with network_mode: host, so binding
+    // 0.0.0.0 published the whole API straight onto the LAN and let anyone skip nginx
+    // (and TLS) with http://<ip>:3000. nginx, dc-bridge and the watchdog all reach us
+    // over 127.0.0.1, so nothing legitimate needs the wildcard.
+    // Set BIND_HOST=0.0.0.0 only for a deliberate, temporary debug session.
+    val bindHost = System.getenv("BIND_HOST")?.takeIf { it.isNotBlank() } ?: "127.0.0.1"
+    AppLogger.info(AppLogger.Module.SYSTEM, "CORE", "SYSTEM_START", "HTTP listening on $bindHost:$port")
+
+    embeddedServer(Netty, port = port, host = bindHost, module = Application::module)
         .start(wait = true)
 }
 

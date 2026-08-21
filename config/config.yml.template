@@ -1,0 +1,39 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Frigate config — BASELINE SẠCH cho máy mới (không camera, không thông tin nội bộ).
+#
+# package.sh đóng gói FILE NÀY vào bundle, KHÔNG dùng config/config.yml của máy dev
+# (file đó chứa IP + mật khẩu camera văn phòng, TURN credential và IP overlay).
+#
+# Trên máy đích, deploy-offline.sh copy nó thành config/config.yml. Camera được thêm
+# qua Web UI; backend tự ghi lại file này (CameraService.writeYaml).
+# ──────────────────────────────────────────────────────────────────────────────
+mqtt:
+  host: mosquitto
+  port: 1883
+  user: '{FRIGATE_MQTT_USER}'
+  password: '{FRIGATE_MQTT_PASSWORD}'
+
+record:
+  enabled: true
+  retain:
+    days: 7
+    mode: motion
+
+detect:
+  enabled: true
+
+version: 0.16-0
+
+# KHÔNG đặt hwaccel toàn cục ở đây: preset-intel-qsv-h264 làm Frigate crash trên máy
+# không có iGPU Intel. deploy-offline.sh tự dò /dev/dri/renderD128 và bật khi hợp lệ.
+ffmpeg: {}
+
+cameras: {}
+
+go2rtc:
+  streams: {}
+  webrtc:
+    # Điền lúc chạy: candidates theo FRIGATE_HOST_IP, ice_servers do CloudService lấy về
+    # khi bật kết nối cloud. Để trống nghĩa là chỉ xem LAN — đúng cho máy standalone.
+    candidates: []
+    ice_servers: []

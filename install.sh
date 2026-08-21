@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────────
-# install.sh — one-command PRODUCTION bring-up on a fresh machine.
+# install.sh — one-command bring-up on a fresh machine, FROM SOURCE.
 #
-# Pulls the nvr-wrapper image from GHCR (does NOT build from source — that's the
-# dev path, ./run.sh). Idempotent: safe to re-run. It fills every gap that stops a
-# clean `git clone` from starting:
+# Builds nvr-wrapper locally from this working tree. No container registry is
+# involved: no GHCR, no docker login, no GitHub token anywhere on the machine.
+# Idempotent: safe to re-run. It fills every gap that stops a clean tree from
+# starting:
 #   1. installs Docker if missing
-#   2. .env  from .env.template (+ prompts for the REQUIRED values)
+#   2. .env  from .env.template (+ validates the REQUIRED values)
 #   3. self-signed TLS cert  (nginx/server.{crt,key})  if missing
 #   4. Docker secret files    (secrets/*)               if missing
-#   5. `docker login ghcr.io`  (fails fast on a bad token)
-#   6. docker compose pull && up   (+ nginx, which doesn't auto-start)
+#   5. docker compose build && up   (+ nginx, which doesn't auto-start)
 #
-# Dev machines that want to build locally use ./run.sh and a (git-ignored)
-# docker-compose.override.yml instead — do NOT create that override here.
+# Customer machines that get a prebuilt bundle (zip + images.tar) use
+# ./deploy-offline.sh instead — that path builds nothing and also never touches
+# a registry.
 #
 # Usage:  sudo ./install.sh              # full install
 #         sudo ./install.sh -n kho-hanoi # full install, force HOSTNAME (shown in Telegram alerts)
@@ -43,7 +44,7 @@ need_root() { [[ $EUID -eq 0 ]] || die "Run as root: sudo ./install.sh"; }
 
 # ── 1. Docker ────────────────────────────────────────────────────────────────
 ensure_docker() {
-    c "[1/6] Docker engine"
+    c "[1/5] Docker engine"
     if command -v docker >/dev/null 2>&1; then ok "docker present ($(docker --version | awk '{print $3}' | tr -d ,))"; return; fi
     [[ $CHECK_ONLY -eq 1 ]] && { warn "docker missing (would install)"; return; }
     need_root
@@ -52,16 +53,17 @@ ensure_docker() {
 }
 
 # ── 2. .env ──────────────────────────────────────────────────────────────────
-# ── Shared credentials (baked in — no user input needed) ─────────────────────
-_GITHUB_USERNAME="toannice"
-_GITHUB_TOKEN="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"
-_GMAIL_USER="nvr.bkav@gmail.com"
-_GMAIL_APP_PASSWORD="nbeqpzxcjnujccvu"
+# NO shared credentials are baked into this script. Everything a device needs is
+# either generated per-machine (MQTT passwords, fleet/overlay tokens, TLS key) or
+# left empty. Rationale: a token in here lands plaintext in .env on every machine
+# we ship, so one lost box = one lost shared account. Password recovery is offline
+# (recovery code + security questions), image comes from this source tree, so there
+# is nothing left that has to travel with the product.
 
-REQUIRED_VARS=(WRAPPER_TAG FRIGATE_HOST_IP GITHUB_USERNAME GITHUB_TOKEN GMAIL_USER)
+REQUIRED_VARS=(FRIGATE_HOST_IP)
 
 ensure_env() {
-    c "[2/6] .env"
+    c "[2/5] .env"
     if [[ ! -f .env ]]; then
         [[ $CHECK_ONLY -eq 1 ]] && die ".env missing (run without --check to create from template)"
         cp .env.template .env
@@ -91,17 +93,16 @@ ensure_env() {
         ok "HOSTNAME already set to '$current_hn' (unchanged; pass -n <name> to rename)"
     fi
 
-    # Bake shared credentials — always inject after fresh template copy; skip if already set on re-run
-    local v val
-    for v in GITHUB_USERNAME GITHUB_TOKEN GMAIL_USER; do
-        local baked="_${v}"
-        # Strip inline comments + whitespace to get actual value
-        val="$(grep -E "^${v}=" .env 2>/dev/null | head -1 | cut -d= -f2- | sed 's/#.*//' | tr -d '"'"'"' \r\t ' || true)"
-        if [[ -z "$val" ]]; then
-            sed -i "s|^${v}=.*|${v}=${!baked}|" .env
-            ok "$v auto-filled (shared account)"
-        fi
-    done
+    # Strip credentials left over from older installs that baked a GHCR account into .env.
+    # The image is built locally now, so these only sit there waiting to leak.
+    if grep -qE '^(GITHUB_USERNAME|GITHUB_TOKEN)=.*[^=[:space:]]' .env 2>/dev/null; then
+        [[ $CHECK_ONLY -eq 1 ]] && warn "GITHUB_USERNAME/GITHUB_TOKEN present in .env (would remove — no registry is used)" || {
+            sed -i -E '/^(GITHUB_USERNAME|GITHUB_TOKEN)=/d' .env
+            warn "GITHUB_* removed from .env (legacy GHCR creds — REVOKE that token on GitHub)"; }
+    fi
+
+    # .env holds the per-machine MQTT passwords — 644 (the default) lets any local user read them.
+    [[ $CHECK_ONLY -eq 1 ]] || { chmod 600 .env; ok ".env permissions 600 (owner-only)"; }
 
     # Validate required values are non-empty (strip optional surrounding quotes)
     local missing=() v val
@@ -111,7 +112,7 @@ ensure_env() {
     done
     if (( ${#missing[@]} )); then
         warn "Required .env values not set: ${missing[*]}"
-        warn "Edit .env and fill them in, then re-run. (GITHUB_TOKEN needs read:packages on ghcr.io)"
+        warn "Edit .env and fill them in, then re-run."
         [[ $CHECK_ONLY -eq 1 ]] || die "Aborting until required .env values are set."
     else
         ok "all required .env values present"
@@ -120,7 +121,7 @@ ensure_env() {
 
 # ── 3. TLS cert ──────────────────────────────────────────────────────────────
 ensure_cert() {
-    c "[3/6] nginx TLS cert"
+    c "[3/5] nginx TLS cert"
     if [[ -s nginx/server.crt && -s nginx/server.key ]]; then ok "cert present"; return; fi
     [[ $CHECK_ONLY -eq 1 ]] && { warn "nginx/server.{crt,key} missing (would issue from internal CA)"; return; }
     mkdir -p nginx
@@ -135,17 +136,15 @@ ensure_cert() {
 rand_token() { head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 40; }
 
 ensure_secrets() {
-    c "[4/6] secrets/"
+    c "[4/5] secrets/"
     mkdir -p secrets
 
-    # gmail_app_password — shared account, baked in
-    if [[ ! -s secrets/gmail_app_password ]]; then
-        if [[ $CHECK_ONLY -eq 1 ]]; then warn "secrets/gmail_app_password missing (would auto-fill)"; else
-            printf '%s' "$_GMAIL_APP_PASSWORD" > secrets/gmail_app_password
-            chmod 600 secrets/gmail_app_password
-            ok "gmail_app_password auto-filled (shared account)"
-        fi
-    else ok "gmail_app_password present"; fi
+    # Legacy: older installs baked a shared Gmail App Password here. Password recovery is
+    # offline now, so the file is dead weight and a liability on a customer machine.
+    if [[ -f secrets/gmail_app_password ]]; then
+        [[ $CHECK_ONLY -eq 1 ]] && warn "secrets/gmail_app_password present (would remove — no longer used)" || {
+            rm -f secrets/gmail_app_password; ok "gmail_app_password removed (no longer used)"; }
+    fi
 
     # auto-generated fleet/overlay tokens
     local s
@@ -190,27 +189,19 @@ ensure_mqtt_auth() {
     else ok "mosquitto passwd present"; fi
 }
 
-# ── 5. GHCR login ────────────────────────────────────────────────────────────
-ghcr_login() {
-    c "[5/6] GHCR login"
-    set -a; source .env; set +a
-    [[ -z "${GITHUB_TOKEN:-}" || -z "${GITHUB_USERNAME:-}" ]] && { warn "GITHUB_* not set — skipping login (pull will fail for private images)"; return; }
-    if [[ $CHECK_ONLY -eq 1 ]]; then warn "would docker login ghcr.io as $GITHUB_USERNAME"; return; fi
-    echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_USERNAME" --password-stdin >/dev/null 2>&1 \
-        && ok "logged in to ghcr.io as $GITHUB_USERNAME" \
-        || die "GHCR login failed — check GITHUB_USERNAME / GITHUB_TOKEN (needs read:packages)"
-}
-
-# ── 6. Bring up ──────────────────────────────────────────────────────────────
+# ── 5. Build & bring up ──────────────────────────────────────────────────────
 bring_up() {
-    c "[6/6] Pull & start"
+    c "[5/5] Build & start"
     if [[ ! -s data/dc-bridge ]]; then
         warn "data/dc-bridge binary missing — cloud Device-info/Ethernet/Time (WebRTC DATA) will be"
         warn "  unavailable until you build it (see connection_to_server.md). LIVE view still works."
     fi
-    if [[ $CHECK_ONLY -eq 1 ]]; then warn "would: docker compose pull && up -d && up -d nginx"; return; fi
+    # nvr-wrapper is built here, not pulled — the tree must be the full source checkout.
+    [[ -f Dockerfile && -d backend && -d frontend ]] \
+        || die "Dockerfile/backend/frontend missing — install.sh builds from source. For a prebuilt bundle use ./deploy-offline.sh"
+    if [[ $CHECK_ONLY -eq 1 ]]; then warn "would: docker compose build && up -d && up -d nginx"; return; fi
     mkdir -p data media mosquitto/data mosquitto/log config logs
-    docker compose pull
+    docker compose build nvr-wrapper nvr-watchdog
     docker compose up -d
     docker compose up -d nginx   # nginx does not auto-start when nvr-wrapper recreates
     ok "stack started"
@@ -224,7 +215,6 @@ ensure_docker
 ensure_env
 ensure_cert
 ensure_secrets
-ghcr_login
 bring_up
 echo "════════════════════════════════════════════"
 if [[ $CHECK_ONLY -eq 1 ]]; then
@@ -232,6 +222,6 @@ if [[ $CHECK_ONLY -eq 1 ]]; then
 else
     LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
     c "Done. Open: https://${LAN_IP:-<host-ip>}  (self-signed cert → accept the browser warning)"
-    echo "  OTA channel: WRAPPER_TAG=$(grep -E '^WRAPPER_TAG=' .env 2>/dev/null | cut -d= -f2- | tr -d '\"' || echo latest)  (latest=stable, staging=beta)"
-    echo "  Dev rebuild from source instead:  ./run.sh --rebuild"
+    echo "  Image: nvr-wrapper:latest built from this tree (no registry, no OTA pull)"
+    echo "  Rebuild after a code change:  ./run.sh --rebuild"
 fi

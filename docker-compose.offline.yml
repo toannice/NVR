@@ -12,9 +12,10 @@ services:
 
   nvr-wrapper:
     image: ${WRAPPER_IMAGE:-nvr-wrapper:latest}
+    build: !reset null     # bundle không có source — không được thử build
 
   nvr-watchdog:
     image: nvr-watchdog:latest
     build: !reset null
     environment:
-      - DISABLE_OTA=true   # tắt OTA — máy offline không kết nối GHCR
+      - DISABLE_OTA=true   # tắt hẳn UpdateManager (UpdateManager.run() đọc biến này)

@@ -6,6 +6,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
@@ -38,14 +40,20 @@ object EventClipService {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
+    // Kích thước luồng chính từng camera (ffprobe) — dò một lần, giữ lại vì hiếm khi đổi. Toạ độ
+    // AI camera Bkav gửi lên tính theo luồng chính, cần kích thước thật để quy ra tỉ lệ 0..1.
+    private val frameSizeCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Int, Int>>()
+
     /**
      * Schedule clip + snapshot generation for an already-persisted ai_events row.
      * @param snapshotBase64 optional JPEG bytes (base64, with or without a data: URI prefix) from the Box.
+     * @param boxPixel [x, y, w, h] pixel theo khung hình luồng chính, nếu camera có gửi kèm — dùng để
+     *   tính box_x/y/w/h chuẩn hoá 0..1 lưu vào ai_events (khoanh vùng đối tượng nhận diện).
      */
-    fun enqueue(eventId: String, slug: String, tsMs: Long, snapshotBase64: String? = null) {
+    fun enqueue(eventId: String, slug: String, tsMs: Long, snapshotBase64: String? = null, boxPixel: List<Double>? = null) {
         scope.launch {
             try {
-                process(eventId, slug, tsMs, snapshotBase64)
+                process(eventId, slug, tsMs, snapshotBase64, boxPixel)
             } catch (e: Exception) {
                 AppLogger.warn(AppLogger.Module.SYSTEM, "EVENT_CLIP", "PROCESS_FAIL", "id=$eventId err=${e.message}")
                 setStatus(eventId, "failed")
@@ -53,7 +61,7 @@ object EventClipService {
         }
     }
 
-    private suspend fun process(eventId: String, slug: String, tsMs: Long, snapshotBase64: String?) {
+    private suspend fun process(eventId: String, slug: String, tsMs: Long, snapshotBase64: String?, boxPixel: List<Double>? = null) {
         val tsSec = tsMs / 1000
         val startSec = tsSec - PRE_SEC
         val endSec = tsSec + POST_SEC
@@ -118,16 +126,78 @@ object EventClipService {
             if (snapOk) AppLogger.info(AppLogger.Module.SYSTEM, "EVENT_CLIP", "SNAP_EXTRACT", "id=$eventId self-extracted")
         }
 
+        // 3b. Chuẩn hoá toạ độ khoanh vùng (nếu camera có gửi) — "tự dò + tự bảo vệ": dò kích thước
+        // luồng chính bằng ffprobe, hộp vượt khung thì BỎ VẼ (để null) thay vì vẽ sai.
+        val normalizedBox = boxPixel?.let { normalizeBox(slug, it, eventId) }
+
         // 4. Persist paths + status.
         transaction {
             AIEvents.update({ AIEvents.id eq eventId }) {
                 it[clipPath] = clipFile.absolutePath
                 it[clipStatus] = "ready"
                 if (snapOk) it[snapshotPath] = snapFile.absolutePath
+                if (normalizedBox != null) {
+                    it[boxX] = normalizedBox[0]
+                    it[boxY] = normalizedBox[1]
+                    it[boxW] = normalizedBox[2]
+                    it[boxH] = normalizedBox[3]
+                }
             }
         }
         AppLogger.info(AppLogger.Module.SYSTEM, "EVENT_CLIP", "READY",
             "id=$eventId clip=${clipFile.length()}B snapshot=${if (snapOk) "yes" else "no"}")
+    }
+
+    /**
+     * [x, y, w, h] pixel → tỉ lệ 0..1 theo kích thước thật luồng chính (ffprobe, dò một lần/camera).
+     * Trả null nếu không dò được kích thước, hoặc hộp vượt ra ngoài khung [0, 1] — "tự bảo vệ": thà
+     * không vẽ còn hơn vẽ sai vị trí.
+     */
+    private suspend fun normalizeBox(slug: String, boxPixel: List<Double>, eventId: String): List<Double>? {
+        val (fw, fh) = resolveFrameSize(slug) ?: run {
+            AppLogger.warn(AppLogger.Module.SYSTEM, "EVENT_CLIP", "BOX_NO_FRAME_SIZE", "id=$eventId slug=$slug")
+            return null
+        }
+        val (px, py, pw, ph) = boxPixel
+        val calib = BoxCalibrationService.get(slug)
+        val nx = (px / fw) * calib.scaleX + calib.offsetX
+        val ny = (py / fh) * calib.scaleY + calib.offsetY
+        val nw = (pw / fw) * calib.scaleX
+        val nh = (ph / fh) * calib.scaleY
+        if (nx < 0 || ny < 0 || nw <= 0 || nh <= 0 || nx + nw > 1.0 || ny + nh > 1.0) {
+            AppLogger.warn(AppLogger.Module.SYSTEM, "EVENT_CLIP", "BOX_OUT_OF_FRAME",
+                "id=$eventId slug=$slug frame=${fw}x$fh box=$boxPixel norm=[$nx,$ny,$nw,$nh] — bỏ vẽ")
+            return null
+        }
+        return listOf(nx, ny, nw, nh)
+    }
+
+    /** Dò kích thước luồng chính qua go2rtc local (rtsp://127.0.0.1:8554/{slug}), có cache. */
+    private suspend fun resolveFrameSize(slug: String): Pair<Int, Int>? {
+        frameSizeCache[slug]?.let { return it }
+        val out = withContext(Dispatchers.IO) {
+            runCatching {
+                val proc = ProcessBuilder(
+                    "ffprobe", "-v", "error",
+                    "-select_streams", "v:0",
+                    "-show_entries", "stream=width,height",
+                    "-of", "csv=s=x:p=0",
+                    "rtsp://127.0.0.1:8554/$slug"
+                ).redirectErrorStream(false).start()
+                val text = proc.inputStream.bufferedReader().readText().trim()
+                val finished = proc.waitFor(15, java.util.concurrent.TimeUnit.SECONDS)
+                if (!finished) { proc.destroyForcibly(); return@runCatching null }
+                text
+            }.getOrNull()
+        }
+        val parts = out?.split("x")
+        if (parts?.size != 2) return null
+        val w = parts[0].toIntOrNull()
+        val h = parts[1].toIntOrNull()
+        if (w == null || h == null || w <= 0 || h <= 0) return null
+        val size = w to h
+        frameSizeCache[slug] = size
+        return size
     }
 
     private fun setStatus(eventId: String, status: String) = runCatching {

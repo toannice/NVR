@@ -1,7 +1,9 @@
 [Unit]
 Description=Nebula overlay (field gateway node)
-Wants=basic.target network-online.target
-After=basic.target network.target network-online.target
+Wants=basic.target network-online.target time-sync.target
+# time-sync.target: the Pi has no RTC — start nebula only after chrony synced (or gave up after
+# ~3 min), otherwise a stale clock makes the cert 'not yet valid' and the tunnel never comes up.
+After=basic.target network.target network-online.target time-sync.target
 # config.yml is written by nvr-edge-agent at enroll time; until then nebula fails fast and Restart
 # brings it back once the cert/config land. ConditionPathExists keeps the journal quiet pre-enroll.
 ConditionPathExists=/etc/nebula/config.yml

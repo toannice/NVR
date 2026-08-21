@@ -33,7 +33,7 @@ fun Application.configureDatabases() {
             Cameras,
             Schedules,
             LockConfig,
-            OtpTokens,
+            SecurityQuestions,
             AIEvents,
             CloudConfig,
             CloudCameras,
@@ -45,6 +45,45 @@ fun Application.configureDatabases() {
 
         migrateCloudCamerasIntoCameras()
         seedIntegrationSettings()
+        backfillAiIntent()
+    }
+}
+
+/**
+ * Máy nâng cấp từ bản cũ: cột `ai_intent` mặc định "unset" cho MỌI camera, kể cả camera đang có
+ * vùng nhận diện chạy ngon lành. Để nguyên thì lần bật AI tổng kế tiếp sẽ đòi cấp lại vùng
+ * Toàn cảnh cho camera đã cấu hình rồi — vô lý với người dùng.
+ *
+ * Vậy suy ngược ý định từ config.yml đúng một lần: có vùng = "on". Camera không có vùng vẫn để
+ * "unset" (coi như chưa cấu hình) — không có cách nào biết được người dùng đã cố ý tắt hay chưa
+ * từng đụng tới, và "unset" là phía an toàn: cùng lắm là được hỏi thừa một lần.
+ */
+private fun backfillAiIntent() {
+    try {
+        val configPath = System.getenv("CONFIG_PATH") ?: "config/config.yml"
+        val file = File(configPath)
+        if (!file.exists()) return
+
+        @Suppress("UNCHECKED_CAST")
+        val configData = org.yaml.snakeyaml.Yaml().load<Map<String, Any>>(file.readText()) ?: return
+        val cameras = configData["cameras"] as? Map<String, Any> ?: return
+
+        var updated = 0
+        cameras.forEach { (slug, camRaw) ->
+            val cam = camRaw as? Map<*, *> ?: return@forEach
+            val hasZones = (cam["zones"] as? Map<*, *>)?.isNotEmpty() == true
+            if (!hasZones) return@forEach
+            updated += Cameras.update({ (Cameras.slug eq slug) and (Cameras.aiIntent eq "unset") }) {
+                it[aiIntent] = "on"
+            }
+        }
+        if (updated > 0) {
+            AppLogger.info(AppLogger.Module.SYSTEM, "DB", "AI_INTENT_BACKFILL",
+                "$updated camera đang có vùng nhận diện được đánh dấu ai_intent=on")
+        }
+    } catch (e: Exception) {
+        // Không chặn khởi động vì chuyện này: sai lầm tệ nhất là hỏi thừa một lần.
+        AppLogger.warn(AppLogger.Module.SYSTEM, "DB", "AI_INTENT_BACKFILL_FAIL", "${e.message}")
     }
 }
 

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import AITab from './components/AITab'
 import PatternLockScreen from './components/PatternLockScreen'
 import { useMqttEvents } from './hooks/useMqttEvents'
+import { t } from './i18n'
 import './App.css'
 import { Header } from './components/Header'
 import { LiveView } from './components/LiveView'
@@ -42,15 +43,17 @@ function App() {
   const pendingTabRef = useRef<string | null>(null)
 
   const handleLogout = useCallback(async () => {
+    // Lock the UI first: the network may be dead or starved (zombie-connection
+    // incident 2026-07-15) — a hung logout request must never block the lock screen.
+    setIsSessionUnlocked(false);
+    setActiveTab('Live View');
+    if (autoLockTimerRef.current) clearTimeout(autoLockTimerRef.current);
+    setShowLockScreen(true);
     try {
       await (window as any).fetch('/api/lock/logout', { method: 'POST' });
     } catch (e) {
       console.error('Logout failed', e);
     }
-    setIsSessionUnlocked(false);
-    setActiveTab('Live View');
-    if (autoLockTimerRef.current) clearTimeout(autoLockTimerRef.current);
-    setShowLockScreen(true);
   }, [setIsSessionUnlocked, setActiveTab, setShowLockScreen]);
 
   useEffect(() => {
@@ -79,10 +82,22 @@ function App() {
   // Simple global check for 401
   useEffect(() => {
     const originalFetch = (window as any).fetch;
+    let probing = false;
     const interceptedFetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       return originalFetch.call(window, input, init).then((response: Response) => {
         if (response.status === 401 && !input.toString().includes('/api/lock/verify')) {
-          handleLogout();
+          // Transient 401s happen (seen after long tab freezes, 2026-07-15) and heal in
+          // seconds — locking a kiosk screen on the first one is wrong. Confirm the
+          // session is really gone with one cheap authed probe before logging out.
+          if (!probing) {
+            probing = true;
+            setTimeout(() => {
+              originalFetch.call(window, '/api/camera-status')
+                .then((probe: Response) => { if (probe.status === 401) handleLogout(); })
+                .catch(() => { /* network down ≠ session gone; keep the UI unlocked */ })
+                .finally(() => { probing = false; });
+            }, 1500);
+          }
         }
         return response;
       });
@@ -286,7 +301,15 @@ function App() {
 
   // Removed videoUrl, hlsError, videoRef - now in PlaybackView
 
-  useEffect(() => { fetchCameras() }, [])
+  // Nạp danh sách camera lúc mở app VÀ mỗi khi phiên chuyển sang đã mở khoá.
+  // Vì sao phải có vế thứ hai: /api/cameras nằm sau authenticate("auth-session"), nên lần
+  // gọi lúc chưa mở khoá trả 401 → fetchCameras không setCameras → danh sách rỗng. Trước
+  // đây effect này chỉ chạy đúng một lần lúc mount, mà handleUnlock/handleSetupComplete
+  // không nạp lại, nên đăng nhập lần đầu xong màn Trực tiếp trống trơn ("Không tìm thấy
+  // camera nào", Hiển thị: 0 camera) cho tới khi người dùng tự F5 — F5 mới remount với
+  // cookie phiên đã có. Bám theo isSessionUnlocked là phủ được cả hai đường vào
+  // (mở khoá bằng pattern và thiết lập pattern lần đầu).
+  useEffect(() => { fetchCameras() }, [isSessionUnlocked])
   useEffect(() => { if (playbackCam) fetchRecordings(playbackCam, timelineDate) }, [playbackCam, timelineDate])
 
   // Periodic camera status update (every 10 seconds)
@@ -315,6 +338,11 @@ function App() {
     setLoading(true)
     try {
       const res = await fetch('/api/cameras');
+      if (!res.ok) {
+        // 401 = chưa mở khoá phiên, không phải lỗi: effect bám isSessionUnlocked sẽ gọi lại
+        // ngay sau khi mở khoá. Log ra để lần sau thấy danh sách trống thì biết đang ở nhánh nào.
+        console.warn(`[CAMERA] [FETCH_LIST] [SKIPPED] | http=${res.status} unlocked=${isSessionUnlocked} — giữ nguyên danh sách hiện có`);
+      }
       if (res.ok) {
         const data = await res.json();
 
@@ -407,9 +435,9 @@ function App() {
       if (res.ok) {
         setSetupStatus('Added successfully');
         await fetchCameras();
-        addToast({ type: 'success', title: 'Thành công', message: `Đã thêm camera "${params.name}" thành công!` });
+        addToast({ type: 'success', title: t('Thành công'), message: t('Đã thêm camera "{0}" thành công!').replace('{0}', params.name) });
         if (data.frigateRestarted === false) {
-          addToast({ type: 'warning', title: 'Cảnh báo', message: 'Không thể restart AIView NVR. Camera sẽ hoạt động sau khi AIView NVR khởi động lại.' });
+          addToast({ type: 'warning', title: t('Cảnh báo'), message: t('Không thể restart AI View NVR. Camera sẽ hoạt động sau khi AI View NVR khởi động lại.') });
         }
         return data;
       } else {
@@ -438,7 +466,7 @@ function App() {
     setCameras(prev => prev.filter(c => c.id !== id));
 
     // Success toast immediately
-    addToast({ type: 'success', title: 'Đã xóa', message: `Đã xóa camera "${name}" thành công` });
+    addToast({ type: 'success', title: t('Đã xóa'), message: t('Đã xóa camera "{0}" thành công').replace('{0}', name) });
 
     try {
       await fetch('/api/delete-camera', { method: 'POST', body: JSON.stringify({ name: id }), headers: { 'Content-Type': 'application/json' } });
@@ -494,7 +522,7 @@ function App() {
         let errorMsg = err.error || 'Export failed';
         if (errorMsg.includes('No recordings found')) {
           const camName = cameras.find(c => c.id === exportParams.cam)?.name || exportParams.cam;
-          errorMsg = `Khung giờ từ '${exportParams.startTime}' đến '${exportParams.endTime}' cho camera "${camName}" không tồn tại`;
+          errorMsg = t("Khung giờ từ '{0}' đến '{1}' cho camera \"{2}\" không tồn tại").replace('{0}', exportParams.startTime).replace('{1}', exportParams.endTime).replace('{2}', camName);
         }
         throw new Error(errorMsg);
       }
@@ -534,7 +562,7 @@ function App() {
                 link.click();
                 document.body.removeChild(link);
 
-                addToast({ type: 'success', title: 'Đã xuất video', message: `Video "${latest.name}" đã sẵn sàng trong tab Tải xuống.` });
+                addToast({ type: 'success', title: t('Đã xuất video'), message: t('Video "{0}" đã sẵn sàng trong tab Tải xuống.').replace('{0}', latest.name) });
               }, 2000);
               return;
             }
@@ -547,13 +575,13 @@ function App() {
           clearInterval(checkInterval);
           setPendingExport(false);
           setShowExport(false);
-          addToast({ type: 'info', title: 'Đã gửi yêu cầu', message: 'Yêu cầu tải xuống đã được gửi. Video sẽ xuất hiện trong tab "Tải xuống" sau ít phút.' });
+          addToast({ type: 'info', title: t('Đã gửi yêu cầu'), message: t('Yêu cầu tải xuống đã được gửi. Video sẽ xuất hiện trong tab "Tải xuống" sau ít phút.') });
         }
       }, 1000);
 
     } catch (e: any) {
       console.error('Export failed', e);
-      addToast({ type: 'error', title: 'Lỗi tải xuống', message: e.message || 'Không thể xuất video.' });
+      addToast({ type: 'error', title: t('Lỗi tải xuống'), message: e.message || t('Không thể xuất video.') });
       setPendingExport(false);
     }
   }
@@ -599,7 +627,7 @@ function App() {
           </>
         )}
         {activeTab === 'Downloads' && <DownloadsView />}
-        {activeTab === 'Sự kiện AI' && (
+        {activeTab === 'Cấu hình AI' && (
           <AITab cameras={cameras} addToast={addToast} />
         )}
         {activeTab === 'Setup' && (

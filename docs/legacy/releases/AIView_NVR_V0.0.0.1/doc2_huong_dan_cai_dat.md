@@ -189,7 +189,7 @@ openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
 ## 5. Build image
 
 ```bash
-# PHẢI chạy từ project root /home/toan/my-nvr (hoặc thư mục đã clone)
+# PHẢI chạy từ project root /home/toan/toanDoc/Documents/my-nvr (hoặc thư mục đã clone)
 docker compose build --no-cache nvr-wrapper
 ```
 

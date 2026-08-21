@@ -12,7 +12,7 @@ description: "Task list for 003-cloud-data-sync"
 
 - **[P]**: Can run in parallel — different files, no dependency on incomplete tasks
 - **[Story]**: User story label (US1 = device info, US2 = camera SoT, US3 = live reliability)
-- All paths are absolute or repo-relative from `/home/toan/my-nvr/`.
+- All paths are absolute or repo-relative from `/home/toan/toanDoc/Documents/my-nvr/`.
 
 ---
 

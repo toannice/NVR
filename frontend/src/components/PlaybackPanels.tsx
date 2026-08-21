@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Icon } from './Icon'
+import { useModalKeys } from '../hooks/useModalKeys'
+import { t } from '../i18n';
 
 // --- PLAYBACK COMPONENTS --- //
 export const PlaybackSidebar = ({ cameras, onSelect, selectedCam }: { cameras: any[], onSelect: (c: string) => void, selectedCam: string }) => {
@@ -10,12 +12,11 @@ export const PlaybackSidebar = ({ cameras, onSelect, selectedCam }: { cameras: a
     <aside className="w-64 bg-white dark:bg-[#1F2937] border-r border-gray-200 dark:border-gray-700 flex flex-col shrink-0">
       <div className="p-4 border-b border-gray-200 dark:border-gray-700">
         <h2 className="font-semibold text-lg mb-4 flex items-center gap-2 text-gray-800 dark:text-white">
-          <Icon name="videocam" className="text-[#EF4444]" /> Danh sách Camera
-        </h2>
+          <Icon name="videocam" className="text-[#EF4444]" />{t("Danh sách Camera")}</h2>
         <div className="relative">
           <input
             className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-gray-700 border-none rounded text-sm focus:ring-2 focus:ring-[#EF4444] text-gray-800 dark:text-white"
-            placeholder="Tìm kiếm camera..."
+            placeholder={t("Tìm kiếm camera...")}
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -24,7 +25,7 @@ export const PlaybackSidebar = ({ cameras, onSelect, selectedCam }: { cameras: a
         </div>
       </div>
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
-        {filteredCameras.length === 0 && <div className="text-gray-500 text-sm text-center py-4">Không tìm thấy.</div>}
+        {filteredCameras.length === 0 && <div className="text-gray-500 text-sm text-center py-4">{t("Không tìm thấy.")}</div>}
         {filteredCameras.map(cam => (
           <button
             key={cam.id}
@@ -123,7 +124,7 @@ export const PlaybackRightPanel = ({ showExport, setShowExport: _setShowExport, 
       <div className="p-4 border-b border-gray-200 dark:border-gray-700">
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-bold text-lg text-gray-800 dark:text-white">
-            Tháng {month + 1}/{year}
+            {t('Tháng {0}/{1}').replace('{0}', String(month + 1)).replace('{1}', String(year))}
           </h3>
           <div className="flex gap-1">
             <button onClick={handlePrevMonth} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"><Icon name="chevron_left" className="text-sm" /></button>
@@ -132,7 +133,7 @@ export const PlaybackRightPanel = ({ showExport, setShowExport: _setShowExport, 
         </div>
 
         <div className="grid grid-cols-7 gap-1 text-center text-sm mb-2 text-gray-400">
-          {['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'].map(d => <span key={d} className="text-xs font-semibold py-1">{d}</span>)}
+          {['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'].map(d => <span key={d} className="text-xs font-semibold py-1">{t(d)}</span>)}
         </div>
         <div className="grid grid-cols-7 gap-1 text-center text-sm">
           {days.map((d, i) => {
@@ -161,12 +162,12 @@ export const PlaybackRightPanel = ({ showExport, setShowExport: _setShowExport, 
 
       <div className="flex-1 flex flex-col p-4 overflow-hidden">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="font-bold text-sm text-gray-700 dark:text-gray-300 uppercase tracking-wider">Sự kiện trong ngày</h3>
-          <span className="text-xs text-gray-500">{events.length} sự kiện</span>
+          <h3 className="font-bold text-sm text-gray-700 dark:text-gray-300 uppercase tracking-wider">{t("Sự kiện trong ngày")}</h3>
+          <span className="text-xs text-gray-500">{t('{0} sự kiện').replace('{0}', String(events.length))}</span>
         </div>
         <div className="flex-1 overflow-y-auto space-y-3 mb-4 pr-1 custom-scrollbar">
           {events.length === 0 ? (
-            <div className="text-center text-gray-500 text-sm py-4">Không có sự kiện nào</div>
+            <div className="text-center text-gray-500 text-sm py-4">{t("Không có sự kiện nào")}</div>
           ) : (
             events.map((evt) => (
               <div key={evt.id} className="bg-white dark:bg-gray-800 p-3 rounded shadow-sm border-l-4 border-[#EF4444] hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors group">
@@ -180,14 +181,14 @@ export const PlaybackRightPanel = ({ showExport, setShowExport: _setShowExport, 
                     <div className="text-xs text-gray-500 truncate" title={evt.id}>
                       {(() => {
                         const labelMap: Record<string, string> = {
-                          'person': 'người',
-                          'car': 'xe hơi',
-                          'motorcycle': 'xe máy',
-                          'bicycle': 'xe đạp',
-                          'truck': 'xe tải',
-                          'bus': 'xe khách',
-                          'dog': 'chó',
-                          'cat': 'mèo'
+                          'person': t('người'),
+                          'car': t('xe hơi'),
+                          'motorcycle': t('xe máy'),
+                          'bicycle': t('xe đạp'),
+                          'truck': t('xe tải'),
+                          'bus': t('xe khách'),
+                          'dog': t('chó'),
+                          'cat': t('mèo'),
                         };
                         const label = labelMap[evt.label] || evt.label.replace('_', ' ');
                         const cameraMatch = cameras?.find((c: any) => c.slug === evt.camera || c.id === evt.camera || c.original_slug === evt.camera);
@@ -211,10 +212,9 @@ export const PlaybackRightPanel = ({ showExport, setShowExport: _setShowExport, 
                         <button
                           onClick={() => onPlayEvent && onPlayEvent(`/api/frigate/api/events/${evt.id}/snapshot.jpg?bbox=1`)}
                           className="text-[10px] sm:text-xs bg-[#10B981] text-white px-2 py-1 rounded hover:bg-green-600 transition-colors flex items-center gap-1"
-                          title="Xem ảnh AI có khoanh vùng"
+                          title={t("Xem ảnh AI có khoanh vùng")}
                         >
-                          <Icon name="crop_free" className="text-[10px]" /> Ảnh AI
-                        </button>
+                          <Icon name="crop_free" className="text-[10px]" />{t("Ảnh AI")}</button>
                       )}
                     </div>
                   </div>
@@ -224,22 +224,22 @@ export const PlaybackRightPanel = ({ showExport, setShowExport: _setShowExport, 
           )}
         </div>
         <button onClick={onExport} className="w-full py-3 text-white font-bold rounded shadow-lg transition-transform transform active:scale-95 flex items-center justify-center gap-2 mt-auto" style={{ backgroundColor: '#EF4444' }}>
-          <Icon name="download" />
-          Tải Video
-        </button>
-        {showExport && <div className="mt-2 p-2 bg-gray-100 dark:bg-gray-800 rounded text-xs text-center">Đang xử lý tải xuống...</div>}
+          <Icon name="download" />{t("Tải Video")}</button>
+        {showExport && <div className="mt-2 p-2 bg-gray-100 dark:bg-gray-800 rounded text-xs text-center">{t("Đang xử lý tải xuống...")}</div>}
       </div>
     </aside>
   )
 }
 
-export const ExportModal = ({ cameras, params, setParams, onClose, onDownload, pendingExport }: any) => (
+export const ExportModal = ({ cameras, params, setParams, onClose, onDownload, pendingExport }: any) => {
+  // Esc = đóng, Enter = tải video. Khoá khi đang xử lý để không bắn hai lần.
+  useModalKeys({ onClose, onSubmit: onDownload, enabled: !pendingExport });
+  return (
   <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
     <div className="bg-white dark:bg-[#1F2937] rounded-lg shadow-2xl w-full max-w-md overflow-hidden flex flex-col ring-1 ring-gray-200 dark:ring-gray-700">
       <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between bg-white dark:bg-gray-800">
         <h2 className="text-lg font-bold text-[#EF4444] flex items-center gap-2">
-          <Icon name="download" className="text-xl" /> Tải video ghi hình
-        </h2>
+          <Icon name="download" className="text-xl" />{t("Tải video ghi hình")}</h2>
         <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors">
           <Icon name="close" className="text-xl" />
         </button>
@@ -249,13 +249,13 @@ export const ExportModal = ({ cameras, params, setParams, onClose, onDownload, p
         {pendingExport ? (
           <div className="flex flex-col items-center justify-center py-4 space-y-3">
             <div className="w-8 h-8 border-4 border-[#EF4444] border-t-transparent rounded-full animate-spin"></div>
-            <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Đang xử lý tải xuống...</p>
-            <p className="text-xs text-gray-500">Vui lòng đợi trong giây lát.</p>
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-300">{t("Đang xử lý tải xuống...")}</p>
+            <p className="text-xs text-gray-500">{t("Vui lòng đợi trong giây lát.")}</p>
           </div>
         ) : (
           <>
             <div className="space-y-1.5">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Chọn Camera</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">{t("Chọn Camera")}</label>
               <div className="relative">
                 <select
                   value={params.cam}
@@ -271,7 +271,7 @@ export const ExportModal = ({ cameras, params, setParams, onClose, onDownload, p
             </div>
 
             <div className="space-y-1.5">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Ngày ghi hình</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">{t("Ngày ghi hình")}</label>
               <input
                 type="date"
                 value={params.date}
@@ -282,7 +282,7 @@ export const ExportModal = ({ cameras, params, setParams, onClose, onDownload, p
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Bắt đầu</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">{t("Bắt đầu")}</label>
                 <input
                   type="time" step="1"
                   value={params.startTime}
@@ -291,7 +291,7 @@ export const ExportModal = ({ cameras, params, setParams, onClose, onDownload, p
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Kết thúc</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">{t("Kết thúc")}</label>
                 <input
                   type="time" step="1"
                   value={params.endTime}
@@ -303,25 +303,20 @@ export const ExportModal = ({ cameras, params, setParams, onClose, onDownload, p
 
             <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-md p-3 flex items-start gap-3">
               <Icon name="info" className="text-blue-500 dark:text-blue-400 text-sm mt-0.5" />
-              <p className="text-xs text-blue-700 dark:text-blue-300">
-                Thời gian tải xuống phụ thuộc vào độ dài video và tốc độ mạng. Vui lòng không đóng trình duyệt trong quá trình tải.
-              </p>
+              <p className="text-xs text-blue-700 dark:text-blue-300">{t("Thời gian tải xuống phụ thuộc vào độ dài video và tốc độ mạng. Vui lòng không đóng trình duyệt trong quá trình tải.")}</p>
             </div>
           </>
         )}
       </div>
 
       <div className="px-6 py-4 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-3">
-        <button onClick={onClose} className="px-4 py-2 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 text-sm font-medium rounded-md border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors shadow-sm">
-          Hủy bỏ
-        </button>
+        <button onClick={onClose} className="px-4 py-2 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 text-sm font-medium rounded-md border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors shadow-sm">{t("Hủy bỏ")}</button>
         {!pendingExport && (
           <button onClick={onDownload} className="px-4 py-2 bg-[#EF4444] hover:bg-red-700 text-white text-sm font-medium rounded-md shadow-sm transition-colors flex items-center gap-2">
-            <Icon name="download" className="text-sm" />
-            Bắt đầu tải
-          </button>
+            <Icon name="download" className="text-sm" />{t("Bắt đầu tải")}</button>
         )}
       </div>
     </div>
   </div>
-)
+  );
+}

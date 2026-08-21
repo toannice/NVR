@@ -21,19 +21,18 @@ object OnvifServerService {
         job?.cancel()
     }
 
-    // Reuse the same logic as CameraService.detectLanIp — env var first, then heuristic
-    internal fun nvrIp(): String =
-        System.getenv("FRIGATE_HOST_IP")?.takeIf { it.isNotBlank() } ?: try {
-            NetworkInterface.getNetworkInterfaces()
-                .toList().asSequence()
-                .filter { it.isUp && !it.isLoopback && !it.isVirtual }
-                .filterNot { val n = it.name.lowercase(); n.startsWith("docker") || n.startsWith("br-") || n.startsWith("veth") }
-                .flatMap { it.inetAddresses.toList().asSequence() }
-                .filterIsInstance<Inet4Address>()
-                .map { it.hostAddress }
-                .firstOrNull { ip -> ip.startsWith("192.168.") || ip.startsWith("10.") || ip.matches(Regex("^172\\.(1[6-9]|2\\d|3[01])\\..*")) }
-                ?: ""
-        } catch (_: Exception) { "" }
+    // Single source of truth for "reachable LAN IP" — see utils/NetUtils.
+    internal fun nvrIp(): String = vn.aiview.nvr.utils.NetUtils.lanIp()
+
+    /**
+     * HTTP port nginx serves /onvif/ on. Was the implicit 80; moved to 9000 (2026-07-29).
+     * Must match `listen` in nginx/nginx.conf — Box calls the XAddr we advertise verbatim.
+     */
+    internal fun onvifHttpPort(): Int =
+        System.getenv("ONVIF_HTTP_PORT")?.toIntOrNull() ?: 9000
+
+    /** "http://<lan-ip>:<port>" base for every XAddr we hand out. */
+    internal fun httpBase(): String = "http://${nvrIp()}:${onvifHttpPort()}"
 
     private suspend fun runLoop() {
         while (currentCoroutineContext().isActive) {
@@ -71,8 +70,8 @@ object OnvifServerService {
 
     private fun buildProbeMatch(relatesTo: String): String {
         val ip = nvrIp()
-        // Advertise on port 80 (nginx proxies /onvif/ on HTTP — Box uses http://)
-        val xAddr = "http://$ip/onvif/device_service"
+        // Advertise the nginx HTTP port (ONVIF_HTTP_PORT, mặc định 9000 — nginx proxy /onvif/ qua HTTP)
+        val xAddr = "${httpBase()}/onvif/device_service"
         return """<?xml version="1.0" encoding="UTF-8"?>
 <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
             xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing"

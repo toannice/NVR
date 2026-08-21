@@ -151,6 +151,7 @@ object BoxEventClient {
         }
 
         val label = buildLabel(type, objects)
+        val objectName = objects?.firstOrNull()?.jsonObject?.get("name")?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
         val eventId = "box-$id"
         val objectCount = objects?.size ?: 0
 
@@ -160,7 +161,7 @@ object BoxEventClient {
         )
 
         // --- Persist first; emit only for genuinely new events (Box re-sends same id with increasing object counts) ---
-        val isNew = persistBoxEvent(eventId, cameraSlug, label, timestampMs)
+        val isNew = persistBoxEvent(eventId, cameraSlug, label, type, objectName, timestampMs)
         if (!isNew) return
 
         val detEvent = buildJsonObject {
@@ -207,13 +208,17 @@ object BoxEventClient {
     }
 
     /** Returns true if the event was new and persisted, false if duplicate (PK conflict). */
-    private fun persistBoxEvent(id: String, cameraSlug: String, label: String, timestampMs: Long): Boolean =
+    private fun persistBoxEvent(
+        id: String, cameraSlug: String, label: String, aiType: String, objectName: String?, timestampMs: Long
+    ): Boolean =
         runCatching {
             transaction {
                 AIEvents.insert {
                     it[AIEvents.id] = id
                     it[AIEvents.cameraSlug] = cameraSlug
                     it[AIEvents.label] = label
+                    it[AIEvents.aiType] = aiType.takeIf { it.isNotBlank() }
+                    it[AIEvents.objectType] = objectName
                     it[AIEvents.score] = null
                     it[AIEvents.startTime] = timestampMs / 1000
                     it[AIEvents.endTime] = timestampMs / 1000

@@ -38,7 +38,7 @@ Hiện cho người dùng:
 ### Bước 2 — Build image
 
 ```bash
-cd /home/toan/my-nvr
+cd /home/toan/toanDoc/Documents/my-nvr
 export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
 docker compose build nvr-wrapper
@@ -62,7 +62,7 @@ docker push ghcr.io/toannice/nvr:staging
 
 ```bash
 # Lấy token từ .env và login lại
-source /home/toan/my-nvr/.env
+source /home/toan/toanDoc/Documents/my-nvr/.env
 echo "$GITHUB_TOKEN" | docker login ghcr.io -u toannice --password-stdin
 # Rồi push lại
 docker push ghcr.io/toannice/nvr:staging

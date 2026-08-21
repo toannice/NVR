@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { Icon } from './Icon'
+import { useModalKeys } from '../hooks/useModalKeys'
+import { t } from '../i18n';
 
 // Edit Camera Modal — name + ONVIF port (no ONVIF credentials required).
 // The ONVIF port matters for PTZ over a socat proxy: set it to the proxy's port
@@ -11,15 +13,18 @@ export function EditCameraModal({ device, onClose, onSubmit, isLoading }: any) {
   const [onvifPass, setOnvifPass] = useState('');
   const [ptzMode, setPtzMode] = useState<string>(device.ptzMode ?? 'auto');
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  // Esc = đóng, Enter = lưu. Khoá lại trong lúc đang gửi để không submit hai lần.
+  useModalKeys({ onClose, onSubmit: () => handleSubmit(), enabled: !isLoading });
+
+  const handleSubmit = (e?: React.FormEvent) => {
+    e?.preventDefault();
     if (!cameraName) {
-      alert('Vui lòng nhập tên camera');
+      alert(t('Vui lòng nhập tên camera'));
       return;
     }
     const port = parseInt(onvifPort, 10);
     if (!port || port < 1 || port > 65535) {
-      alert('Cổng ONVIF không hợp lệ (1–65535)');
+      alert(t('Cổng ONVIF không hợp lệ (1–65535)'));
       return;
     }
     onSubmit({
@@ -37,9 +42,7 @@ export function EditCameraModal({ device, onClose, onSubmit, isLoading }: any) {
       <div className="bg-white dark:bg-[#2D2D2D] w-full max-w-md rounded-lg shadow-2xl border border-gray-200 dark:border-gray-700 overflow-hidden">
         <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-white dark:bg-[#333]">
           <h2 className="text-lg font-bold text-indigo-600 dark:text-indigo-400 flex items-center">
-            <Icon name="edit" className="mr-2" />
-            Sửa Camera
-          </h2>
+            <Icon name="edit" className="mr-2" />{t("Sửa Camera")}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" disabled={isLoading}>
             <Icon name="close" />
           </button>
@@ -48,8 +51,7 @@ export function EditCameraModal({ device, onClose, onSubmit, isLoading }: any) {
         <div className="p-6">
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Tên Camera <span className="text-red-500">*</span>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t("Tên Camera")}<span className="text-red-500">*</span>
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -58,7 +60,7 @@ export function EditCameraModal({ device, onClose, onSubmit, isLoading }: any) {
                 <input
                   required
                   className="w-full pl-10 rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white focus:ring-indigo-500 focus:border-indigo-500 shadow-sm"
-                  placeholder="Ví dụ: Camera Cổng"
+                  placeholder={t("Ví dụ: Camera Cổng")}
                   type="text"
                   value={cameraName}
                   onChange={e => setCameraName(e.target.value)}
@@ -68,9 +70,7 @@ export function EditCameraModal({ device, onClose, onSubmit, isLoading }: any) {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Cổng ONVIF
-              </label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t("Cổng ONVIF")}</label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                   <Icon name="settings_ethernet" className="text-gray-400 text-lg" />
@@ -86,9 +86,7 @@ export function EditCameraModal({ device, onClose, onSubmit, isLoading }: any) {
                   disabled={isLoading}
                 />
               </div>
-              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                Mặc định 80. Camera qua proxy socat: đặt bằng cổng proxy (vd 8080) để điều khiển PTZ.
-              </p>
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{t("Mặc định 80. Camera qua proxy socat: đặt bằng cổng proxy (vd 8080) để điều khiển PTZ.")}</p>
             </div>
 
             <div>
@@ -125,28 +123,22 @@ export function EditCameraModal({ device, onClose, onSubmit, isLoading }: any) {
                   />
                 </div>
               </div>
-              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                Chỉ cần cho camera qua proxy (URL RTSP không kèm mật khẩu). Để trống = giữ nguyên creds đã lưu.
-              </p>
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{t("Chỉ cần cho camera qua proxy (URL RTSP không kèm mật khẩu). Để trống = giữ nguyên creds đã lưu.")}</p>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Kiểu điều khiển PTZ
-              </label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t("Kiểu điều khiển PTZ")}</label>
               <select
                 className="w-full rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white focus:ring-indigo-500 focus:border-indigo-500 shadow-sm"
                 value={ptzMode}
                 onChange={e => setPtzMode(e.target.value)}
                 disabled={isLoading}
               >
-                <option value="auto">Tự động phát hiện (ONVIF GetNodes)</option>
-                <option value="full">Toàn phần — Pan / Tilt / Zoom</option>
-                <option value="zoom">Chỉ Zoom</option>
+                <option value="auto">{t("Tự động phát hiện (ONVIF GetNodes)")}</option>
+                <option value="full">{t("Toàn phần — Pan / Tilt / Zoom")}</option>
+                <option value="zoom">{t("Chỉ Zoom")}</option>
               </select>
-              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                Chọn <b>Toàn phần</b> nếu camera có pan/tilt thật nhưng ONVIF báo thiếu (ép hiện d-pad).
-              </p>
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{t("Chọn")}<b>{t("Toàn phần")}</b>{t("nếu camera có pan/tilt thật nhưng ONVIF báo thiếu (ép hiện d-pad).")}</p>
             </div>
 
             <div className="flex justify-end gap-3 mt-6">
@@ -155,9 +147,7 @@ export function EditCameraModal({ device, onClose, onSubmit, isLoading }: any) {
                 onClick={onClose}
                 className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
                 disabled={isLoading}
-              >
-                Hủy
-              </button>
+              >{t("Hủy")}</button>
               <button
                 type="submit"
                 className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded shadow transition-colors flex items-center disabled:opacity-50"
@@ -183,14 +173,17 @@ export function OnvifCredentialsModal({ device, onClose, onSubmit, isLoading, ad
   });
   const [ptzEnabled, setPtzEnabled] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  // Esc = đóng, Enter = thêm camera.
+  useModalKeys({ onClose, onSubmit: () => handleSubmit(), enabled: !isLoading });
+
+  const handleSubmit = (e?: React.FormEvent) => {
+    e?.preventDefault();
     if (!cameraName) {
-      addToast({ type: 'error', title: 'Lỗi', message: 'Vui lòng nhập tên camera' });
+      addToast({ type: 'error', title: t('Lỗi'), message: t('Vui lòng nhập tên camera') });
       return;
     }
     if (!credentials.password) {
-      addToast({ type: 'error', title: 'Lỗi', message: 'Vui lòng nhập mật khẩu ONVIF' });
+      addToast({ type: 'error', title: t('Lỗi'), message: t('Vui lòng nhập mật khẩu ONVIF') });
       return;
     }
     // Pass the edited name along with credentials
@@ -202,9 +195,7 @@ export function OnvifCredentialsModal({ device, onClose, onSubmit, isLoading, ad
       <div className="bg-white dark:bg-[#2D2D2D] w-full max-w-md rounded-lg shadow-2xl border border-gray-200 dark:border-gray-700 overflow-hidden">
         <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-white dark:bg-[#333]">
           <h2 className="text-lg font-bold text-[#F04E30] flex items-center">
-            <Icon name="key" className="mr-2" />
-            Cấu hình Camera ONVIF
-          </h2>
+            <Icon name="key" className="mr-2" />{t("Cấu hình Camera ONVIF")}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" disabled={isLoading}>
             <Icon name="close" />
           </button>
@@ -213,8 +204,7 @@ export function OnvifCredentialsModal({ device, onClose, onSubmit, isLoading, ad
         <div className="p-6">
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Tên Camera <span className="text-red-500">*</span>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t("Tên Camera")}<span className="text-red-500">*</span>
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -223,7 +213,7 @@ export function OnvifCredentialsModal({ device, onClose, onSubmit, isLoading, ad
                 <input
                   required
                   className="w-full pl-10 rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white focus:ring-[#F04E30] focus:border-[#F04E30] shadow-sm"
-                  placeholder="Ví dụ: Camera Cổng"
+                  placeholder={t("Ví dụ: Camera Cổng")}
                   type="text"
                   value={cameraName}
                   onChange={e => setCameraName(e.target.value)}
@@ -233,8 +223,7 @@ export function OnvifCredentialsModal({ device, onClose, onSubmit, isLoading, ad
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Tên đăng nhập ONVIF <span className="text-red-500">*</span>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t("Tên đăng nhập ONVIF")}<span className="text-red-500">*</span>
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -253,8 +242,7 @@ export function OnvifCredentialsModal({ device, onClose, onSubmit, isLoading, ad
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Mật khẩu ONVIF <span className="text-red-500">*</span>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t("Mật khẩu ONVIF")}<span className="text-red-500">*</span>
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -275,8 +263,8 @@ export function OnvifCredentialsModal({ device, onClose, onSubmit, isLoading, ad
             {/* PTZ Toggle */}
             <div className="flex items-center justify-between py-2 px-3 bg-gray-50 dark:bg-gray-800/50 rounded border border-gray-200 dark:border-gray-700">
               <div>
-                <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Camera hỗ trợ PTZ</p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">Bật nếu camera có thể xoay / tilt / zoom</p>
+                <p className="text-sm font-medium text-gray-700 dark:text-gray-300">{t("Camera hỗ trợ PTZ")}</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">{t("Bật nếu camera có thể xoay / tilt / zoom")}</p>
               </div>
               <button
                 type="button"
@@ -303,9 +291,7 @@ export function OnvifCredentialsModal({ device, onClose, onSubmit, isLoading, ad
             onClick={onClose}
             disabled={isLoading}
             className="px-5 py-2.5 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors font-medium text-sm disabled:opacity-50"
-          >
-            Hủy
-          </button>
+          >{t("Hủy")}</button>
           <button
             onClick={handleSubmit}
             disabled={isLoading}
@@ -313,14 +299,10 @@ export function OnvifCredentialsModal({ device, onClose, onSubmit, isLoading, ad
           >
             {isLoading ? (
               <>
-                <Icon name="hourglass_empty" className="text-lg mr-2 animate-spin" />
-                Đang thêm...
-              </>
+                <Icon name="hourglass_empty" className="text-lg mr-2 animate-spin" />{t("Đang thêm...")}</>
             ) : (
               <>
-                <Icon name="add" className="text-lg mr-2" />
-                Thêm Camera
-              </>
+                <Icon name="add" className="text-lg mr-2" />{t("Thêm Camera")}</>
             )}
           </button>
         </div>

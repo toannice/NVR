@@ -8,7 +8,10 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: [['html'], ['json', { outputFile: 'test-results/results.json' }]],
   use: {
-    baseURL: 'https://192.168.2.106',
+    // Trỏ cứng một IP LAN thì test chết mỗi lần máy đổi mạng (đã dính 15-08-2026:
+    // config còn 192.168.2.106 trong khi máy đã sang 192.168.1.x). Mặc định localhost —
+    // test hầu như luôn chạy trên chính máy NVR; máy khác thì đặt BASE_URL.
+    baseURL: process.env.BASE_URL || 'https://localhost',
     ignoreHTTPSErrors: true,
     trace: 'on-first-retry',
     video: 'retain-on-failure',

@@ -107,10 +107,15 @@ object CommandDispatcher {
         if (!funcField.isNullOrEmpty()) {
             val data = body["data"]?.let { it as? JsonObject } ?: buildJsonObject {}
             val params = body["params"]?.let { it as? JsonObject } ?: buildJsonObject {}
-            // Merge params into data so handlers can read channel_id from one place
+            // Merge params into data so handlers can read channel_id from one place.
+            // Both blocks are also kept verbatim under _params/_data because they can carry the
+            // SAME key with different meanings (get_snapshot: params.token = media profile token,
+            // data.token = cloud upload access token) and the merge would drop one of them.
             val merged = buildJsonObject {
                 data.entries.forEach { (k, v) -> put(k, v) }
                 params.entries.forEach { (k, v) -> put(k, v) }
+                put("_data", data)
+                put("_params", params)
             }
             return funcField to merged
         }
@@ -128,6 +133,10 @@ object CommandDispatcher {
             if (func == "post_select_record" || func == "post_select_record_timestamp" ||
                 func == "post_control_record") {
                 return PlaybackCommandHandler.handle(func, data)
+            }
+            // Snapshot for the cloud device-list thumbnail also arrives on ps_service.
+            if (func == "get_snapshot") {
+                return CameraCommandHandler.handle(func, data)
             }
             when (component) {
                 "device", "device_service" -> DeviceCommandHandler.handle(func, data)

@@ -27,6 +27,7 @@ import java.net.SocketTimeoutException
 import java.util.UUID
 import vn.aiview.nvr.services.CameraService
 import vn.aiview.nvr.services.OnvifCameraClient
+import vn.aiview.nvr.utils.AppLogger
 import vn.aiview.nvr.utils.CryptoUtils
 
 @Serializable
@@ -392,9 +393,73 @@ private fun getCameraOnvifConfig(slug: String): CameraOnvifConfig? {
     return CameraOnvifConfig(ip, onvifPort, username, password)
 }
 
-private suspend fun discoverOnvifDevices(): List<OnvifDevice> = withContext(Dispatchers.IO) {
+/** Mọi địa chỉ IPv4 của chính box (kể cả docker/overlay) — dùng để loại ProbeMatch của chính mình. */
+private val localIpv4Addresses: Set<String> by lazy {
+    try {
+        java.net.NetworkInterface.getNetworkInterfaces().toList().asSequence()
+            .flatMap { it.inetAddresses.toList().asSequence() }
+            .filterIsInstance<java.net.Inet4Address>()
+            .mapNotNull { it.hostAddress }
+            .toSet()
+    } catch (e: Exception) {
+        AppLogger.warn(
+            AppLogger.Module.CAMERA, "ONVIF_SCAN", "LOCAL_IP_ENUM_FAIL",
+            "err=${e.message} — chỉ lọc self theo scope"
+        )
+        emptySet()
+    }
+}
 
-    val devices = mutableListOf<OnvifDevice>()
+/**
+ * ProbeMatch này có phải do ONVIF proxy của chính NVR trả về không?
+ *
+ * Hai dấu hiệu độc lập, chỉ cần trúng một: (1) scope/type riêng mà [OnvifServerService] quảng cáo,
+ * (2) gói tin đến từ một IP của chính máy này. Dấu hiệu (2) là lưới an toàn khi ai đó đổi scope.
+ */
+private fun isSelfProbeMatch(response: String, sourceIp: String?): Boolean {
+    val selfScope = response.contains("aiview://type/NVRProxy") ||
+        response.contains("aiview:NVRProxy") ||
+        response.contains("urn:aiview:nvr")
+    val selfIp = sourceIp != null &&
+        (sourceIp in localIpv4Addresses || sourceIp.startsWith("127."))
+    return selfScope || selfIp
+}
+
+/** Kết quả probe WS-Discovery thô — dùng chung cho cả scan local (UI) và scan cloud. */
+data class OnvifProbeResult(
+    val ip: String,
+    val port: Int,
+    val https: Boolean,
+    val name: String,
+    val hardware: String,
+    val manufacturer: String,
+    val location: String
+)
+
+private fun extractScope(scopes: String, key: String): String? {
+    val prefix = "onvif://www.onvif.org/$key/"
+    val match = scopes.split(" ").find { it.contains(prefix) } ?: return null
+    return java.net.URLDecoder.decode(match.substringAfter(prefix), "UTF-8").ifBlank { null }
+}
+
+/** XAddrs kiểu `http://192.168.1.41:80/onvif/device_service` — cần port thật, không giả định 80. */
+private fun extractXAddrsPort(response: String): Pair<Int, Boolean> {
+    val xaddrs = Regex("<[^:]+:XAddrs>(.*?)</[^:]+:XAddrs>", RegexOption.DOT_MATCHES_ALL).find(response)?.groupValues?.get(1)
+        ?: return 80 to false
+    val uriMatch = Regex("(https?)://[^:/\\s]+(?::(\\d+))?").find(xaddrs) ?: return 80 to false
+    val https = uriMatch.groupValues[1].equals("https", ignoreCase = true)
+    val port = uriMatch.groupValues[2].toIntOrNull() ?: if (https) 443 else 80
+    return port to https
+}
+
+/**
+ * Quét ONVIF WS-Discovery một lần, trả về thông tin thô (đã lọc self) cho cả hai nơi gọi:
+ * scan trong UI local (`discoverOnvifDevices`) và scan theo lệnh cloud (`CameraCommandHandler.getDiscovery`).
+ * Không có endpoint riêng nào từng gọi `GetDeviceInformation` ở bước quét — tên chỉ lấy được từ
+ * Scopes quảng cáo trong ProbeMatch, có camera chỉ advertise `hardware/` mà không có `name/`.
+ */
+internal suspend fun probeOnvifNetwork(timeoutMs: Long = 3000): List<OnvifProbeResult> = withContext(Dispatchers.IO) {
+    val results = mutableListOf<OnvifProbeResult>()
     val messageId = "uuid:${UUID.randomUUID()}"
     val probeMsg = """
         <?xml version="1.0" encoding="utf-8"?>
@@ -419,42 +484,43 @@ private suspend fun discoverOnvifDevices(): List<OnvifDevice> = withContext(Disp
         DatagramSocket().use { socket ->
             socket.soTimeout = 3000
             socket.broadcast = true
-            
+
             val address = InetAddress.getByName("239.255.255.250")
             val packet = DatagramPacket(probeMsg, probeMsg.size, address, 3702)
             socket.send(packet)
-            
+
             val receiveData = ByteArray(4096)
             val startTime = System.currentTimeMillis()
-            
-            while (System.currentTimeMillis() - startTime < 3000) {
+
+            while (System.currentTimeMillis() - startTime < timeoutMs) {
                 try {
                     val receivePacket = DatagramPacket(receiveData, receiveData.size)
                     socket.receive(receivePacket)
-                    
+
                     val response = String(receivePacket.data, 0, receivePacket.length)
                     val ip = receivePacket.address.hostAddress
-                    
-                    // Simple regex to extract name or XAddrs
-                    val nameMatch = Regex("<[^:]+:Scopes>(.*?)</[^:]+:Scopes>").find(response)
-                    var name = "Unknown ONVIF Device"
-                    if (nameMatch != null) {
-                        val scopes = nameMatch.groupValues[1]
-                        val nameScope = scopes.split(" ").find { it.contains("onvif://www.onvif.org/name/") }
-                        if (nameScope != null) {
-                            name = nameScope.substringAfterLast("/")
-                            name = java.net.URLDecoder.decode(name, "UTF-8")
-                        }
+
+                    if (isSelfProbeMatch(response, ip)) {
+                        AppLogger.info(
+                            AppLogger.Module.CAMERA, "ONVIF_SCAN", "SKIP_SELF",
+                            "ip=$ip reason=nvr_proxy"
+                        )
+                        continue
                     }
-                    
-                    if (devices.none { it.ip == ip }) {
-                        devices.add(OnvifDevice(
-                            id = UUID.randomUUID().toString(),
-                            name = name,
-                            ip = ip,
-                            status = "online",
-                            isAdded = false
-                        ))
+
+                    // firmware một số camera (vd P200) chèn \n giữa nội dung Scopes — "." mặc định
+                    // không khớp newline nên phải bật DOT_MATCHES_ALL, không thì scopes rơi về rỗng.
+                    val scopes = Regex("<[^:]+:Scopes>(.*?)</[^:]+:Scopes>", RegexOption.DOT_MATCHES_ALL).find(response)
+                        ?.groupValues?.get(1)?.replace("\n", " ") ?: ""
+                    val hardware = extractScope(scopes, "hardware") ?: ""
+                    val manufacturer = extractScope(scopes, "manufacturer") ?: ""
+                    val location = extractScope(scopes, "location") ?: ""
+                    // Ưu tiên name/ scope; nhiều camera (vd P200 series) chỉ advertise hardware/.
+                    val name = extractScope(scopes, "name") ?: hardware.ifBlank { null } ?: "Unknown ONVIF Device"
+                    val (port, https) = extractXAddrsPort(response)
+
+                    if (results.none { it.ip == ip }) {
+                        results.add(OnvifProbeResult(ip, port, https, name, hardware, manufacturer, location))
                     }
                 } catch (e: SocketTimeoutException) {
                     break
@@ -462,8 +528,19 @@ private suspend fun discoverOnvifDevices(): List<OnvifDevice> = withContext(Disp
             }
         }
     } catch (e: Exception) {
-        println("Discovery error: ${e.message}")
+        AppLogger.warn(AppLogger.Module.CAMERA, "ONVIF_SCAN", "PROBE_FAIL", "err=${e.message}")
     }
-    
-    return@withContext devices
+
+    return@withContext results
 }
+
+private suspend fun discoverOnvifDevices(): List<OnvifDevice> =
+    probeOnvifNetwork().map { p ->
+        OnvifDevice(
+            id = UUID.randomUUID().toString(),
+            name = p.name,
+            ip = p.ip,
+            status = "online",
+            isAdded = false
+        )
+    }

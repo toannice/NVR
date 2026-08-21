@@ -42,7 +42,7 @@ Mỗi khi bạn sửa code Frontend hoặc Backend xong:
 
 1.  **Đăng ký:** [tailscale.com](https://tailscale.com/).
 2.  **Lấy Auth Key:** Vào `Settings` -> `Keys` -> `Generate auth key`.
-3.  **Tự động hóa:** Tôi đã lưu sẵn key của bạn vào file [.env](file:///home/toan/my-nvr/.env). Khi bạn chạy `./run.sh` trên máy mới, nó sẽ tự nhận diện và hỏi bạn có muốn kết nối không. Rất nhanh chóng!
+3.  **Tự động hóa:** Tôi đã lưu sẵn key của bạn vào file [.env](file:///home/toan/toanDoc/Documents/my-nvr/.env). Khi bạn chạy `./run.sh` trên máy mới, nó sẽ tự nhận diện và hỏi bạn có muốn kết nối không. Rất nhanh chóng!
 
 ---
 
@@ -57,7 +57,7 @@ Khi đã có Tailscale, bạn không cần login từng máy nữa.
     100.65.10.21
     100.65.11.5
     ```
-2.  **Chỉnh sửa file [deploy.yml](file:///home/toan/my-nvr/deploy.yml):** 
+2.  **Chỉnh sửa file [deploy.yml](file:///home/toan/toanDoc/Documents/my-nvr/deploy.yml):** 
     Sửa dòng `nvr_wrapper_image` thành tên repository bạn đã tạo ở Bước 1.
 3.  **Ra lệnh cập nhật:**
     ```bash

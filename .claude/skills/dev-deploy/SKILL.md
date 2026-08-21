@@ -37,7 +37,7 @@ recompile phần đã đổi) rồi recreate container. Thời gian ~1–3 phút
 Sau đó chạy build (KHÔNG hỏi thêm, bắt đầu ngay):
 
 ```bash
-cd /home/toan/my-nvr
+cd /home/toan/toanDoc/Documents/my-nvr
 export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
 docker compose build nvr-wrapper
@@ -49,7 +49,7 @@ docker compose build nvr-wrapper
 ### Bước 3 — Deploy và kiểm tra sức khoẻ
 
 ```bash
-cd /home/toan/my-nvr
+cd /home/toan/toanDoc/Documents/my-nvr
 # Recreate nvr-wrapper với image mới build
 docker compose up -d --force-recreate --no-deps nvr-wrapper
 ```
@@ -98,4 +98,4 @@ Hiện tóm tắt:
   nhanh vòng lặp dev.
 - **Chỉ build nvr-wrapper**, KHÔNG pull lại frigate/mosquitto/nginx (tốn thời gian vô ích).
 - Nếu người dùng muốn rebuild sạch không cache: chạy `docker compose build --no-cache nvr-wrapper`.
-- Working directory LUÔN là `/home/toan/my-nvr` (không cd lung tung).
+- Working directory LUÔN là `/home/toan/toanDoc/Documents/my-nvr` (không cd lung tung).

@@ -44,7 +44,7 @@ Bar 2: 08:46:12 → 11:28:12 VN  (973 segs, ~162 phút)
 Bar 3: 12:00:29 → 14:40:30 VN  (961 segs, ~160 phút)
 ```
 
-Host path: `/home/toan/my-nvr/media/recordings/`  
+Host path: `/home/toan/toanDoc/Documents/my-nvr/media/recordings/`  
 Container path: `/app/media/recordings/`  
 Frigate path: `/media/frigate/recordings/`
 
@@ -210,7 +210,7 @@ Trạng thái: kiến trúc dc-bridge-sở-hữu-peer-playback **đã code + bui
 B=~/Documents/1CodeBkav/B02/aiview_b02_box/dc-bridge
 cp "$B"/{main.go,go.mod,go.sum} /tmp/dcb && cd /tmp/dcb
 sed -i 's|127.0.0.1:8080/internal/dc/command|127.0.0.1:3000/internal/dc/command|' main.go
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /home/toan/my-nvr/data/dc-bridge -ldflags='-s -w' .
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /home/toan/toanDoc/Documents/my-nvr/data/dc-bridge -ldflags='-s -w' .
 docker compose up -d --force-recreate --no-deps nvr-wrapper   # respawn dc-bridge từ binary mới
 ```
 > ⚠️ Source gốc go.mod đã `go mod tidy` (pion/rtp thành direct) → build KHÔNG cần `-mod=mod`.

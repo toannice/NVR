@@ -45,6 +45,16 @@ object CameraService {
 
     private fun buildSubToken(channelId: String): String = "MediaProfile${channelId.padStart(3, '0')}02"
 
+    /** Công tắc AI tổng đang bật? Camera mới kế thừa giá trị này thay vì bật cứng. */
+    private fun globalDetectEnabled(): Boolean = try {
+        val file = File(configPath())
+        if (!file.exists()) true
+        else (Yaml().load<Map<String, Any>>(file.readText())?.get("detect") as? Map<*, *>)
+            ?.get("enabled")?.toString()?.toBoolean() ?: true
+    } catch (_: Exception) {
+        true
+    }
+
     suspend fun applyAndPersistFromOnvif(
         channelId: String,
         host: String,
@@ -268,6 +278,12 @@ object CameraService {
                         if (gatewayId != null) it[Cameras.gatewayId] = gatewayId
                         if (localIp != null) it[Cameras.localIp] = localIp
                         if (assignedRtspPort != null) it[Cameras.assignedRtspPort] = assignedRtspPort
+                        // Camera mới được writeYaml cấp sẵn vùng "Toàn cảnh" khi AI tổng đang bật.
+                        // Đánh dấu để vùng đầu tiên người dùng tự vẽ được phép thay thế nó.
+                        if (globalDetectEnabled()) {
+                            it[Cameras.aiIntent] = AiConfigState.INTENT_ON
+                            it[Cameras.aiDefaultZone] = true
+                        }
                     }
                 } else {
                     Cameras.update({ Cameras.slug eq targetSlug }) {
@@ -348,17 +364,48 @@ object CameraService {
             )
         }
 
-        cameras[slug] = mapOf(
+        // AI của camera mới phải KẾ THỪA công tắc tổng, không được bật cứng: khách đã tắt AI toàn
+        // hệ thống (vì dùng Box AI) mà thêm camera lại tự bật là sai — camera con đè giá trị global.
+        val globalDetectOn = (configData["detect"] as? Map<*, *>)
+            ?.get("enabled")?.toString()?.toBoolean() ?: true
+
+        @Suppress("UNCHECKED_CAST")
+        val existingCam = cameras[slug] as? Map<String, Any>
+        val existingZones = existingCam?.get("zones") as? Map<*, *>
+        val isNewCamera = existingCam == null
+
+        val camBlock = mutableMapOf<String, Any>(
             "ffmpeg" to mapOf(
                 "hwaccel_args" to HwaccelDetector.detectHwaccelArgs(),
                 "inputs" to ffmpegInputs
             ),
-            "detect" to mapOf("enabled" to true),
             "record" to mapOf(
                 "enabled" to record,
                 "retain" to mapOf("days" to 7, "mode" to "all")
             )
         )
+
+        if (isNewCamera) {
+            camBlock["detect"] = mapOf("enabled" to globalDetectOn)
+            if (globalDetectOn) {
+                // Cấp sẵn vùng "Toàn cảnh" bắt Người + Phương tiện, ghi THẬT vào config chứ không
+                // để frontend vẽ ra một vùng ảo chưa từng được lưu (bug cũ: UI báo AI đang chạy
+                // trong khi config.yml không có vùng nào).
+                camBlock["zones"] = AiConfigState.defaultZoneBlock()
+                camBlock["objects"] = mapOf("track" to AiConfigState.DEFAULT_ZONE_OBJECTS)
+                camBlock["review"] = mapOf("alerts" to mapOf("required_zones" to listOf(AiConfigState.DEFAULT_ZONE_NAME)))
+            }
+        } else {
+            // Cập nhật camera (đổi RTSP, đổi tên…) KHÔNG được đụng tới cấu hình AI: khối này ghi
+            // đè cả camera nên phải chép lại nguyên vẹn, nếu không người dùng mất sạch vùng đã vẽ.
+            existingCam["detect"]?.let { camBlock["detect"] = it }
+            existingCam["zones"]?.let { camBlock["zones"] = it }
+            existingCam["objects"]?.let { camBlock["objects"] = it }
+            existingCam["review"]?.let { camBlock["review"] = it }
+            if (existingZones == null) camBlock.putIfAbsent("detect", mapOf("enabled" to globalDetectOn))
+        }
+
+        cameras[slug] = camBlock
 
         val go2rtc = (configData.getOrPut("go2rtc") { mutableMapOf<String, Any>() }) as MutableMap<String, Any>
         val streams = (go2rtc.getOrPut("streams") { mutableMapOf<String, Any>() }) as MutableMap<String, Any>
@@ -488,17 +535,7 @@ object CameraService {
         }
     }
 
-    private fun detectLanIp(): String = try {
-        java.net.NetworkInterface.getNetworkInterfaces()
-            .toList().asSequence()
-            .filter { it.isUp && !it.isLoopback && !it.isVirtual }
-            .filterNot { val n = it.name.lowercase(); n.startsWith("docker") || n.startsWith("br-") || n.startsWith("veth") }
-            .flatMap { it.inetAddresses.toList().asSequence() }
-            .filterIsInstance<java.net.Inet4Address>()
-            .map { it.hostAddress }
-            .firstOrNull { ip -> ip.startsWith("192.168.") || ip.startsWith("10.") || ip.matches(Regex("^172\\.(1[6-9]|2\\d|3[01])\\..*")) }
-            ?: ""
-    } catch (_: Exception) { "" }
+    private fun detectLanIp(): String = vn.aiview.nvr.utils.NetUtils.detectLanIp()
 
     private fun parseIpFromRtsp(rtsp: String): String? {
         if (rtsp.isBlank()) return null
@@ -560,6 +597,9 @@ object CameraService {
     }
 
     private fun triggerFrigateRestart(): Boolean = try {
+        // Frigate stops producing frames for ALL cameras while it restarts — tell the online
+        // tracker so it holds states instead of announcing every camera as offline then online.
+        StreamOnlineTracker.noteFrigateRestart("camera_config_apply")
         val conn = java.net.URL("${frigateBase()}/api/restart").openConnection() as java.net.HttpURLConnection
         conn.requestMethod = "POST"
         conn.connectTimeout = 3000

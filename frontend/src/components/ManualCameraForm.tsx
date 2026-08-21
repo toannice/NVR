@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { Icon } from './Icon'
+import { useModalKeys } from '../hooks/useModalKeys'
+import { t } from '../i18n';
 
 // Manual Camera Add Form Component matching design
 export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
@@ -20,9 +22,17 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState('');
 
+  // Esc = đóng, Enter = thêm camera theo tab đang mở (ONVIF hay RTSP).
+  // Chặn khi đang gửi/đang quét để không bắn hai request.
+  useModalKeys({
+    onClose,
+    onSubmit: () => { if (activeMode === 'rtsp') handleRtspSubmit(); else handleSubmit(); },
+    enabled: !isSubmitting && !isProbing,
+  });
+
   const handleProbe = async () => {
     if (!formData.ip) {
-      setError('Vui lòng nhập IP camera trước khi quét');
+      setError(t('Vui lòng nhập IP camera trước khi quét'));
       return;
     }
     console.log(handleProbe);
@@ -54,22 +64,30 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
             setFormData(prev => ({ ...prev, rtspPort: match[1] }));
           }
         }
-        addToast({ type: 'success', title: 'Tìm thấy camera', message: `Đã tìm thấy thông tin camera qua ONVIF!\nModel: ${data.deviceInfo?.Model}\nPath: ${data.path}` });
+        addToast({ type: 'success', title: t('Tìm thấy camera'), message: t('Đã tìm thấy thông tin camera qua ONVIF!\nModel: {0}\nPath: {1}').replace('{0}', data.deviceInfo?.Model).replace('{1}', data.path) });
       } else {
-        throw new Error(data.error || 'Không thể kết nối ONVIF');
+        throw new Error(data.error || t('Không thể kết nối ONVIF'));
       }
     } catch (e: any) {
-      const msg = `Lỗi quét ONVIF: ${e.message}. Bạn hãy kiểm tra lại thông tin đăng nhập hoặc nhập Path thủ công trong phần Nâng cao.`;
+      const msg = t('Lỗi quét ONVIF: {0}. Bạn hãy kiểm tra lại thông tin đăng nhập hoặc nhập Path thủ công trong phần Nâng cao.').replace('{0}', e.message);
       setError(msg);
-      addToast({ type: 'error', title: 'Lỗi quét ONVIF', message: e.message });
+      addToast({ type: 'error', title: t('Lỗi quét ONVIF'), message: e.message });
       setShowAdvanced(true);
     } finally {
       setIsProbing(false);
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+
+    // Validate trước khi gọi /api/probe-onvif. Thiếu bước này thì form trống vẫn bắn
+    // request rỗng lên backend và nhận HTTP 500 — người dùng chỉ thấy "lỗi kết nối"
+    // chứ không biết là mình chưa điền gì.
+    if (!formData.name.trim()) { setError(t('Vui lòng nhập tên camera')); return; }
+    if (!formData.ip.trim()) { setError(t('Vui lòng nhập địa chỉ IP camera')); return; }
+    if (!formData.password) { setError(t('Vui lòng nhập mật khẩu camera')); return; }
+
     setIsSubmitting(true);
     setError('');
 
@@ -159,19 +177,19 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
       onClose();
     } catch (e: any) {
       console.error(e);
-      setError(e.message || 'Có lỗi xảy ra khi thêm camera');
-      addToast({ type: 'error', title: 'Lỗi thêm camera', message: e.message || 'Có lỗi xảy ra khi thêm camera' });
+      setError(e.message || t('Có lỗi xảy ra khi thêm camera'));
+      addToast({ type: 'error', title: t('Lỗi thêm camera'), message: e.message || t('Có lỗi xảy ra khi thêm camera') });
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleRtspSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!rtspData.name.trim()) { setError('Vui lòng nhập tên camera'); return; }
-    if (!rtspData.rtsp.trim()) { setError('Vui lòng nhập đường dẫn RTSP'); return; }
-    if (!rtspData.rtsp.startsWith('rtsp://')) { setError('Đường dẫn RTSP phải bắt đầu bằng rtsp://'); return; }
-    if (rtspData.subRtsp.trim() && !rtspData.subRtsp.startsWith('rtsp://')) { setError('Sub stream phải bắt đầu bằng rtsp://'); return; }
+  const handleRtspSubmit = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!rtspData.name.trim()) { setError(t('Vui lòng nhập tên camera')); return; }
+    if (!rtspData.rtsp.trim()) { setError(t('Vui lòng nhập đường dẫn RTSP')); return; }
+    if (!rtspData.rtsp.startsWith('rtsp://')) { setError(t('Đường dẫn RTSP phải bắt đầu bằng rtsp://')); return; }
+    if (rtspData.subRtsp.trim() && !rtspData.subRtsp.startsWith('rtsp://')) { setError(t('Sub stream phải bắt đầu bằng rtsp://')); return; }
     setIsSubmitting(true);
     setError('');
     try {
@@ -180,9 +198,9 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
       await Promise.resolve(onAdd(payload));
       onClose();
     } catch (e: any) {
-      const msg = e.message || 'Không thể kết nối RTSP. Kiểm tra lại đường dẫn và đảm bảo camera đang hoạt động.';
+      const msg = e.message || t('Không thể kết nối RTSP. Kiểm tra lại đường dẫn và đảm bảo camera đang hoạt động.');
       setError(msg);
-      addToast({ type: 'error', title: 'Lỗi thêm camera RTSP', message: msg });
+      addToast({ type: 'error', title: t('Lỗi thêm camera RTSP'), message: msg });
     } finally {
       setIsSubmitting(false);
     }
@@ -193,9 +211,7 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
       <div className="bg-white dark:bg-[#2D2D2D] w-full max-w-2xl rounded-lg shadow-2xl flex flex-col max-h-[90vh] z-20 border border-gray-200 dark:border-gray-700 overflow-hidden animate-fade-in-up">
         <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-white dark:bg-[#333]">
           <h2 className="text-xl font-bold text-[#F04E30] flex items-center">
-            <Icon name="add_circle" className="mr-2" />
-            Thêm Camera Thủ Công
-          </h2>
+            <Icon name="add_circle" className="mr-2" />{t("Thêm Camera Thủ Công")}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" disabled={isSubmitting}>
             <Icon name="close" />
           </button>
@@ -208,15 +224,13 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
             onClick={() => { setActiveMode('onvif'); setError(''); }}
             className={`flex-1 py-3 text-sm font-medium transition-colors flex items-center justify-center gap-1.5 ${activeMode === 'onvif' ? 'text-[#F04E30] border-b-2 border-[#F04E30]' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}
           >
-            <Icon name="settings_input_antenna" className="text-base" /> ONVIF / Tự động
-          </button>
+            <Icon name="settings_input_antenna" className="text-base" />{t("ONVIF / Tự động")}</button>
           <button
             type="button"
             onClick={() => { setActiveMode('rtsp'); setError(''); }}
             className={`flex-1 py-3 text-sm font-medium transition-colors flex items-center justify-center gap-1.5 ${activeMode === 'rtsp' ? 'text-[#F04E30] border-b-2 border-[#F04E30]' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}
           >
-            <Icon name="link" className="text-base" /> RTSP trực tiếp
-          </button>
+            <Icon name="link" className="text-base" />{t("RTSP trực tiếp")}</button>
         </div>
 
         {activeMode === 'rtsp' ? (
@@ -224,14 +238,11 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
             <form onSubmit={handleRtspSubmit} className="space-y-6">
               <div className="p-4 bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded-lg flex items-start gap-3">
                 <Icon name="info" className="text-blue-500 mt-0.5" />
-                <div className="text-sm text-blue-800 dark:text-blue-200">
-                  Nhập URL RTSP đầy đủ. Bất kỳ stream nào xem được qua VLC đều hoạt động được.
-                </div>
+                <div className="text-sm text-blue-800 dark:text-blue-200">{t("Nhập URL RTSP đầy đủ. Bất kỳ stream nào xem được qua VLC đều hoạt động được.")}</div>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Tên camera <span className="text-red-500">*</span>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t("Tên camera")}<span className="text-red-500">*</span>
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -240,7 +251,7 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
                   <input
                     required
                     className="w-full pl-10 rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white focus:ring-[#F04E30] focus:border-[#F04E30] shadow-sm"
-                    placeholder="Ví dụ: Camera Cổng Chính"
+                    placeholder={t("Ví dụ: Camera Cổng Chính")}
                     type="text"
                     value={rtspData.name}
                     onChange={e => setRtspData({ ...rtspData, name: e.target.value })}
@@ -251,8 +262,7 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Đường dẫn RTSP <span className="text-red-500">*</span>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t("Đường dẫn RTSP")}<span className="text-red-500">*</span>
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -272,7 +282,7 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Sub stream RTSP <span className="text-gray-400 font-normal">(tuỳ chọn — dùng cho AI detect)</span>
+                  Sub stream RTSP <span className="text-gray-400 font-normal">{t("(tuỳ chọn — dùng cho AI detect)")}</span>
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -287,12 +297,11 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
                     disabled={isSubmitting}
                   />
                 </div>
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Nếu để trống, main stream sẽ được dùng cho cả record lẫn detect.</p>
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{t("Nếu để trống, main stream sẽ được dùng cho cả record lẫn detect.")}</p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Địa chỉ IP <span className="text-gray-400 font-normal">(tuỳ chọn)</span>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t("Địa chỉ IP")}<span className="text-gray-400 font-normal">{t("(tuỳ chọn)")}</span>
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -307,7 +316,7 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
                     disabled={isSubmitting}
                   />
                 </div>
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Để trống nếu IP đã có trong đường dẫn RTSP.</p>
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{t("Để trống nếu IP đã có trong đường dẫn RTSP.")}</p>
               </div>
 
               {error && (
@@ -323,14 +332,11 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
           <form onSubmit={handleSubmit} className="space-y-6">
             <div className="p-4 bg-orange-50 dark:bg-orange-900/10 border border-orange-200 dark:border-orange-800 rounded-lg flex items-start gap-3 mb-2">
               <Icon name="info" className="text-orange-500 mt-0.5" />
-              <div className="text-sm text-orange-800 dark:text-orange-200">
-                Nhập IP và thông tin đăng nhập, hệ thống sẽ tự động quét và tìm đường dẫn RTSP phù hợp.
-              </div>
+              <div className="text-sm text-orange-800 dark:text-orange-200">{t("Nhập IP và thông tin đăng nhập, hệ thống sẽ tự động quét và tìm đường dẫn RTSP phù hợp.")}</div>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Tên camera <span className="text-red-500">*</span>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t("Tên camera")}<span className="text-red-500">*</span>
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -339,20 +345,19 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
                 <input
                   required
                   className="w-full pl-10 rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white focus:ring-[#F04E30] focus:border-[#F04E30] shadow-sm"
-                  placeholder="Ví dụ: Camera Cổng Chính"
+                  placeholder={t("Ví dụ: Camera Cổng Chính")}
                   type="text"
                   value={formData.name}
                   onChange={e => setFormData({ ...formData, name: e.target.value })}
                   disabled={isSubmitting}
                 />
               </div>
-              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Đặt tên dễ gợi nhớ vị trí lắp đặt.</p>
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{t("Đặt tên dễ gợi nhớ vị trí lắp đặt.")}</p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div className="md:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Địa chỉ IP <span className="text-red-500">*</span>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t("Địa chỉ IP")}<span className="text-red-500">*</span>
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -370,7 +375,7 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 truncate" title="Cổng Admin/ONVIF">Cổng (Port)</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 truncate" title={t("Cổng Admin/ONVIF")}>{t("Cổng (Port)")}</label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                     <Icon name="settings_input_component" className="text-gray-400 text-lg" />
@@ -389,8 +394,7 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Tên đăng nhập <span className="text-red-500">*</span>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t("Tên đăng nhập")}<span className="text-red-500">*</span>
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -408,8 +412,7 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Mật khẩu <span className="text-red-500">*</span>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t("Mật khẩu")}<span className="text-red-500">*</span>
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -437,23 +440,19 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
                   onClick={() => setShowAdvanced(!showAdvanced)}
                   className="text-sm font-medium text-gray-500 hover:text-gray-700 flex items-center"
                 >
-                  <Icon name={showAdvanced ? "expand_less" : "expand_more"} />
-                  Thiết lập nâng cao (Đường dẫn thủ công)
-                </button>
+                  <Icon name={showAdvanced ? "expand_less" : "expand_more"} />{t("Thiết lập nâng cao (Đường dẫn thủ công)")}</button>
               </div>
 
               {showAdvanced && (
                 <div className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded border border-gray-200 dark:border-gray-700 animate-fade-in mb-4">
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Đường dẫn RTSP (RTSP Path)
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t("Đường dẫn RTSP (RTSP Path)")}</label>
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                       <Icon name="link" className="text-gray-400 text-lg" />
                     </div>
                     <input
                       className="w-full pl-10 rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white focus:ring-[#F04E30] focus:border-[#F04E30] shadow-sm font-mono"
-                      placeholder="/stream1 hoặc /profile1/live"
+                      placeholder={t("/stream1 hoặc /profile1/live")}
                       type="text"
                       value={formData.path}
                       onChange={e => setFormData({ ...formData, path: e.target.value })}
@@ -473,7 +472,7 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
                   onChange={e => setFormData({ ...formData, addToLiveView: e.target.checked })}
                   disabled={isSubmitting || isProbing}
                 />
-                <span className="ml-2 text-sm text-gray-600 dark:text-gray-400">Tự động thêm vào luồng xem trực tiếp (Live View)</span>
+                <span className="ml-2 text-sm text-gray-600 dark:text-gray-400">{t("Tự động thêm vào luồng xem trực tiếp (Live View)")}</span>
               </label>
             </div>
 
@@ -491,9 +490,7 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
             onClick={onClose}
             className="px-5 py-2.5 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors font-medium text-sm uppercase tracking-wide"
             disabled={isSubmitting}
-          >
-            Hủy bỏ
-          </button>
+          >{t("Hủy bỏ")}</button>
           <button
             onClick={activeMode === 'rtsp' ? handleRtspSubmit : handleSubmit}
             disabled={isSubmitting}
@@ -501,14 +498,10 @@ export function ManualCameraForm({ onClose, onAdd, status, addToast }: any) {
           >
             {isSubmitting ? (
               <>
-                <Icon name="hourglass_empty" className="text-lg mr-2 animate-spin" />
-                Đang xử lý...
-              </>
+                <Icon name="hourglass_empty" className="text-lg mr-2 animate-spin" />{t("Đang xử lý...")}</>
             ) : (
               <>
-                <Icon name="add" className="text-lg mr-2" />
-                Thêm
-              </>
+                <Icon name="add" className="text-lg mr-2" />{t("Thêm")}</>
             )}
           </button>
         </div>

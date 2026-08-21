@@ -170,8 +170,7 @@ object IntegrationService {
     // ---- Restream URL building (v1.1 §3.2, A6) ----
 
     /** LAN IP that the Box can reach for the go2rtc restream (port 8554). */
-    fun lanIp(): String =
-        System.getenv("FRIGATE_HOST_IP")?.takeIf { it.isNotBlank() } ?: detectLanIp()
+    fun lanIp(): String = vn.aiview.nvr.utils.NetUtils.lanIp()
 
     /**
      * Restream RTSP URL for a channel. v1.1 default rtsp_auth=false → bare URL.
@@ -199,31 +198,6 @@ object IntegrationService {
         conn.requestMethod  = "GET"
         conn.responseCode in 200..299
     } catch (_: Exception) { false }
-
-    private val privateIp172 = Regex("^172\\.(1[6-9]|2\\d|3[01])\\..*")
-
-    private fun detectLanIp(): String = try {
-        val candidates = java.net.NetworkInterface.getNetworkInterfaces()
-            .toList().asSequence()
-            .filter { it.isUp && !it.isLoopback && !it.isVirtual }
-            // Skip docker/bridge AND overlay/VPN interfaces (Nebula, ZeroTier, WireGuard,
-            // Tailscale, tun) — their IPs are NOT reachable by a LAN Box pulling the restream.
-            .filterNot {
-                val n = it.name.lowercase()
-                n.startsWith("docker") || n.startsWith("br-") || n.startsWith("veth") ||
-                    n.startsWith("nebula") || n.startsWith("zt") || n.startsWith("tun") ||
-                    n.startsWith("tailscale") || n.startsWith("wg") || n.startsWith("utun")
-            }
-            .flatMap { it.inetAddresses.toList().asSequence() }
-            .filterIsInstance<java.net.Inet4Address>()
-            .map { it.hostAddress }
-            .filter { ip -> ip.startsWith("192.168.") || ip.startsWith("10.") || ip.matches(privateIp172) }
-            .toList()
-        // Prefer real-LAN ranges (192.168 / 172.16-31) over ambiguous 10.x (often VPN/overlay).
-        candidates.firstOrNull { it.startsWith("192.168.") || it.matches(privateIp172) }
-            ?: candidates.firstOrNull()
-            ?: "127.0.0.1"
-    } catch (_: Exception) { "127.0.0.1" }
 
     /**
      * In-memory sliding-window rate limiter keyed by client IP (v1.1 §4.4).

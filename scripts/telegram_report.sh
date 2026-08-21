@@ -3,7 +3,7 @@
 # Gửi báo cáo tình trạng hệ thống NVR hàng ngày vào Telegram.
 
 # Thay đổi bằng thư mục gốc cài đặt dự án của bạn (hard-coded tuyệt đối để chạy cron an toàn)
-PROJECT_DIR="/home/toan/my-nvr"
+PROJECT_DIR="/home/toan/toanDoc/Documents/my-nvr"
 cd $PROJECT_DIR || exit 1
 
 # Đọc các cấu hình Bot Token

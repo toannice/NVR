@@ -20,6 +20,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -151,6 +152,7 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"overlayIp":   st.overlayIP,
 		"nebulaUp":    st.serviceUp,
 		"certExpiry":  st.certExpiry,
+		"renewFails":  atomic.LoadInt32(&renewFails),
 		"lighthouse":  e.Lighthouse,
 		"fieldSubnet": s.cfg.FieldSubnet,
 		"agentPort":   s.cfg.Port,
@@ -465,20 +467,25 @@ func (s *server) maybeRenew(e Enroll) {
 	pub, err := s.cfg.ensureKeypair()
 	if err != nil {
 		log.Printf("renew: keypair: %v", err)
+		atomic.AddInt32(&renewFails, 1)
 		return
 	}
 	body, code, err := s.signingRenew(e.SigningURL, e.Token, pub)
 	if err != nil || code >= 400 {
 		log.Printf("renew: HQ refused (code=%d err=%v) — will retry", code, err)
+		atomic.AddInt32(&renewFails, 1)
 		return
 	}
 	if str(body["status"]) != "signed" {
+		atomic.AddInt32(&renewFails, 1)
 		return
 	}
 	if err := s.applySignedCert(body); err != nil {
 		log.Printf("renew: apply cert failed: %v", err)
+		atomic.AddInt32(&renewFails, 1)
 		return
 	}
+	atomic.StoreInt32(&renewFails, 0)
 	log.Printf("renew: cert renewed (daysLeft was <= %d), nebula restarted", s.cfg.RenewThresholdDays)
 }
 
@@ -506,6 +513,10 @@ func (s *server) applySignedCert(body map[string]any) error {
 
 // lastRenewAttempt rate-limits R1 auto-renew to one HQ call per hour (see maybeRenew).
 var lastRenewAttempt time.Time
+
+// renewFails counts CONSECUTIVE failed renew attempts (reset on success). Reported in /health so the
+// NVR's GatewayMonitor can alert before a silently-failing renew runs the cert into expiry.
+var renewFails int32
 
 func (s *server) signingEnroll(base, token, name, pubPem string) (map[string]any, int, error) {
 	payload, _ := json.Marshal(map[string]string{"token": token, "name": name, "pubPem": pubPem})

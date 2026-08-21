@@ -9,6 +9,7 @@ import org.jetbrains.exposed.sql.transactions.transaction
 import io.ktor.client.*
 import io.ktor.client.engine.cio.*
 import io.ktor.client.request.*
+import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import vn.aiview.nvr.cloud.CommandDispatcher
@@ -18,11 +19,9 @@ import vn.aiview.nvr.models.AIEvents
 import vn.aiview.nvr.models.Cameras
 import vn.aiview.nvr.routes.OnvifSoapClient
 import vn.aiview.nvr.services.CameraService
+import vn.aiview.nvr.services.StreamOnlineTracker
 import vn.aiview.nvr.utils.AppLogger
 import java.util.Base64
-import java.net.DatagramPacket
-import java.net.DatagramSocket
-import java.net.InetAddress
 
 object CameraCommandHandler {
     fun handle(func: String, data: JsonObject): JsonObject = when (func) {
@@ -35,6 +34,7 @@ object CameraCommandHandler {
         "get_videosources" -> getVideoSources()
         "get_profiles_channel" -> getProfilesChannel(data)
         "get_ai_event_image" -> getAiEventImage(data)
+        "get_snapshot" -> getSnapshot(data)
         // Playback funcs arrive on channel_service — delegate to PlaybackCommandHandler
         "post_search_calendar", "get_search_calendar",
         "post_search_findrecordings", "get_search_findrecordings",
@@ -58,10 +58,13 @@ object CameraCommandHandler {
                 val ptz = row[Cameras.hasPtz] || row[Cameras.ptzEnabled]
                 val mainToken = row[Cameras.mainToken].ifBlank { buildMainToken(chId) }
                 val subToken = row[Cameras.subToken].ifBlank { buildSubToken(chId) }
+                // Real state, same source as notify_channels_state (see SignalingManager) so the
+                // cloud's camera list and device list never disagree.
+                val online = StreamOnlineTracker.isOnline(chId)
                 addJsonObject {
                     put("channelID", chId)
-                    put("status", "online")
-                    put("isConnected", true)
+                    put("status", if (online) "online" else "offline")
+                    put("isConnected", online)
                     putJsonObject("xAdrr") {
                         put("host", row[Cameras.ip] ?: "")
                         put("port", row[Cameras.onvifPort].toLong())
@@ -126,7 +129,11 @@ object CameraCommandHandler {
         val pass = data["password"]?.jsonPrimitive?.content ?: ""
         return runBlocking {
             try {
-                withTimeout(5_000) { OnvifSoapClient.getDeviceInfoAndStream(host, port, user, pass) }
+                // 10s to match CameraService.applyAndPersistFromOnvif (onvifTimeoutMs = 10_000).
+                // Was 5s: a camera that answers in 6-8s (common over a gateway proxy or a busy
+                // link) verified fine from the Web UI but failed from the cloud dashboard, and the
+                // dashboard still listed the camera afterwards — so the device looked broken.
+                withTimeout(10_000) { OnvifSoapClient.getDeviceInfoAndStream(host, port, user, pass) }
                 crudSuccess("post.device.success")
             } catch (e: Exception) {
                 CommandDispatcher.errorResponse("E0007", "ONVIF probe failed: ${e.message}")
@@ -253,19 +260,108 @@ object CameraCommandHandler {
         }
     }
 
+    /**
+     * ps_service/get_snapshot — the cloud's device list thumbnail.
+     *
+     * B01 contract: `params.token` = media profile token to grab, `data.url` = cloud endpoint to
+     * upload the JPEG to, `data.token` = its access token. The device grabs a still frame and
+     * POSTs it as multipart form-data (field "file") to `{url}?access_token={token}`; the cloud
+     * then renders that image on the tile. Answering an error here (what we used to do) leaves the
+     * tile blank — which is why every camera showed as a grey OFFLINE box with no preview.
+     */
+    private fun getSnapshot(data: JsonObject): JsonObject {
+        val params = data["_params"]?.jsonObject ?: buildJsonObject {}
+        val body = data["_data"]?.jsonObject ?: buildJsonObject {}
+        val profileToken = params["token"]?.jsonPrimitive?.contentOrNull
+            ?: params["sourceToken"]?.jsonPrimitive?.contentOrNull
+            ?: body["sourceToken"]?.jsonPrimitive?.contentOrNull
+        val uploadUrl = body["url"]?.jsonPrimitive?.contentOrNull
+        val accessToken = body["token"]?.jsonPrimitive?.contentOrNull ?: ""
+        AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "SNAPSHOT_REQ",
+            "profileToken=$profileToken uploadUrl=${uploadUrl?.take(120)}")
+
+        if (profileToken.isNullOrBlank()) {
+            return CommandDispatcher.errorResponse("E0007", "Missing profile token")
+        }
+        val row = transaction {
+            Cameras.selectAll()
+                .where { (Cameras.mainToken eq profileToken) or (Cameras.subToken eq profileToken) }
+                .firstOrNull()
+        } ?: return CommandDispatcher.errorResponse("E0013", "Camera not found for token $profileToken")
+        val slug = row[Cameras.slug]
+
+        return runBlocking {
+            try {
+                // Frigate keeps the most recent decoded frame per camera — cheap, no extra ffmpeg.
+                val snapUrl = "$frigateUrl/api/$slug/latest.jpg?h=480"
+                val resp = frigateHttp.get(snapUrl)
+                if (!resp.status.isSuccess()) {
+                    AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "SNAPSHOT_FRIGATE_FAIL",
+                        "slug=$slug status=${resp.status.value}")
+                    return@runBlocking CommandDispatcher.errorResponse("E0015",
+                        "Snapshot not available (Frigate status ${resp.status.value})")
+                }
+                val bytes = resp.readBytes()
+
+                if (uploadUrl.isNullOrBlank()) {
+                    // No upload target: fall back to inline base64 so the cloud can still use it.
+                    AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "SNAPSHOT_INLINE",
+                        "slug=$slug size=${bytes.size}B (no upload url in request)")
+                    return@runBlocking CommandDispatcher.successResponse(buildJsonObject {
+                        put("token", profileToken)
+                        put("image", Base64.getEncoder().encodeToString(bytes))
+                        put("content_type", "image/jpeg")
+                        put("size", bytes.size)
+                    })
+                }
+
+                val target = if (accessToken.isBlank()) uploadUrl
+                    else uploadUrl + (if (uploadUrl.contains("?")) "&" else "?") + "access_token=$accessToken"
+                val up = frigateHttp.post(target) {
+                    setBody(MultiPartFormDataContent(formData {
+                        append("file", bytes, Headers.build {
+                            append(HttpHeaders.ContentType, "image/jpeg")
+                            append(HttpHeaders.ContentDisposition, "filename=\"$slug.jpg\"")
+                        })
+                    }))
+                }
+                if (!up.status.isSuccess()) {
+                    AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "SNAPSHOT_UPLOAD_FAIL",
+                        "slug=$slug status=${up.status.value} body=${up.bodyAsText().take(200)}")
+                    return@runBlocking CommandDispatcher.errorResponse("E0016",
+                        "Snapshot upload failed (status ${up.status.value})")
+                }
+                AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "SNAPSHOT_UPLOAD_OK",
+                    "slug=$slug size=${bytes.size}B")
+                CommandDispatcher.successResponse(buildJsonObject {
+                    put("token", profileToken)
+                    put("size", bytes.size)
+                })
+            } catch (e: Exception) {
+                AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "SNAPSHOT_FAIL",
+                    "slug=$slug err=${e.message}")
+                CommandDispatcher.errorResponse("E0016", "Snapshot failed: ${e.message}")
+            }
+        }
+    }
+
     private fun getDiscovery(): JsonObject {
         val devices = buildJsonArray {
             try {
-                wsDiscovery().forEach { ip ->
+                val probed = runBlocking { vn.aiview.nvr.routes.probeOnvifNetwork() }
+                AppLogger.info(AppLogger.Module.CLOUD, "DISCOVERY", "SCAN_OK", "count=${probed.size}")
+                probed.forEach { p ->
                     addJsonObject {
                         putJsonObject("scopes") {
-                            put("hardware", ""); put("location", ""); put("mac", "")
-                            put("manufacture", ""); put("name", ip); put("type", "video_encoder")
+                            put("hardware", p.hardware); put("location", p.location); put("mac", "")
+                            put("manufacture", p.manufacturer); put("name", p.name); put("type", "video_encoder")
                         }
-                        putJsonObject("xAdrr") { put("host", ip); put("https", 0); put("port", 80L) }
+                        putJsonObject("xAdrr") { put("host", p.ip); put("https", if (p.https) 1 else 0); put("port", p.port.toLong()) }
                     }
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                AppLogger.warn(AppLogger.Module.CLOUD, "DISCOVERY", "SCAN_FAIL", "err=${e.message}")
+            }
         }
         return buildJsonObject {
             put("status", true); put("message", "get.discovery.success"); put("error_code", "")
@@ -394,38 +490,4 @@ object CameraCommandHandler {
         }
     }
 
-    // ── WS-Discovery ─────────────────────────────────────────────────────────
-
-    private fun wsDiscovery(): List<String> {
-        val discovered = mutableListOf<String>()
-        val probe = """<?xml version="1.0" encoding="UTF-8"?>
-<e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope"
-            xmlns:w="http://schemas.xmlsoap.org/ws/2004/08/addressing"
-            xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery"
-            xmlns:dn="http://www.onvif.org/ver10/network/wsdl">
-  <e:Header>
-    <w:MessageID>uuid:${java.util.UUID.randomUUID()}</w:MessageID>
-    <w:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</w:To>
-    <w:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action>
-  </e:Header>
-  <e:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></e:Body>
-</e:Envelope>"""
-        try {
-            DatagramSocket().use { socket ->
-                socket.soTimeout = 3_000
-                val bytes = probe.toByteArray()
-                socket.send(DatagramPacket(bytes, bytes.size, InetAddress.getByName("239.255.255.250"), 3702))
-                val buf = ByteArray(4096)
-                val end = System.currentTimeMillis() + 3_000
-                while (System.currentTimeMillis() < end) {
-                    try {
-                        val pkt = DatagramPacket(buf, buf.size)
-                        socket.receive(pkt)
-                        discovered.add(pkt.address.hostAddress)
-                    } catch (_: java.net.SocketTimeoutException) { break }
-                }
-            }
-        } catch (_: Exception) {}
-        return discovered.distinct()
-    }
 }

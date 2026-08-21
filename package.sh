@@ -86,16 +86,12 @@ if ! docker image inspect nvr-watchdog:latest >/dev/null 2>&1; then
 fi
 ok "nvr-watchdog:latest OK"
 
-# nvr-wrapper: phải có sẵn (build từ source hoặc pull từ GHCR)
-WRAPPER_IMAGE="ghcr.io/toannice/nvr:latest"
-if docker image inspect nvr-wrapper:latest >/dev/null 2>&1; then
-    WRAPPER_IMAGE="nvr-wrapper:latest"
-    ok "nvr-wrapper:latest (local build) OK"
-elif docker image inspect "${WRAPPER_IMAGE}" >/dev/null 2>&1; then
-    ok "${WRAPPER_IMAGE} (GHCR) OK"
-else
-    die "Không tìm thấy nvr-wrapper image. Chạy: docker compose build nvr-wrapper"
-fi
+# nvr-wrapper: phải là image BUILD TỪ SOURCE trên máy này. Không còn nhánh "pull từ GHCR":
+# bundle là đường giao hàng duy nhất, và image mang tên registry chỉ gây nhầm lẫn trên máy khách.
+WRAPPER_IMAGE="nvr-wrapper:latest"
+docker image inspect "$WRAPPER_IMAGE" >/dev/null 2>&1 \
+    || die "Không tìm thấy $WRAPPER_IMAGE. Build trước: docker compose build nvr-wrapper"
+ok "$WRAPPER_IMAGE (local build) OK"
 
 # Lấy FRIGATE_VERSION từ .env nếu có, fallback 0.16.3
 FRIGATE_VER="0.16.3"
@@ -124,21 +120,30 @@ done
 # ── 4. Chuẩn bị thư mục bundle ───────────────────────────────────────────────
 step "4/6" "Chuẩn bị thư mục bundle"
 rm -rf "$BUNDLE_DIR"
-mkdir -p "$BUNDLE_DIR"/{config,nginx,mosquitto/config,secrets,data,docker-install}
+mkdir -p "$BUNDLE_DIR"/{config,nginx,mosquitto/config,secrets,data,docker-install,scripts}
 
 # Sao chép config files
 cp docker-compose.yml               "$BUNDLE_DIR/"
 cp docker-compose.offline.yml       "$BUNDLE_DIR/" 2>/dev/null || true  # sẽ tạo bên dưới
 cp .env.template                    "$BUNDLE_DIR/"
 cp deploy-offline.sh                "$BUNDLE_DIR/" 2>/dev/null || true  # sẽ tạo bên dưới
+# IP guard: giữ FRIGATE_HOST_IP khớp IP thật, nếu không live view đen khi máy đổi IP
+cp scripts/nvr-ip-guard.sh          "$BUNDLE_DIR/scripts/" 2>/dev/null || warn "nvr-ip-guard.sh không tìm thấy"
 cp nginx/nginx.conf                 "$BUNDLE_DIR/nginx/" 2>/dev/null || warn "nginx/nginx.conf không tìm thấy"
-cp config/config.yml                "$BUNDLE_DIR/config/" 2>/dev/null || warn "config/config.yml không tìm thấy"
+# Frigate config: LUÔN dùng template sạch, KHÔNG bao giờ config.yml của máy dev — file đó
+# chứa IP + mật khẩu camera văn phòng, TURN credential và IP overlay Nebula.
+cp config/config.yml.template       "$BUNDLE_DIR/config/config.yml" \
+    || die "config/config.yml.template không tìm thấy — không đóng gói để tránh lộ config máy dev"
 cp config/watchdog.yml              "$BUNDLE_DIR/config/" 2>/dev/null || warn "config/watchdog.yml không tìm thấy"
 cp config/.vacuum                   "$BUNDLE_DIR/config/" 2>/dev/null || true
 cp mosquitto/config/mosquitto.conf  "$BUNDLE_DIR/mosquitto/config/" 2>/dev/null || warn "mosquitto config không tìm thấy"
+# ACL là file tĩnh (chỉ chứa username+topic, không có secret) — mosquitto.conf tham chiếu nó nên
+# PHẢI có trong bundle. File passwd thì KHÔNG copy (chứa hash mật khẩu máy dev) — deploy-offline.sh
+# tự sinh trên máy đích.
+cp mosquitto/config/acl             "$BUNDLE_DIR/mosquitto/config/" 2>/dev/null || warn "mosquitto acl không tìm thấy (MQTT auth sẽ fail trên máy đích)"
 
 # Tạo placeholder secrets (rỗng — người dùng điền sau)
-for s in gmail_app_password edge_agent_token zt_controller_token nebula_sign_token; do
+for s in edge_agent_token zt_controller_token nebula_sign_token; do
     touch "$BUNDLE_DIR/secrets/$s"
 done
 

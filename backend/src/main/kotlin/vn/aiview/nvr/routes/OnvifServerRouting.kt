@@ -16,7 +16,8 @@ import java.time.ZonedDateTime
  * NVR acts as an ONVIF server so Box (or any ONVIF client) can discover it via WS-Discovery
  * and pull the camera list via GetProfiles/GetStreamUri — no custom integration API needed.
  *
- * Endpoints are HTTP (no auth wrapper) so Box can call them on port 80 via nginx proxy.
+ * Endpoints are HTTP (no auth wrapper) so Box can call them on the nginx HTTP port
+ * (ONVIF_HTTP_PORT, mặc định 9000 — trước 2026-07-29 là 80) via nginx proxy.
  * RTSP streams point to go2rtc on port 8554 — accessible from the LAN.
  */
 fun Route.onvifServerRouting() {
@@ -30,8 +31,9 @@ private suspend fun handleNvrSoap(call: ApplicationCall) {
     val body = call.receiveText()
     val ip   = OnvifServerService.nvrIp()
     val rtspBase = "rtsp://$ip:8554"
-    val deviceUrl = "http://$ip/onvif/device_service"
-    val mediaUrl  = "http://$ip/onvif/media_service"
+    val httpBase  = OnvifServerService.httpBase()   // http://<lan-ip>:<ONVIF_HTTP_PORT> (9000)
+    val deviceUrl = "$httpBase/onvif/device_service"
+    val mediaUrl  = "$httpBase/onvif/media_service"
 
     val (soapBody, action) = when {
         body.contains("GetSystemDateAndTime")  -> systemDateAndTime() to "GetSystemDateAndTimeResponse"

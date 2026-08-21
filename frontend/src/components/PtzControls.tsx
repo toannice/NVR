@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { Icon } from './Icon'
+import { t } from '../i18n';
 
 // ============================================
 // PTZ Control Component (Feature 2)
@@ -72,7 +73,7 @@ export const PtzControls = ({ cameraId, ptzEnabled }: { cameraId: string; ptzEna
             ? 'bg-blue-600 border-blue-400 text-white'
             : 'bg-black/70 border-gray-500 text-gray-200 hover:bg-black/90 hover:border-gray-300'
           }`}
-        title="Điều khiển PTZ"
+        title={t("Điều khiển PTZ")}
       >
         <Icon name="open_with" className="text-base" />
       </button>
@@ -84,15 +85,15 @@ export const PtzControls = ({ cameraId, ptzEnabled }: { cameraId: string; ptzEna
           {caps.hasPanTilt && (
           <div className="grid grid-cols-3 gap-1 mb-1.5 touch-none">
             <button onPointerDown={(e) => startContinuousMove(e, -0.5,  0.5)} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onContextMenu={e => e.preventDefault()} className={diagBase} title="↖">↖</button>
-            <button onPointerDown={(e) => startContinuousMove(e,  0,    0.5)} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onContextMenu={e => e.preventDefault()} className={btnBase}  title="Lên"><Icon name="arrow_upward"   className="text-sm" /></button>
+            <button onPointerDown={(e) => startContinuousMove(e,  0,    0.5)} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onContextMenu={e => e.preventDefault()} className={btnBase}  title={t("Lên")}><Icon name="arrow_upward"   className="text-sm" /></button>
             <button onPointerDown={(e) => startContinuousMove(e,  0.5,  0.5)} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onContextMenu={e => e.preventDefault()} className={diagBase} title="↗">↗</button>
 
-            <button onPointerDown={(e) => startContinuousMove(e, -0.5,  0  )} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onContextMenu={e => e.preventDefault()} className={btnBase}  title="Trái"><Icon name="arrow_back"     className="text-sm" /></button>
-            <button onClick={() => stopPtz()} className="w-8 h-8 bg-red-600 hover:bg-red-500 rounded text-white flex items-center justify-center transition-colors touch-none" title="Dừng"><Icon name="stop" className="text-sm" /></button>
-            <button onPointerDown={(e) => startContinuousMove(e,  0.5,  0  )} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onContextMenu={e => e.preventDefault()} className={btnBase}  title="Phải"><Icon name="arrow_forward"  className="text-sm" /></button>
+            <button onPointerDown={(e) => startContinuousMove(e, -0.5,  0  )} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onContextMenu={e => e.preventDefault()} className={btnBase}  title={t("Trái")}><Icon name="arrow_back"     className="text-sm" /></button>
+            <button onClick={() => stopPtz()} className="w-8 h-8 bg-red-600 hover:bg-red-500 rounded text-white flex items-center justify-center transition-colors touch-none" title={t("Dừng")}><Icon name="stop" className="text-sm" /></button>
+            <button onPointerDown={(e) => startContinuousMove(e,  0.5,  0  )} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onContextMenu={e => e.preventDefault()} className={btnBase}  title={t("Phải")}><Icon name="arrow_forward"  className="text-sm" /></button>
 
             <button onPointerDown={(e) => startContinuousMove(e, -0.5, -0.5)} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onContextMenu={e => e.preventDefault()} className={diagBase} title="↙">↙</button>
-            <button onPointerDown={(e) => startContinuousMove(e,  0,   -0.5)} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onContextMenu={e => e.preventDefault()} className={btnBase}  title="Xuống"><Icon name="arrow_downward" className="text-sm" /></button>
+            <button onPointerDown={(e) => startContinuousMove(e,  0,   -0.5)} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onContextMenu={e => e.preventDefault()} className={btnBase}  title={t("Xuống")}><Icon name="arrow_downward" className="text-sm" /></button>
             <button onPointerDown={(e) => startContinuousMove(e,  0.5, -0.5)} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onContextMenu={e => e.preventDefault()} className={diagBase} title="↘">↘</button>
           </div>
           )}
@@ -109,16 +110,16 @@ export const PtzControls = ({ cameraId, ptzEnabled }: { cameraId: string; ptzEna
               <Icon name="remove" className="text-xs" />Zoom
             </button>
             {!caps.hasPanTilt && (
-              <button onClick={() => stopPtz()} className="w-8 h-6 bg-red-600 hover:bg-red-500 rounded text-white flex items-center justify-center transition-colors touch-none" title="Dừng"><Icon name="stop" className="text-xs" /></button>
+              <button onClick={() => stopPtz()} className="w-8 h-6 bg-red-600 hover:bg-red-500 rounded text-white flex items-center justify-center transition-colors touch-none" title={t("Dừng")}><Icon name="stop" className="text-xs" /></button>
             )}
           </div>
           )}
 
           {!caps.hasPanTilt && !caps.hasZoom && (
-            <div className="text-[10px] text-gray-300 px-1 py-1 whitespace-nowrap">Camera không hỗ trợ điều khiển PTZ</div>
+            <div className="text-[10px] text-gray-300 px-1 py-1 whitespace-nowrap">{t("Camera không hỗ trợ điều khiển PTZ")}</div>
           )}
 
-          {isMoving && <div className="mt-1 text-center text-[10px] text-green-400">Đang di chuyển…</div>}
+          {isMoving && <div className="mt-1 text-center text-[10px] text-green-400">{t("Đang di chuyển…")}</div>}
         </div>
       )}
     </div>

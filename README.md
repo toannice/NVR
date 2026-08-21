@@ -16,7 +16,7 @@ mosquitto (MQTT) → frigate (NVR engine) → nvr-wrapper (Kotlin/React app)
 **Fresh machine (production):**
 ```bash
 git clone https://github.com/toannice/NVR.git my-nvr && cd my-nvr
-sudo ./install.sh          # creates .env + TLS cert + secrets, logs into GHCR, pulls & starts
+sudo ./install.sh          # creates .env + TLS cert + secrets, builds the image, starts the stack
 ```
 Open `https://<host-ip>` (self-signed cert → accept the warning).
 
@@ -25,17 +25,25 @@ Open `https://<host-ip>` (self-signed cert → accept the warning).
 ./run.sh --rebuild         # build nvr-wrapper locally, recreate, ensure nginx
 ```
 
-## OTA channels
+## How updates reach a machine
 
-The image tag is one variable, `WRAPPER_TAG` in `.env`:
+**No container registry is involved, and no registry credential lives on a delivered
+machine** (changed 2026-08-03). `nvr-wrapper` is either built on the spot or loaded from a
+bundle:
 
-| `WRAPPER_TAG` | Channel | Built from |
+| Path | Where the image comes from | Credential on the machine |
 |---|---|---|
-| `latest` | stable (production default) | git `main` |
-| `staging` | beta / test boxes | git `staging` |
-| `vX.Y.Z` | pinned release | git tag `v*.*.*` |
+| `install.sh` (machine has the source tree) | `docker compose build` | none |
+| `deploy-offline.sh` (bundle zip) | `docker load -i images.tar` | none |
 
-The watchdog auto-updates to (and rolls back within) this same tag — no hardcoded tags.
+The image name to run is `WRAPPER_IMAGE` in `.env` (defaults to `nvr-wrapper:latest`).
+There is no `WRAPPER_TAG` and no `GITHUB_USERNAME`/`GITHUB_TOKEN` — both scripts strip those
+keys from an older `.env` and run `docker logout ghcr.io` when upgrading a machine.
+
+Registry OTA in the watchdog is hard-disabled (`DISABLE_OTA=true`, every service `managed:
+false` in `config/watchdog.yml`); the watchdog still does self-healing and health alerts.
+**Pushing a new build to field machines therefore needs a bundle/deploy step — that mechanism
+is not built yet.**
 
 ## Documentation
 

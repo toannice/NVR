@@ -14,6 +14,7 @@ import org.jetbrains.exposed.sql.transactions.transaction
 import vn.aiview.nvr.cloud.handlers.PlaybackCommandHandler
 import vn.aiview.nvr.models.Cameras
 import vn.aiview.nvr.services.PlaybackService
+import vn.aiview.nvr.services.StreamOnlineTracker
 import vn.aiview.nvr.utils.AppLogger
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
@@ -60,6 +61,10 @@ object SignalingManager {
             maxReconnectDelay = 300_000
             isCleanSession = true
             connectionTimeout = 15
+            // Thiết bị mất điện/mất mạng thì KHÔNG ai gửi được "device off" — cloud phải tự suy ra
+            // từ lúc broker thấy client chết. Paho mặc định 60s (broker chờ 1.5× = 90s). Hạ xuống
+            // 30s để cloud báo thiết bị offline trong ~45s thay vì ~90s. Chi phí: 1 PINGREQ/30s.
+            keepAliveInterval = 30
             userName = mqttInfo.mqttUsername
             password = mqttInfo.mqttPassword.toCharArray()
         }
@@ -154,14 +159,31 @@ object SignalingManager {
         ).also { it.start() }
     }
 
-    private fun getCameraStatusList(): List<Pair<String, String>> {
+    /**
+     * Per-channel state for notify_channels_state. Must use the same values and the same source of
+     * truth as `get_channels` ("online"/"offline" from [StreamOnlineTracker]) — the cloud renders
+     * its device list from this push and its camera list from get_channels, so any divergence shows
+     * up as a camera that is online in one screen and offline in the other. "connected" (the old
+     * hardcoded value) is not a value the cloud understands → it fell back to OFFLINE forever.
+     */
+    private fun getCameraStatusList(): List<Pair<String, String>>? {
         return try {
-            transaction {
-                Cameras.selectAll().mapNotNull { row ->
-                    row[Cameras.channelId]?.let { it to "connected" }
-                }
+            val channels = transaction {
+                Cameras.selectAll().mapNotNull { row -> row[Cameras.channelId] }
             }
-        } catch (_: Exception) { emptyList() }
+            // Không có camera nào là một sự thật hợp lệ — vẫn gửi để cloud xoá hết khỏi danh sách.
+            if (channels.isEmpty()) return emptyList()
+            // Kênh chưa có trạng thái chắc chắn thì BỎ QUA, không đoán: cloud giữ giá trị cũ của
+            // nó, còn đoán sai một nhịp là một thông báo giả (xem StreamOnlineTracker.stateOf).
+            val known = channels.mapNotNull { ch ->
+                StreamOnlineTracker.stateOf(ch)?.let { ch to if (it) "online" else "offline" }
+            }
+            if (known.isEmpty()) null else known
+        } catch (e: Exception) {
+            // Lỗi DB: gửi danh sách rỗng ở đây sẽ bị cloud hiểu là "thiết bị không còn camera nào".
+            AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "CAMERA_STATUS_FAIL", e.message ?: "")
+            null
+        }
     }
 
     private suspend fun handleMqttMessage(topic: String, payload: String) {
@@ -315,17 +337,10 @@ object SignalingManager {
         liveSessionStreamIds[offerId] = streamId
 
         try {
-            val response = http.post("http://127.0.0.1:1984/api/webrtc?src=$streamId") {
-                contentType(ContentType("application", "sdp"))
-                setBody(sdpText)
-            }
-            if (!response.status.isSuccess()) {
-                AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "LIVE_GO2RTC_ERROR",
-                    "go2rtc ${response.status.value} for stream=$streamId offerId=$offerId")
+            val answerSdp = negotiateLiveSdp(streamId, sdpText, offerId) ?: run {
                 publishLiveErrorAnswer(json, sessionPubTopic, offerId, profileToken)
                 return
             }
-            val answerSdp = response.bodyAsText()
 
             val answerJson = buildJsonObject {
                 put("type", "answer")
@@ -349,6 +364,80 @@ object SignalingManager {
         } catch (e: Exception) {
             AppLogger.error(AppLogger.Module.SYSTEM, "CLOUD", "LIVE_OFFER_ERROR", e.message ?: "", e)
         }
+    }
+
+    // ── H.265 (HEVC) live-view fallback ──────────────────────────────────────────────
+    // WebRTC has no H.265 profile, so go2rtc answers 500 "codecs not matched: video:H265 =>
+    // video:VP8, VP9, H264, AV1" for any camera whose main stream is HEVC. Symptom: cloud live
+    // view is black forever while the LOCAL web UI works fine (it uses MSE/mp4, which does play
+    // HEVC). Before this fallback the device just logged the 500 and went silent, so the cloud
+    // retried the same doomed offer in a loop with nothing pointing at the cause.
+    //
+    // Recovery order, cheapest first:
+    //   1. the camera's own sub stream — almost always H.264, costs nothing
+    //   2. transcode HEVC→H.264 via go2rtc ffmpeg (VAAPI when /dev/dri exists, else CPU)
+    // H.264 cameras never touch this path: attempt 1 succeeds and returns immediately.
+    private val hasVaapi: Boolean by lazy { java.io.File("/dev/dri/renderD128").exists() }
+
+    /** POST an SDP offer to go2rtc. Returns the answer SDP, or null with the error body logged. */
+    private suspend fun postOffer(streamId: String, sdpText: String, offerId: String): Pair<String?, String> {
+        val response = http.post("http://127.0.0.1:1984/api/webrtc?src=$streamId") {
+            contentType(ContentType("application", "sdp"))
+            setBody(sdpText)
+        }
+        val body = response.bodyAsText()
+        if (response.status.isSuccess()) return body to ""
+        AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "LIVE_GO2RTC_ERROR",
+            "go2rtc ${response.status.value} for stream=$streamId offerId=$offerId body=${body.take(200)}")
+        return null to body
+    }
+
+    /**
+     * Negotiate a live SDP answer, falling back off H.265 when the browser and the camera share
+     * no codec. Returns null only when every route failed (caller publishes the error answer).
+     */
+    private suspend fun negotiateLiveSdp(streamId: String, sdpText: String, offerId: String): String? {
+        val (answer, errBody) = postOffer(streamId, sdpText, offerId)
+        if (answer != null) return answer
+
+        // Only the codec mismatch is recoverable here. A missing stream or a dead camera must keep
+        // failing loudly rather than being masked by a transcode attempt that will also fail.
+        if (!errBody.contains("codecs not matched", ignoreCase = true)) return null
+
+        AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "LIVE_CODEC_MISMATCH",
+            "stream=$streamId offerId=$offerId — camera is likely H.265; trying fallbacks")
+
+        // 1. Sub stream (H.264 on every camera we've shipped). Only meaningful for a main stream.
+        if (streamId.endsWith("_main")) {
+            val subId = streamId.removeSuffix("_main") + "_sub"
+            val (subAnswer, _) = postOffer(subId, sdpText, offerId)
+            if (subAnswer != null) {
+                AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "LIVE_FALLBACK_SUB",
+                    "offerId=$offerId $streamId → $subId (H.265 main, serving sub instead)")
+                liveSessionStreamIds[offerId] = subId
+                return subAnswer
+            }
+        }
+
+        // 2. Transcode HEVC→H.264. Registered under a distinct name so the untouched original
+        //    stream keeps feeding recording (stream copy, still full-quality H.265).
+        val h264Id = "${streamId}_h264"
+        val src = if (hasVaapi) "ffmpeg:$streamId#video=h264#hardware" else "ffmpeg:$streamId#video=h264"
+        if (!Go2RtcClient.registerStreamSync(h264Id, src)) {
+            AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "LIVE_TRANSCODE_REGISTER_FAIL",
+                "offerId=$offerId could not register $h264Id")
+            return null
+        }
+        val (h264Answer, _) = postOffer(h264Id, sdpText, offerId)
+        if (h264Answer != null) {
+            AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "LIVE_FALLBACK_TRANSCODE",
+                "offerId=$offerId $streamId → $h264Id (hardware=$hasVaapi)")
+            liveSessionStreamIds[offerId] = h264Id
+            return h264Answer
+        }
+        AppLogger.error(AppLogger.Module.SYSTEM, "CLOUD", "LIVE_ALL_FALLBACKS_FAILED",
+            "offerId=$offerId stream=$streamId — no H.264 route available", null)
+        return null
     }
 
     /**

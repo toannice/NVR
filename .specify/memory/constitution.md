@@ -157,7 +157,7 @@ build/
 ### Lệnh zip chuẩn
 
 ```bash
-cd /home/toan/my-nvr
+cd /home/toan/toanDoc/Documents/my-nvr
 zip -r AIViewNVRV<version>.zip . -P "AIView@2030" \
   --exclude ".git/*" \
   --exclude ".env" \

@@ -66,7 +66,7 @@ zerotier-cli listnetworks        # xem address node NVR
 
 Lên ztncui → network → **Members** → **authorize** member NVR → nó nhận IP trong pool (vd `10.147.20.x`).
 
-Sửa `.env` của NVR (`/home/toan/my-nvr/.env`) rồi recreate `nvr-wrapper`:
+Sửa `.env` của NVR (`/home/toan/toanDoc/Documents/my-nvr/.env`) rồi recreate `nvr-wrapper`:
 ```
 ZT_NETWORK_ID=<NETWORK_ID mới>
 ZT_SCAN_SUBNET=10.147.20.0/24      # khớp pool bước 2

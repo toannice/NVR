@@ -164,6 +164,8 @@ object MqttService {
                         it[AIEvents.id] = event.id
                         it[cameraSlug] = event.camera
                         it[AIEvents.label] = event.label
+                        it[AIEvents.aiType] = "frigate"
+                        it[AIEvents.objectType] = event.label.takeIf { it.isNotBlank() }
                         it[AIEvents.score] = event.score
                         if (event.box.size == 4) {
                             it[boxX] = event.box[0]

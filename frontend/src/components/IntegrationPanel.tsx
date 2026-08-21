@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { t, locale } from '../i18n';
 
 type ToastType = 'success' | 'error' | 'info' | 'warning'
 
@@ -22,24 +23,24 @@ type Connection = {
 
 function timeAgo(ms: number): string {
   const s = Math.max(0, Math.floor((Date.now() - ms) / 1000))
-  if (s < 10) return 'vừa xong'
-  if (s < 60) return `${s} giây trước`
+  if (s < 10) return t('vừa xong')
+  if (s < 60) return t('{0} giây trước').replace('{0}', String(s))
   const m = Math.floor(s / 60)
-  if (m < 60) return `${m} phút trước`
+  if (m < 60) return t('{0} phút trước').replace('{0}', String(m))
   const h = Math.floor(m / 60)
-  if (h < 24) return `${h} giờ trước`
-  return `${Math.floor(h / 24)} ngày trước`
+  if (h < 24) return t('{0} giờ trước').replace('{0}', String(h))
+  return t('{0} ngày trước').replace('{0}', String(Math.floor(h / 24)))
 }
 
 function fmtTime(ms: number): string {
-  try { return new Date(ms).toLocaleString('vi-VN') } catch { return String(ms) }
+  try { return new Date(ms).toLocaleString(locale()) } catch { return String(ms) }
 }
 
 export default function IntegrationPanel({ addToast }: {
   addToast?: (toast: { type: ToastType; title: string; message: string }) => void
 }) {
   const toast = (message: string, type: ToastType = 'info', title?: string) => {
-    if (addToast) addToast({ type, title: title || (type === 'error' ? 'Lỗi' : 'Tích hợp Box'), message })
+    if (addToast) addToast({ type, title: title || (type === 'error' ? t('Lỗi') : t('Tích hợp Box')), message })
     else console.log(`[${type}] ${message}`)
   }
 
@@ -106,8 +107,8 @@ export default function IntegrationPanel({ addToast }: {
   useEffect(() => { load() }, [load])
 
   useEffect(() => {
-    const t = setInterval(loadConnections, 15000)
-    return () => clearInterval(t)
+    const timer = setInterval(loadConnections, 15000)
+    return () => clearInterval(timer)
   }, [loadConnections])
 
   const save = async () => {
@@ -154,32 +155,29 @@ export default function IntegrationPanel({ addToast }: {
   return (
     <div className="p-4 sm:p-6 max-w-3xl mx-auto text-gray-200">
       <div className="mb-6">
-        <h2 className="text-xl font-semibold text-white">Tích hợp AiView Box</h2>
-        <p className="text-sm text-gray-400 mt-1">
-          Cấu hình hai chiều kết nối giữa NVR và AiView Box.
-        </p>
+        <h2 className="text-xl font-semibold text-white">{t("Tích hợp AiView Box")}</h2>
+        <p className="text-sm text-gray-400 mt-1">{t("Cấu hình hai chiều kết nối giữa NVR và AiView Box.")}</p>
       </div>
 
       {loading ? (
-        <div className="text-gray-400">Đang tải…</div>
+        <div className="text-gray-400">{t("Đang tải…")}</div>
       ) : (
         <div className="space-y-4">
 
           {/* ── Section A: Box → NVR (Box lấy danh sách camera) ── */}
           <div className="bg-[#1f2937] rounded-xl p-5 border border-white/10 space-y-4">
             <div>
-              <div className="text-xs font-semibold uppercase tracking-widest text-gray-500 mb-1">Hướng A — Box kết nối đến NVR</div>
+              <div className="text-xs font-semibold uppercase tracking-widest text-gray-500 mb-1">{t("Hướng A — Box kết nối đến NVR")}</div>
               <p className="text-sm text-gray-400">
-                Box xác thực bằng cặp user/pass dưới đây để lấy danh sách camera và URL RTSP restream.
-                Độc lập với mật khẩu mở khoá màn hình.
+                {t('Box xác thực bằng cặp user/pass dưới đây để lấy danh sách camera và URL RTSP restream. Độc lập với mật khẩu mở khoá màn hình.')}
               </p>
             </div>
 
             {/* Enable toggle */}
             <label className="flex items-center justify-between cursor-pointer select-none">
               <div>
-                <div className="font-medium text-white">Bật tích hợp AiView Box</div>
-                <div className="text-xs text-gray-400">Tắt = mọi yêu cầu từ Box bị từ chối (403).</div>
+                <div className="font-medium text-white">{t("Bật tích hợp AiView Box")}</div>
+                <div className="text-xs text-gray-400">{t("Tắt = mọi yêu cầu từ Box bị từ chối (403).")}</div>
               </div>
               <button
                 type="button"
@@ -196,13 +194,13 @@ export default function IntegrationPanel({ addToast }: {
 
             {/* Username */}
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Tên đăng nhập (Box dùng để xác thực)</label>
+              <label className="block text-sm font-medium text-gray-300 mb-1">{t("Tên đăng nhập (Box dùng để xác thực)")}</label>
               <input
                 type="text"
                 value={username}
                 autoComplete="off"
                 onChange={e => setUsername(e.target.value)}
-                placeholder="vd: box"
+                placeholder={`${t('vd:')} box`}
                 className="w-full rounded-lg bg-[#111827] border border-white/10 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-[#EF4444]/50"
               />
             </div>
@@ -210,8 +208,8 @@ export default function IntegrationPanel({ addToast }: {
             {/* Password */}
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-1">
-                Mật khẩu (Box dùng để xác thực)
-                {hasPassword && <span className="ml-2 text-xs text-emerald-400">• đã đặt</span>}
+                {t("Mật khẩu (Box dùng để xác thực)")}
+                {hasPassword && <span className="ml-2 text-xs text-emerald-400">{t("• đã đặt")}</span>}
               </label>
               <input
                 type="password"
@@ -220,13 +218,13 @@ export default function IntegrationPanel({ addToast }: {
                 onChange={e => { setPwTouched(true); setPassword(e.target.value) }}
                 onFocus={() => { if (!pwTouched && hasPassword) setPassword('') }}
                 onBlur={() => { if (!pwTouched && hasPassword) setPassword(maskedPassword) }}
-                placeholder={hasPassword ? 'Bấm để đổi mật khẩu' : 'Nhập mật khẩu mới'}
+                placeholder={hasPassword ? t('Bấm để đổi mật khẩu') : t('Nhập mật khẩu mới')}
                 className="w-full rounded-lg bg-[#111827] border border-white/10 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-[#EF4444]/50"
               />
               <p className="text-xs text-gray-500 mt-1">
                 {hasPassword
-                  ? <>Hiển thị <span className="text-gray-300">{passwordLen}</span> ký tự che (đúng độ dài). Đổi mật khẩu sẽ <span className="text-gray-300">thu hồi</span> quyền của Box cũ.</>
-                  : <>Đổi mật khẩu sẽ <span className="text-gray-300">thu hồi</span> quyền truy cập của Box cũ.</>}
+                  ? <>{t("Hiển thị")}<span className="text-gray-300">{passwordLen}</span>{t("ký tự che (đúng độ dài). Đổi mật khẩu sẽ")}<span className="text-gray-300">{t("thu hồi")}</span>{t("quyền của Box cũ.")}</>
+                  : <>{t("Đổi mật khẩu sẽ")}<span className="text-gray-300">{t("thu hồi")}</span>{t("quyền truy cập của Box cũ.")}</>}
               </p>
             </div>
           </div>
@@ -234,28 +232,27 @@ export default function IntegrationPanel({ addToast }: {
           {/* ── Section B: NVR → Box WS (NVR nhận AI events) ── */}
           <div className="bg-[#1f2937] rounded-xl p-5 border border-white/10 space-y-4">
             <div>
-              <div className="text-xs font-semibold uppercase tracking-widest text-gray-500 mb-1">Hướng B — NVR kết nối đến Box</div>
+              <div className="text-xs font-semibold uppercase tracking-widest text-gray-500 mb-1">{t("Hướng B — NVR kết nối đến Box")}</div>
               <p className="text-sm text-gray-400">
-                NVR chủ động kết nối WebSocket tới Box để nhận sự kiện AI theo thời gian thực
-                (nhận diện khuôn mặt, biển số, xâm nhập…). Các sự kiện sẽ hiển thị giống Frigate.
+                {t('NVR chủ động kết nối WebSocket tới Box để nhận sự kiện AI theo thời gian thực (nhận diện khuôn mặt, biển số, xâm nhập…). Các sự kiện sẽ hiển thị giống AI View NVR.')}
               </p>
             </div>
 
             <div className="flex gap-3">
               {/* Box IP */}
               <div className="flex-1">
-                <label className="block text-sm font-medium text-gray-300 mb-1">IP của Box</label>
+                <label className="block text-sm font-medium text-gray-300 mb-1">{t("IP của Box")}</label>
                 <input
                   type="text"
                   value={boxIp}
                   onChange={e => setBoxIp(e.target.value)}
-                  placeholder="vd: 192.168.2.10"
+                  placeholder={`${t('vd:')} 192.168.1.10`}
                   className="w-full rounded-lg bg-[#111827] border border-white/10 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-[#EF4444]/50 font-mono"
                 />
               </div>
               {/* Box Port */}
               <div className="w-28">
-                <label className="block text-sm font-medium text-gray-300 mb-1">Cổng</label>
+                <label className="block text-sm font-medium text-gray-300 mb-1">{t("Cổng")}</label>
                 <input
                   type="number"
                   value={boxPort}
@@ -268,9 +265,9 @@ export default function IntegrationPanel({ addToast }: {
             </div>
 
             <p className="text-xs text-gray-500">
-              Để trống IP nếu không dùng. Khi đã điền, NVR sẽ kết nối{' '}
+              {t('Để trống IP nếu không dùng. Khi đã điền, NVR sẽ kết nối')}{' '}
               <code className="text-gray-400">ws://{boxIp || '<ip>'}:{boxPort}/ws/events</code>{' '}
-              và tự reconnect nếu mất kết nối.
+              {t('và tự reconnect nếu mất kết nối.')}
             </p>
 
             {/* Status badge */}
@@ -281,8 +278,8 @@ export default function IntegrationPanel({ addToast }: {
             }`}>
               <span className={`h-1.5 w-1.5 rounded-full ${boxWsConfigured ? 'bg-emerald-400' : 'bg-gray-500'}`} />
               {boxWsConfigured
-                ? `Đã cấu hình — ws://${boxIp}:${boxPort}/ws/events`
-                : 'Chưa cấu hình — không nhận AI events từ Box'}
+                ? t('Đã cấu hình — ws://{0}:{1}/ws/events').replace('{0}', boxIp).replace('{1}', String(boxPort))
+                : t('Chưa cấu hình — không nhận AI events từ Box')}
             </div>
           </div>
 
@@ -293,17 +290,15 @@ export default function IntegrationPanel({ addToast }: {
               disabled={saving}
               className="px-4 py-2 rounded-lg bg-[#EF4444] text-white font-medium hover:bg-[#dc2626] disabled:opacity-50 transition-colors"
             >
-              {saving ? 'Đang lưu…' : 'Lưu tất cả'}
+              {saving ? t('Đang lưu…') : t('Lưu tất cả')}
             </button>
             <button
               onClick={load}
               disabled={saving}
               className="px-3 py-2 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 text-sm transition-colors"
-            >
-              Tải lại
-            </button>
+            >{t("Tải lại")}</button>
             <span className={`text-sm ${enabled ? 'text-emerald-400' : 'text-gray-500'}`}>
-              {enabled ? '● Tích hợp đang bật' : '○ Tích hợp đang tắt'}
+              {enabled ? '● ' + t('Tích hợp đang bật') : '○ ' + t('Tích hợp đang tắt')}
             </span>
           </div>
         </div>
@@ -312,7 +307,7 @@ export default function IntegrationPanel({ addToast }: {
       {/* Protocol info */}
       {info && (
         <div className="mt-5 text-xs text-gray-500 bg-[#111827] rounded-lg p-4 border border-white/5 font-mono">
-          <div className="text-gray-400 mb-2 font-sans font-medium">Thông tin giao thức (GET /api/getintegrationinfo)</div>
+          <div className="text-gray-400 mb-2 font-sans font-medium">{t("Thông tin giao thức (GET /api/getintegrationinfo)")}</div>
           <div>protocol_version: <span className="text-gray-300">{info.protocol_version}</span></div>
           <div>nvr_version: <span className="text-gray-300">{info.nvr_version}</span></div>
           <div>max_cameras: <span className="text-gray-300">{info.max_cameras}</span></div>
@@ -323,35 +318,31 @@ export default function IntegrationPanel({ addToast }: {
       {/* Connections table */}
       <div className="mt-6">
         <div className="flex items-center justify-between mb-2">
-          <h3 className="text-sm font-semibold text-white">
-            Box đã kết nối thành công (Hướng A)
-            <span className="ml-2 text-xs font-normal text-gray-500">({connections.length})</span>
+          <h3 className="text-sm font-semibold text-white">{t("Box đã kết nối thành công (Hướng A)")}<span className="ml-2 text-xs font-normal text-gray-500">({connections.length})</span>
           </h3>
           <button
             onClick={loadConnections}
             disabled={connLoading}
             className="px-2.5 py-1 rounded-md bg-white/5 text-gray-300 hover:bg-white/10 text-xs transition-colors disabled:opacity-50"
           >
-            {connLoading ? 'Đang tải…' : '⟳ Làm mới'}
+            {connLoading ? t('Đang tải…') : '⟳ ' + t('Làm mới')}
           </button>
         </div>
         <div className="overflow-x-auto rounded-xl border border-white/10 bg-[#1f2937]">
           <table className="w-full text-sm text-left">
             <thead className="text-xs uppercase text-gray-400 border-b border-white/10">
               <tr>
-                <th className="px-4 py-2.5 font-medium">Địa chỉ IP</th>
-                <th className="px-4 py-2.5 font-medium">Tên đăng nhập</th>
-                <th className="px-4 py-2.5 font-medium">Hoạt động gần nhất</th>
-                <th className="px-4 py-2.5 font-medium text-right">Số lượt</th>
-                <th className="px-4 py-2.5 font-medium">Lần đầu kết nối</th>
+                <th className="px-4 py-2.5 font-medium">{t("Địa chỉ IP")}</th>
+                <th className="px-4 py-2.5 font-medium">{t("Tên đăng nhập")}</th>
+                <th className="px-4 py-2.5 font-medium">{t("Hoạt động gần nhất")}</th>
+                <th className="px-4 py-2.5 font-medium text-right">{t("Số lượt")}</th>
+                <th className="px-4 py-2.5 font-medium">{t("Lần đầu kết nối")}</th>
               </tr>
             </thead>
             <tbody>
               {connections.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-6 text-center text-gray-500">
-                    Chưa có Box nào kết nối thành công.
-                  </td>
+                  <td colSpan={5} className="px-4 py-6 text-center text-gray-500">{t("Chưa có Box nào kết nối thành công.")}</td>
                 </tr>
               ) : connections.map(c => {
                 const live = Date.now() - c.lastSeen < 120000
@@ -371,17 +362,15 @@ export default function IntegrationPanel({ addToast }: {
             </tbody>
           </table>
         </div>
-        <p className="text-xs text-gray-500 mt-1.5">
-          Chấm <span className="text-emerald-400">●</span> xanh = hoạt động trong 2 phút. Tự làm mới mỗi 15 giây.
-        </p>
+        <p className="text-xs text-gray-500 mt-1.5">{t("Chấm")}<span className="text-emerald-400">●</span>{t("xanh = hoạt động trong 2 phút. Tự làm mới mỗi 15 giây.")}</p>
       </div>
 
       <div className="mt-5 text-xs text-gray-500">
-        <div className="font-medium text-gray-400 mb-1">Endpoint công khai cho Box (Hướng A — cùng LAN):</div>
+        <div className="font-medium text-gray-400 mb-1">{t("Endpoint công khai cho Box (Hướng A — cùng LAN):")}</div>
         <ul className="list-disc list-inside space-y-0.5">
-          <li><code className="text-gray-400">GET  /api/getintegrationinfo</code> — phiên bản &amp; giới hạn</li>
-          <li><code className="text-gray-400">POST /api/getprofilecamera</code> — danh sách camera + URL restream (cần user/pass)</li>
-          <li><code className="text-gray-400">POST /api/getcamerastatus</code> — trạng thái online/đã-xoá (định kỳ)</li>
+          <li><code className="text-gray-400">GET  /api/getintegrationinfo</code>{t("— phiên bản &amp; giới hạn")}</li>
+          <li><code className="text-gray-400">POST /api/getprofilecamera</code>{t("— danh sách camera + URL restream (cần user/pass)")}</li>
+          <li><code className="text-gray-400">POST /api/getcamerastatus</code>{t("— trạng thái online/đã-xoá (định kỳ)")}</li>
         </ul>
       </div>
     </div>

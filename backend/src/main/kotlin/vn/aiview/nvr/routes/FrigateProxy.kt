@@ -11,6 +11,9 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.util.*
 import io.ktor.utils.io.copyTo
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 val proxyClient = HttpClient(CIO) {
     expectSuccess = false
@@ -46,7 +49,77 @@ private fun sanitizeRtspCredentials(raw: String): String {
     }
 }
 
+/**
+ * Lùi transcode cho live view LOCAL khi camera là HEVC (song song với SignalingManager làm cho cloud).
+ * KHÔNG còn thử phát HEVC trực tiếp trên trình duyệt: `MediaSource.isTypeSupported('...hvc1/hev1...')`
+ * chỉ xác nhận trình duyệt hiểu codec string, không đảm bảo giải mã đúng bitstream thật của camera —
+ * test thật với P200-0802N cho isTypeSupported()=true nhưng hình vỡ nửa khung + đơ giữa 2 keyframe.
+ * LiveCamera.tsx gọi endpoint này ngay khi dò thấy codec H.265 (`/api/frigate/stream-codec/`), không
+ * chờ thử phát trực tiếp thất bại nữa. Đăng ký (idempotent — go2rtc PUT trùng tên chỉ update) stream
+ * `${slug}_h264` transcode HEVC→H.264 qua go2rtc ffmpeg, dùng VAAPI khi có `/dev/dri`; trả về tên
+ * stream mới để frontend gọi lại `stream.mp4?src=`.
+ */
+private val hasVaapi: Boolean by lazy { java.io.File("/dev/dri/renderD128").exists() }
+
+/**
+ * Dò codec luồng chính TRƯỚC khi mở `stream.mp4` — không được mở rồi bỏ dở như trước (đã gây
+ * go2rtc panic thật, xem dưới). Đọc `producers[].medias` của go2rtc qua `/api/streams?src=`, KHÔNG
+ * tạo consumer track nào (chỉ đọc SDP đã có sẵn từ RTSP DESCRIBE) nên an toàn tuyệt đối.
+ *
+ * Lý do bắt buộc phải dò trước: bản vá trước mở `stream.mp4`, đọc Content-Type, rồi NÉM lỗi ngay
+ * nếu là HEVC mà KHÔNG đọc/hủy body — go2rtc đã bắt đầu ghi chunk MP4 vào response (push, không chờ
+ * client đọc), rồi effect cleanup abort() kết nối giữa chừng. go2rtc 1.9.9 (vendor trong Frigate
+ * 0.16.3, không vá được) có race: ghi tiếp vào response sau khi conn đã đóng → panic nil pointer
+ * (`pkg/mp4/consumer.go:82` → `WriteBuffer.Write` → `net/http.response.write` trên conn nil) làm
+ * CHẾT CẢ TIẾN TRÌNH go2rtc (chung với mọi camera khác) → toàn bộ live view + ghi hình đứng, phải
+ * đợi Frigate tự khởi động lại go2rtc. Test thật với camera P200-0802N (H.265) xác nhận đúng
+ * `panic: runtime error: invalid memory address or nil pointer dereference` trong log frigate lúc
+ * đổi luồng — không được lặp lại lỗi này.
+ */
+suspend fun probeStreamCodec(slug: String): String? {
+    val frigateHost = java.net.URI(frigateUrl).host ?: "localhost"
+    return try {
+        val resp = proxyClient.get("http://$frigateHost:1984/api/streams?src=${java.net.URLEncoder.encode(slug, "UTF-8")}")
+        if (!resp.status.isSuccess()) return null
+        val body = resp.bodyAsText()
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; isLenient = true }
+        val root = json.parseToJsonElement(body).jsonObject
+        val medias = root["producers"]?.jsonArray?.firstOrNull()?.jsonObject?.get("medias")?.jsonArray
+            ?: return null
+        val videoMedia = medias.map { it.jsonPrimitive.content }.firstOrNull { it.startsWith("video", ignoreCase = true) }
+            ?: return null
+        when {
+            Regex("H265|HEVC", RegexOption.IGNORE_CASE).containsMatchIn(videoMedia) -> "h265"
+            Regex("H264|AVC", RegexOption.IGNORE_CASE).containsMatchIn(videoMedia) -> "h264"
+            else -> "other"
+        }
+    } catch (e: Exception) {
+        null
+    }
+}
+
 fun Route.frigateProxyRouting() {
+
+    get("/api/frigate/stream-codec/{slug}") {
+        val slug = call.parameters["slug"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+        val codec = probeStreamCodec(slug)
+        if (codec == null) {
+            return@get call.respond(HttpStatusCode.BadGateway, mapOf("error" to "probe_failed"))
+        }
+        call.respond(mapOf("codec" to codec))
+    }
+
+    get("/api/frigate/live-fallback/{slug}") {
+        val slug = call.parameters["slug"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+        val h264Name = "${slug}_h264"
+        val src = if (hasVaapi) "ffmpeg:$slug#video=h264#hardware" else "ffmpeg:$slug#video=h264"
+        val ok = vn.aiview.nvr.cloud.Go2RtcClient.registerStreamSync(h264Name, src)
+        if (!ok) {
+            call.application.environment.log.warn("[LIVE_FALLBACK] could not register $h264Name (hw=$hasVaapi)")
+            return@get call.respond(HttpStatusCode.BadGateway, mapOf("error" to "transcode_register_failed"))
+        }
+        call.respond(mapOf("stream" to h264Name))
+    }
 
     // ── go2rtc pass-through with credential sanitization for streams ──────────
     route("/api/frigate/go2rtc/{path...}") {

@@ -40,6 +40,27 @@ if ! command -v nebula >/dev/null 2>&1 || ! command -v nebula-cert >/dev/null 2>
 fi
 mkdir -p /etc/nebula
 
+echo "==> NTP: chrony + wait-for-sync (Pi has no RTC — wrong clock ⇒ Nebula cert 'not yet valid' ⇒ no overlay)"
+# After a long power-off the Pi boots with a stale clock; nebula then rejects its own cert
+# (notBefore/notAfter) and the gateway is 'mysteriously offline' even though the network is fine.
+# chrony steps the clock on boot (Debian default: makestep 1 3); chrony-wait makes time-sync.target
+# actually wait for a synced clock, and nebula.service is ordered After=time-sync.target.
+if ! command -v chronyd >/dev/null 2>&1; then
+  apt-get update -qq
+  apt-get install -y chrony
+fi
+apt-get install -y fake-hwclock 2>/dev/null || true   # restores last-known time at boot (smaller initial skew)
+systemctl enable --now chrony 2>/dev/null || systemctl enable --now chronyd 2>/dev/null || true
+systemctl enable chrony-wait.service 2>/dev/null || true
+# Cap the wait so a Pi with no internet still finishes booting (~3 min); nebula's Restart=always
+# recovers on its own once NTP eventually syncs and the cert becomes valid.
+mkdir -p /etc/systemd/system/chrony-wait.service.d
+cat > /etc/systemd/system/chrony-wait.service.d/override.conf <<'EOF'
+# Added by nvr-edge-agent — don't block boot forever when NTP is unreachable.
+[Service]
+TimeoutStartSec=180
+EOF
+
 echo "==> Installing nginx (with stream module)"
 if ! command -v nginx >/dev/null 2>&1; then
   apt-get update -qq
@@ -73,6 +94,30 @@ Wants=network-online.target
 Restart=on-failure
 RestartSec=3
 EOF
+
+echo "==> SD-card wear: journal in RAM + /var/log on tmpfs (worn SD = #1 field killer of gateways)"
+# The agent + nebula + nginx log 24/7; on an SD card that steady write stream is what kills it.
+# Journal goes to RAM (Storage=volatile) and /var/log becomes tmpfs. Trade-off: logs do NOT survive
+# a reboot/power-cut — live incidents still have the full journal, and that's the common case.
+mkdir -p /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/99-nvr-edge-volatile.conf <<'EOF'
+# Added by nvr-edge-agent — journal in RAM only, to stop 24/7 log writes wearing the SD card.
+[Journal]
+Storage=volatile
+RuntimeMaxUse=32M
+EOF
+systemctl restart systemd-journald || true
+if ! grep -qE '^\s*tmpfs\s+/var/log\s' /etc/fstab; then
+  echo 'tmpfs /var/log tmpfs defaults,noatime,nosuid,nodev,size=64m 0 0' >> /etc/fstab
+fi
+# /var/log is empty after every boot — recreate the dirs services expect before they start.
+cat > /etc/tmpfiles.d/nvr-edge-varlog.conf <<'EOF'
+# Added by nvr-edge-agent — /var/log is tmpfs; recreate expected log dirs at boot.
+d /var/log/nginx 0755 root adm -
+d /var/log/chrony 0755 _chrony _chrony -
+EOF
+mountpoint -q /var/log || mount /var/log 2>/dev/null || true
+systemd-tmpfiles --create /etc/tmpfiles.d/nvr-edge-varlog.conf || true
 
 echo "==> nebula systemd unit (idle until the agent writes config.yml on enroll)"
 install -m 0644 "$HERE/nebula.service" /etc/systemd/system/nebula.service

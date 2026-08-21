@@ -2,7 +2,7 @@
 # scripts/system_alert.sh
 # Kịch bản cảnh báo sự cố tực tuyến (Real-time). Chạy mỗi 5 phút.
 
-PROJECT_DIR="/home/toan/my-nvr"
+PROJECT_DIR="/home/toan/toanDoc/Documents/my-nvr"
 cd $PROJECT_DIR || exit 1
 
 if [ -f .env ]; then

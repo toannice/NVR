@@ -21,6 +21,7 @@ object GatewayMonitor {
 
     private val lastHealth = mutableMapOf<String, String>()  // gatewayId -> last health (online/degraded/offline)
     private val certWarned = mutableSetOf<String>()          // gateways already warned about cert expiry
+    private val renewWarned = mutableSetOf<String>()         // gateways already warned about failing renews
     private var hqWasReachable = true
 
     fun start() {
@@ -67,11 +68,26 @@ object GatewayMonitor {
             }
             if ((g.certDaysLeft ?: Long.MAX_VALUE) > GatewayService.CERT_WARN_DAYS) certWarned.remove(g.id)
 
+            // Cert renew failing silently (the NEBULA_SIGN_TOKEN-blank incident class): the agent retries
+            // hourly, so renewFails >= 2 means HQ has been refusing/unreachable for 2+ hours straight.
+            // Warn once per episode; the agent resets the counter to 0 on a successful renew.
+            if (g.renewFails >= 2 && g.id !in renewWarned) {
+                GatewayAlerter.alert("RENEW_${g.id}", "🟠 Renew cert đang FAIL: ${g.name}",
+                    "${g.renewFails} lần liên tiếp, cert còn ${g.certDaysLeft ?: "?"} ngày — kiểm tra HQ signing service")
+                renewWarned.add(g.id)
+            }
+            if (g.renewFails == 0 && g.id in renewWarned) {
+                renewWarned.remove(g.id)
+                GatewayAlerter.alert("RENEW_OK_${g.id}", "🟢 Renew cert đã thành công lại: ${g.name}",
+                    "cert còn ${g.certDaysLeft ?: "?"} ngày")
+            }
+
             lastHealth[g.id] = g.health
         }
         // Forget gateways that were deleted so stale state doesn't leak.
         lastHealth.keys.retainAll(liveIds)
         certWarned.retainAll(liveIds)
+        renewWarned.retainAll(liveIds)
     }
 }
 
