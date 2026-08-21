@@ -110,3 +110,28 @@ __pycache__/
 
 # Local working spreadsheets (không commit)
 *.xlsx
+
+# Release bundles (folder chứa mọi bản đóng gói phiên bản — không commit)
+/releaseVersion/
+
+# Công cụ test cục bộ: nhân bản 1 camera thành N luồng RTSP giả (chỉ dùng ở máy dev).
+# Thư mục chứa .env với mật khẩu camera + go2rtc.yaml sinh tự động — không commit.
+/scripts/nvr-fake-cams/
+
+# ─── OTA ───
+# Private key ký gói cập nhật. Khoá THẬT chỉ nằm trên máy air-gap, không bao giờ ở đây;
+# đây là khoá DEV để chạy thử chu trình trên máy dev. Public key (ota/keys/*.pub) thì
+# commit — đó là thứ máy field dùng để đối chiếu.
+ota/.dev-keys/
+
+# ─── Trạng thái runtime OTA (riêng từng máy, KHÔNG commit) ───
+# state.json chứa floorVersion của chính máy đó; rollback/ chứa bản copy image+config để lùi
+# (gồm cả binary dc-bridge). Commit vào là vừa vô nghĩa vừa nặng repo.
+data/ota/
+
+# Bản sao lưu do script sinh — .env.bak chứa mật khẩu MQTT/Telegram, config.yml.last-good
+# chứa mật khẩu camera + IP overlay. Đúng loại file mà verify-bundle.sh quét để chặn.
+.env.bak.*
+config/config.yml.last-good
+*.bak
+data/nvr.db.bak-*
