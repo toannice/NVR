@@ -1,12 +1,16 @@
 import { useState } from 'react'
 import { Icon } from './Icon'
-import { NetworkConfigSection, StorageConfigSection } from './SystemConfigSections'
+import { useModalKeys } from '../hooks/useModalKeys'
+import { SystemInfoSection } from './SystemConfigSections'
 import { RecordingScheduleSection } from './RecordingScheduleSection'
 import { CloudSettingsSection } from './CloudSettingsSection'
 import { EditCameraModal, OnvifCredentialsModal } from './CameraModals'
 import { ManualCameraForm } from './ManualCameraForm'
 import GatewaysPanel from './GatewaysPanel'
 import IntegrationPanel from './IntegrationPanel'
+import SecuritySection from './SecuritySection'
+import OtaPanel from './OtaPanel'
+import { t } from '../i18n';
 
 export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDeleteCamera, handleAddCamera, setupStatus, fetchCameras, addToast, setMiniPlayerCamId }: any) => {
   const [showOnvifModal, setShowOnvifModal] = useState(false);
@@ -19,6 +23,11 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
   const [isScanning, setIsScanning] = useState(false);
   const [isAddingDevice, setIsAddingDevice] = useState(false);
 
+  // Esc đóng modal "Thêm Camera qua LAN/ONVIF". Các modal con (Cấu hình ONVIF, Thêm thủ
+  // công, Sửa camera) tự đăng ký phím tắt của chúng và nằm trên stack nên Esc chỉ đóng
+  // cái trên cùng.
+  useModalKeys({ onClose: () => setShowOnvifModal(false), enabled: showOnvifModal });
+
   const scanOnvifDevices = async () => {
     setIsScanning(true);
     try {
@@ -27,7 +36,7 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
       setOnvifDevices(data.devices || []);
     } catch (e) {
       console.error(e);
-      addToast({ type: 'error', title: 'Lỗi ONVIF', message: 'Không thể quét thiết bị: ' + (e as Error).message });
+      addToast({ type: 'error', title: t('Lỗi ONVIF'), message: t('Không thể quét thiết bị:') + ' ' + (e as Error).message });
     } finally {
       setIsScanning(false);
     }
@@ -43,13 +52,13 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
       });
       if (res.ok) {
         setCameras((prev: any[]) => prev.map(c => c.id === id ? { ...c, ptzEnabled: mode !== 'none', ptzMode: mode } : c));
-        addToast({ type: 'success', title: 'Thành công', message: 'Đã cập nhật cấu hình PTZ' });
+        addToast({ type: 'success', title: t('Thành công'), message: t('Đã cập nhật cấu hình PTZ') });
       } else {
         const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Lỗi không xác định');
+        throw new Error(errorData.error || t('Lỗi không xác định'));
       }
     } catch (e: any) {
-      addToast({ type: 'error', title: 'Lỗi', message: `Không thể cập nhật PTZ: ${e.message}` });
+      addToast({ type: 'error', title: t('Lỗi'), message: t('Không thể cập nhật PTZ: {0}').replace('{0}', e.message) });
     }
   };
 
@@ -67,17 +76,17 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
       });
       const resData = await res.json();
       if (res.ok) {
-        addToast({ type: 'success', title: 'Thêm thành công', message: `Camera ${data.name} đã được thêm!` });
+        addToast({ type: 'success', title: t('Thêm thành công'), message: t('Camera {0} đã được thêm!').replace('{0}', data.name) });
         setOnvifDevices(prev => prev.map(d => d.id === device.id ? { ...d, isAdded: true, name: data.name } : d));
         setShowCredentialsModal(false);
         // Refresh cameras list automatically
         if (fetchCameras) await fetchCameras();
       } else {
-        addToast({ type: 'error', title: 'Lỗi thêm camera', message: resData.error || 'Không thể thêm camera' });
+        addToast({ type: 'error', title: t('Lỗi thêm camera'), message: resData.error || t('Không thể thêm camera') });
       }
     } catch (e) {
       console.error(e);
-      addToast({ type: 'error', title: 'Lỗi kết nối', message: (e as Error).message });
+      addToast({ type: 'error', title: t('Lỗi kết nối'), message: (e as Error).message });
     } finally {
       setIsAddingDevice(false);
     }
@@ -87,17 +96,18 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
     <div className="flex flex-1 overflow-hidden h-full">
       <aside className="w-64 bg-white dark:bg-[#1F2937] border-r border-gray-200 dark:border-gray-700 flex flex-col shrink-0">
         <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-          <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider">Thiết lập Camera</h2>
+          <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider">{t("Thiết lập Camera")}</h2>
         </div>
         <ul className="flex-1 overflow-y-auto py-2">
           {[
             { id: 'Camera List', icon: 'list', label: 'Danh sách Camera' },
-            { id: 'Network', icon: 'settings_ethernet', label: 'Cấu hình mạng' },
             { id: 'Recording Schedule', icon: 'schedule', label: 'Lịch trình ghi hình' },
-            { id: 'Storage', icon: 'storage', label: 'Lưu trữ' },
             { id: 'Cloud', icon: 'cloud', label: 'Kết nối Cloud' },
             { id: 'Gateway', icon: 'router', label: 'Gateway' },
-            { id: 'Tích hợp', icon: 'extension', label: 'Tích hợp' }
+            { id: 'Tích hợp', icon: 'extension', label: 'Tích hợp' },
+            { id: 'Bảo mật', icon: 'lock', label: 'Bảo mật' },
+            { id: 'Update', icon: 'system_update', label: 'Cập nhật' },
+            { id: 'System Info', icon: 'info', label: 'Thông tin hệ thống' }
           ].map((item) => (
             <li key={item.id}>
               <button
@@ -107,7 +117,7 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
                   : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
                   }`}
               >
-                <Icon name={item.icon} className="mr-3 text-xl" /> {item.label}
+                <Icon name={item.icon} className="mr-3 text-xl" /> {t(item.label)}
               </button>
             </li>
           ))}
@@ -119,9 +129,7 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
           <>
             <div className="flex justify-between items-center mb-6">
               <h1 className="text-2xl font-bold text-gray-800 dark:text-white flex items-center">
-                <Icon name="videocam" className="text-[#EF4444] mr-3 text-3xl" />
-                Danh sách Camera
-              </h1>
+                <Icon name="videocam" className="text-[#EF4444] mr-3 text-3xl" />{t("Danh sách Camera")}</h1>
               <button
                 onClick={() => {
                   setShowOnvifModal(true);
@@ -129,9 +137,7 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
                 }}
                 className="flex items-center px-4 py-2 bg-[#EF4444] text-white rounded shadow-md hover:bg-red-600 transition-colors"
               >
-                <Icon name="add" className="text-xl mr-2" />
-                Thêm mới
-              </button>
+                <Icon name="add" className="text-xl mr-2" />{t("Thêm mới")}</button>
             </div>
 
             <div className="bg-white dark:bg-[#1F2937] rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden">
@@ -139,11 +145,11 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
                 <thead className="bg-gray-50 dark:bg-[#252525]">
                   <tr>
                     <th className="p-4 text-xs font-semibold tracking-wide text-gray-500 dark:text-gray-400 uppercase border-b border-gray-200 dark:border-gray-700 w-16 text-center">STT</th>
-                    <th className="p-4 text-xs font-semibold tracking-wide text-gray-500 dark:text-gray-400 uppercase border-b border-gray-200 dark:border-gray-700">Tên Camera</th>
-                    <th className="p-4 text-xs font-semibold tracking-wide text-gray-500 dark:text-gray-400 uppercase border-b border-gray-200 dark:border-gray-700">Địa chỉ IP</th>
-                    <th className="p-4 text-xs font-semibold tracking-wide text-gray-500 dark:text-gray-400 uppercase border-b border-gray-200 dark:border-gray-700 text-center">Trạng thái</th>
+                    <th className="p-4 text-xs font-semibold tracking-wide text-gray-500 dark:text-gray-400 uppercase border-b border-gray-200 dark:border-gray-700">{t("Tên Camera")}</th>
+                    <th className="p-4 text-xs font-semibold tracking-wide text-gray-500 dark:text-gray-400 uppercase border-b border-gray-200 dark:border-gray-700">{t("Địa chỉ IP")}</th>
+                    <th className="p-4 text-xs font-semibold tracking-wide text-gray-500 dark:text-gray-400 uppercase border-b border-gray-200 dark:border-gray-700 text-center">{t("Trạng thái")}</th>
                     <th className="p-4 text-xs font-semibold tracking-wide text-gray-500 dark:text-gray-400 uppercase border-b border-gray-200 dark:border-gray-700 text-center">PTZ</th>
-                    <th className="p-4 text-xs font-semibold tracking-wide text-gray-500 dark:text-gray-400 uppercase border-b border-gray-200 dark:border-gray-700 text-center w-40">Hành động</th>
+                    <th className="p-4 text-xs font-semibold tracking-wide text-gray-500 dark:text-gray-400 uppercase border-b border-gray-200 dark:border-gray-700 text-center w-40">{t("Hành động")}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-[#1F2937]">
@@ -173,11 +179,11 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
                           value={!c.ptzEnabled ? 'none' : (c.ptzMode === 'zoom' ? 'zoom' : 'full')}
                           onChange={e => updatePtzMode(c.id, e.target.value as 'none' | 'zoom' | 'full')}
                           className="text-xs rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white focus:ring-indigo-500 focus:border-indigo-500 py-1"
-                          title="Phân loại PTZ của camera"
+                          title={t("Phân loại PTZ của camera")}
                         >
-                          <option value="none">Không PTZ</option>
-                          <option value="zoom">Chỉ Zoom</option>
-                          <option value="full">PTZ đầy đủ</option>
+                          <option value="none">{t("Không PTZ")}</option>
+                          <option value="zoom">{t("Chỉ Zoom")}</option>
+                          <option value="full">{t("PTZ đầy đủ")}</option>
                         </select>
                       </td>
                       <td className="p-4">
@@ -188,7 +194,7 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
                               setMiniPlayerCamId(c.id);
                             }}
                             className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors"
-                            title="Xem nhanh (Mini Player)"
+                            title={t("Xem nhanh (Mini Player)")}
                           >
                             <Icon name="visibility" className="text-xl" />
                           </button>
@@ -198,14 +204,14 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
                               setShowEditModal(true);
                             }}
                             className="p-1.5 text-gray-500 hover:text-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
-                            title="Cấu hình"
+                            title={t("Cấu hình")}
                           >
                             <Icon name="settings" className="text-xl" />
                           </button>
                           <button
                             onClick={() => handleDeleteCamera(c.id)}
                             className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                            title="Xóa"
+                            title={t("Xóa")}
                           >
                             <Icon name="delete" className="text-xl" />
                           </button>
@@ -216,21 +222,19 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
                 </tbody>
               </table>
               {cameras.length === 0 && (
-                <div className="p-10 text-center text-gray-500 dark:text-gray-400">Chưa có camera nào</div>
+                <div className="p-10 text-center text-gray-500 dark:text-gray-400">{t("Chưa có camera nào")}</div>
               )}
             </div>
           </>
         )}
 
         {setupTab === 'Add Camera' && (
-          <div className="p-10 text-center text-gray-500 dark:text-gray-400">
-            Chức năng thêm camera đã được chuyển vào tab "Danh sách Camera" → Nút "Thêm mới"
-          </div>
+          <div className="p-10 text-center text-gray-500 dark:text-gray-400">{t("Chức năng thêm camera đã được chuyển vào tab \"Danh sách Camera\" → Nút \"Thêm mới\"")}</div>
         )}
 
-        {setupTab === 'Network' && <NetworkConfigSection />}
         {setupTab === 'Recording Schedule' && <RecordingScheduleSection cameras={cameras} addToast={addToast} />}
-        {setupTab === 'Storage' && <StorageConfigSection />}
+        {/* 'Network'/'Storage' là id cũ — giữ lại để link/bookmark cũ không rơi vào trang trắng. */}
+        {(setupTab === 'System Info' || setupTab === 'Network' || setupTab === 'Storage') && <SystemInfoSection />}
         {setupTab === 'Cloud' && <CloudSettingsSection />}
         {setupTab === 'Gateway' && (
           <div className="-m-8">
@@ -242,6 +246,9 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
             <IntegrationPanel addToast={addToast} />
           </div>
         )}
+        {setupTab === 'Bảo mật' && <SecuritySection addToast={addToast} />}
+
+        {setupTab === 'Update' && <OtaPanel addToast={addToast} />}
       </div>
 
       {showOnvifModal && (
@@ -249,9 +256,7 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
           <div className="bg-white dark:bg-[#1F2937] w-full max-w-5xl rounded-lg shadow-2xl flex flex-col max-h-[90vh] border border-gray-200 dark:border-gray-700 overflow-hidden">
             <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
               <h2 className="text-xl font-bold text-[#EF4444] flex items-center">
-                <Icon name="travel_explore" className="mr-2" />
-                Thêm Camera qua LAN/ONVIF
-              </h2>
+                <Icon name="travel_explore" className="mr-2" />{t("Thêm Camera qua LAN/ONVIF")}</h2>
               <button onClick={() => setShowOnvifModal(false)} className="text-gray-400 hover:text-gray-600">
                 <Icon name="close" />
               </button>
@@ -259,9 +264,7 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
 
             <div className="p-6 flex-1 overflow-hidden flex flex-col min-h-0">
               <div className="flex justify-between items-center mb-6">
-                <div className="text-sm text-gray-500">
-                  Tìm thấy <span className="font-bold text-[#EF4444]">{onvifDevices.length}</span> thiết bị ONVIF
-                </div>
+                <div className="text-sm text-gray-500">{t("Tìm thấy")}<span className="font-bold text-[#EF4444]">{onvifDevices.length}</span>{t("thiết bị ONVIF")}</div>
                 <button
                   onClick={scanOnvifDevices}
                   disabled={isScanning}
@@ -276,8 +279,7 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
                   }}
                   className="px-4 py-2 bg-[#EF4444] text-white rounded hover:bg-red-600 transition-colors flex items-center text-sm font-medium shadow-sm"
                 >
-                  <Icon name="add" className="text-lg mr-1" /> Thêm thủ công
-                </button>
+                  <Icon name="add" className="text-lg mr-1" />{t("Thêm thủ công")}</button>
               </div>
 
               <div className="flex-1 overflow-auto border rounded min-h-0">
@@ -285,10 +287,10 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
                   <thead className="bg-gray-50 dark:bg-[#252525] sticky top-0">
                     <tr>
                       <th className="p-3 text-xs font-semibold text-gray-500 uppercase">STT</th>
-                      <th className="p-3 text-xs font-semibold text-gray-500 uppercase">Tên Camera</th>
+                      <th className="p-3 text-xs font-semibold text-gray-500 uppercase">{t("Tên Camera")}</th>
                       <th className="p-3 text-xs font-semibold text-gray-500 uppercase">IP</th>
-                      <th className="p-3 text-xs font-semibold text-gray-500 uppercase">Trạng thái</th>
-                      <th className="p-3 text-xs font-semibold text-gray-500 uppercase text-right">Hành động</th>
+                      <th className="p-3 text-xs font-semibold text-gray-500 uppercase">{t("Trạng thái")}</th>
+                      <th className="p-3 text-xs font-semibold text-gray-500 uppercase text-right">{t("Hành động")}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y">
@@ -308,9 +310,7 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
                         </td>
                         <td className="p-3 text-right">
                           {device.isAdded ? (
-                            <button className="px-3 py-1 bg-gray-200 text-gray-400 rounded text-sm" disabled>
-                              Đã thêm
-                            </button>
+                            <button className="px-3 py-1 bg-gray-200 text-gray-400 rounded text-sm" disabled>{t("Đã thêm")}</button>
                           ) : (
                             <button
                               onClick={() => {
@@ -318,9 +318,7 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
                                 setShowCredentialsModal(true);
                               }}
                               className="px-3 py-1 bg-[#EF4444]/10 hover:bg-[#EF4444] text-[#EF4444] hover:text-white border border-[#EF4444]/20 rounded text-sm transition"
-                            >
-                              Thêm
-                            </button>
+                            >{t("Thêm")}</button>
                           )}
                         </td>
                       </tr>
@@ -374,12 +372,12 @@ export const SetupView = ({ setupTab, setSetupTab, cameras, setCameras, handleDe
               });
               const data = await res.json();
               if (!res.ok) throw new Error(data.error || 'Failed to rename');
-              addToast({ type: 'success', title: 'Thành công', message: data.message });
+              addToast({ type: 'success', title: t('Thành công'), message: data.message });
               setShowEditModal(false);
               setEditingCamera(null);
               fetchCameras(); // Refresh the list
             } catch (e: any) {
-              addToast({ type: 'error', title: 'Lỗi', message: e.message });
+              addToast({ type: 'error', title: t('Lỗi'), message: e.message });
             }
           }}
           isLoading={false}

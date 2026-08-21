@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "model": "AIVIEW-NVR-TEST",
+  "version": "1.1.0.0",
+  "channel": "stable",
+  "releaseDate": "2026-08-20T00:00:00Z",
+  "expiresAt": "2099-01-01T00:00:00Z",
+  "description": "Fixture ky bang openssl that",
+  "minFrom": "1.0.0.0",
+  "minApplier": "1.0.0",
+  "requiresFreeBytes": 1048576,
+  "risk": "normal",
+  "autoApply": true,
+  "images": [
+    { "name": "nvr-wrapper", "source": "tarball", "path": "images/nvr-wrapper.tar.zst",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tag": "nvr-wrapper:latest" }
+  ],
+  "files": [
+    { "path": "docker-compose.yml",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "mode": "644" }
+  ],
+  "healthChecks": [
+    { "url": "http://127.0.0.1:3000/api/health", "expectStatus": 200, "timeoutSec": 180 },
+    { "url": "http://127.0.0.1:3000/api/version", "expectJson": {"version": "1.1.0.0"}, "timeoutSec": 180 }
+  ]
+}

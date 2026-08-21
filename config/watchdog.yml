@@ -6,9 +6,9 @@
 # Container cần giám sát
 containers:
   - name: "nvr-wrapper"
-    image: "ghcr.io/toannice/nvr:${WRAPPER_TAG}"   # Resolve từ env WRAPPER_TAG (mặc định latest=stable, staging=beta)
+    image: "${WRAPPER_IMAGE}"   # Image local (build/bundle) — không có registry để pull
     health_endpoint: "http://localhost:3000/api/health"
-    managed: true          # UpdateManager sẽ OTA container này
+    managed: false         # KHÔNG OTA: bản mới đưa xuống bằng bundle/deploy, không pull registry
   - name: "frigate"
     image: "ghcr.io/blakeblackshear/frigate:0.16.3"
     health_endpoint: "http://localhost:5000/api/version"
@@ -36,13 +36,55 @@ schedule:
   report_minute: 0
   timezone: "Asia/Ho_Chi_Minh"
 
-# Cấu hình OTA (UpdateManager)
+# ─── Cập nhật hệ thống (OTA) ─────────────────────────────────────────────────
+# Cơ chế: gói .nvrup ký Ed25519, verify trên máy, 4 gate chính sách, tự rollback nếu lỗi.
+# Chi tiết: docs/ota/dinh-dang-goi.md
+ota:
+  # false = CHỈ nhận gói upload tay qua Web UI (Thiết lập → Cập nhật).
+  # true  = mỗi đêm tự hỏi server xem có bản mới.
+  enabled: true
+
+  # URL manifest = <base_url>/<DEVICE_MODEL>/OTA/manifest.json
+  # DEVICE_MODEL lấy từ .env — thiếu nó thì MỌI gói bị từ chối (gate MODEL_MISMATCH).
+  base_url: "https://aiview.bkav.com/download"
+  # Ghi đè URL bằng biến môi trường OTA_MANIFEST_URL (test cục bộ / mirror riêng).
+  # Rỗng = tự dựng từ base_url + DEVICE_MODEL.
+  manifest_url: "${OTA_MANIFEST_URL}"
+
+  hour: 2                       # Giờ được phép tải + áp (theo schedule.timezone)
+
+  # Rải thời điểm gọi trong 40 phút đầu của giờ đó. BẮT BUỘC khi fleet đông: cả trăm máy
+  # gọi cùng lúc 02:00:00 là tự DDoS domain phát hành. Lệch theo hostname nên mỗi máy có
+  # một phút cố định riêng (dùng random thì máy restart lúc 2h05 lại trúng cửa sổ mới).
+  jitter_minutes: 40
+
+  # true = tải xong, verify xong, qua hết gate thì áp luôn + tự rollback nếu lỗi.
+  # false = chỉ tải về và báo Telegram, chờ admin bấm Áp dụng trong Web UI.
+  auto_apply: true
+
+  # Máy này đang GHI HÌNH. Ăn hết đường truyền để tải bản cập nhật là đánh đổi sai:
+  # cập nhật chậm một đêm không sao, mất khung hình thì mất thật. 0 = không giới hạn.
+  max_download_mbps: 20
+
+  # Tải có nối tiếp (HTTP Range). Đường truyền field hay đứt giữa file 200MB — không có
+  # nối tiếp thì mỗi lần đứt là tải lại từ 0, và đường mạng đủ tệ sẽ KHÔNG BAO GIỜ xong.
+  download_retries: 5
+
+  # Cho phép pull image công khai theo digest (đường nâng Frigate). LUÔN đi anonymous:
+  # DOCKER_CONFIG trỏ thư mục rỗng nên không thể lỡ gửi credential nào ra ngoài.
+  allow_registry_pull: true
+
+  poll_seconds: 20              # Nhịp kiểm yêu cầu từ Web UI
+
+# Cấu hình OTA cũ (UpdateManager — registry pull, ĐÃ BỎ).
+# Giữ khối này để watchdog.yml của máy đang chạy bản cũ không lỗi khi parse. Code mới đọc
+# khối `ota:` ở trên. Xoá được sau khi cả fleet đã lên bản có OtaOrchestrator.
 update:
-  check_interval_minutes: 60     # Kiểm tra image mới mỗi 60 phút
-  enable_rollback: true          # Tự rollback nếu bản mới lỗi
-  max_rollback_attempts: 2       # Tối đa 2 lần rollback
-  health_wait_seconds: 120       # Chờ tối đa 120s để verify health sau update
-  ota_hour: 3                    # Chỉ pull+apply OTA lúc 3h sáng (giờ schedule.timezone); -1 = bất kỳ lúc nào
+  check_interval_minutes: 60
+  enable_rollback: true
+  max_rollback_attempts: 2
+  health_wait_seconds: 120
+  ota_hour: 3
 
 # SelfHealingEngine
 self_healing:

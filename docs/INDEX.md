@@ -10,11 +10,21 @@ Start here. Every doc in the repo, grouped by what you're trying to do. `✅` cu
 
 ## By topic
 
-### Build, deploy & OTA
-- ✅ [`../CLAUDE.md`](../CLAUDE.md) § Build & Deploy, § OTA — the canonical reference
-- ✅ [`../install.sh`](../install.sh) — production GHCR-pull bring-up · [`../run.sh`](../run.sh) — dev build-from-source loop
-- ✅ [`../DEPLOY_GUIDE.md`](../DEPLOY_GUIDE.md) — fleet OTA flow (dev → GHCR tag → edge)
+### Build & deploy
+- ✅ [`../CLAUDE.md`](../CLAUDE.md) § Build & Deploy — the canonical reference
+- ✅ [`../install.sh`](../install.sh) — build-from-source bring-up · [`../run.sh`](../run.sh) — dev rebuild loop
+- ✅ [`../package.sh`](../package.sh) + [`../deploy-offline.sh`](../deploy-offline.sh) — bundle for a **new** machine (offline)
+- 📦 [`../DEPLOY_GUIDE.md`](../DEPLOY_GUIDE.md) — describes the retired GHCR-tag flow; see `ota/` below instead
 - ✅ [`../fleet_management_guide.md`](../fleet_management_guide.md) — multi-machine ops
+
+### Cập nhật hệ thống (OTA) — gói ký số
+Hai đường đưa bản mới ra máy đang chạy, dùng chung một định dạng gói và một bộ verify:
+upload tay qua UI LAN, hoặc máy tự tải lúc 2h sáng.
+- ✅ [`ota/dinh-dang-goi.md`](ota/dinh-dang-goi.md) — đặc tả `.nvrup` + manifest + **bốn gate và vì sao chữ ký không đủ**
+- ✅ [`ota/ky-va-may-air-gap.md`](ota/ky-va-may-air-gap.md) — dựng máy air-gap, sao lưu khoá, quy trình rotate
+- ✅ [`ota/runbook-phat-hanh.md`](ota/runbook-phat-hanh.md) — checklist phát hành một bản
+- ✅ [`ota/runbook-su-co.md`](ota/runbook-su-co.md) — **rollback thủ công, hạ floorVersion, tra từng mã lỗi**
+- ✅ [`../ota/README.md`](../ota/README.md) — công cụ phía nhà phát hành (`build-package.sh`, `sign-manifest.sh`, …)
 
 ### Gateway (edge device)
 - ✅ [`../gateway/README.md`](../gateway/README.md) — gateway artifact index

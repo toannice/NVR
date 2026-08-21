@@ -27,7 +27,10 @@ fun main() = runBlocking {
     val selfHealing = SelfHealingEngine(config, alertManager, db)
     val healthMonitor = SystemHealthMonitor(config, alertChannel, db, selfHealing)
     val reportScheduler = ReportScheduler(config, alertManager, db)
-    val updateManager = UpdateManager(config, alertManager, db)
+    // UpdateManager (registry pull) đã bị park bằng DISABLE_OTA — thay bằng OtaOrchestrator:
+    // gói ký số, verify Ed25519, 4 gate chính sách, bàn giao cho host script để swap + rollback.
+    // Xem watchdog/.../ota/OtaOrchestrator.kt về phân vai wrapper / watchdog / host.
+    val otaOrchestrator = vn.aiview.watchdog.ota.OtaOrchestrator(config, alertManager, db)
     val networkMonitor = NetworkMonitor(config, alertManager, db)
 
     // Coroutine xử lý alert queue
@@ -37,7 +40,7 @@ fun main() = runBlocking {
     val jobs = listOf(
         launch { healthMonitor.run() },
         launch { reportScheduler.run() },
-        launch { updateManager.run() },
+        launch { otaOrchestrator.run() },
         launch { networkMonitor.run() }
     )
 

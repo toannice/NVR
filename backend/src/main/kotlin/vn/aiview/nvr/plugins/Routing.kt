@@ -28,6 +28,11 @@ fun Application.configureRouting() {
 
             // AI event list + clip/snapshot serving + source-mode (5B) toggle
             eventsRouting()
+
+            // Cập nhật hệ thống: upload gói .nvrup qua UI LAN + theo dõi tiến trình.
+            // Backend chỉ nhận file và đọc trạng thái — verify chữ ký và apply là việc của
+            // watchdog (xem chú thích đầu OtaRouting.kt về phân vai).
+            otaRouting()
         }
 
         // Dev/test helpers (active only when E2E_TEST_MODE=true)
@@ -41,6 +46,9 @@ fun Application.configureRouting() {
 
         // Box → NVR push event (self-authenticate) — creates event + cuts -5/+5 clip
         pushEventRouting()
+
+        // Camera Bkav → NVR push event (nhận diện chạy trên thân camera) — cùng đường cắt clip -5/+5
+        bkavEventRouting()
 
         // ONVIF server — NVR advertises itself as ONVIF device for Box/VMS discovery (HTTP, no session auth)
         onvifServerRouting()

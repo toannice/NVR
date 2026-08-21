@@ -1,5 +1,9 @@
 plugins {
     kotlin("jvm") version "2.0.21"
+    // kotlinx-serialization-json đã là dependency từ trước nhưng thiếu compiler plugin nên
+    // @Serializable không dùng được. Cần cho OTA manifest (JSON lồng nhiều tầng, parse tay
+    // là chỗ dễ sinh lỗi nhất). Cùng version với backend/build.gradle.kts.
+    kotlin("plugin.serialization") version "2.0.21"
     application
 }
 
@@ -38,6 +42,19 @@ dependencies {
 
     // Logging
     implementation("ch.qos.logback:logback-classic:1.4.14")
+
+    // Test — bộ test đầu tiên của repo. Nhắm vào OTA verifier + gates: đó là chỗ một lỗi
+    // không gây crash mà gây nhận sai gói cập nhật, nên không test thì không có cách nào biết.
+    testImplementation(kotlin("test"))
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+}
+
+tasks.test {
+    useJUnitPlatform()
+    testLogging {
+        events("passed", "skipped", "failed")
+        showStandardStreams = false
+    }
 }
 
 tasks.jar {

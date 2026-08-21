@@ -9,8 +9,20 @@ import java.util.concurrent.TimeUnit
 import org.jetbrains.exposed.sql.transactions.transaction
 import kotlinx.serialization.Serializable
 
+/**
+ * [model] thêm vào cho OTA: URL manifest scope theo model, và máy từ chối gói khai model khác.
+ * Rỗng nếu DEVICE_MODEL chưa đặt — UI tab Cập nhật hiện cảnh báo khi thấy rỗng.
+ *
+ * KHÔNG thêm floorVersion vào đây: nó nằm trong data/ota/state.json do watchdog quản, và
+ * /api/ota/status đã trả ra. Đọc nó ở hai chỗ là mời hai chỗ lệch nhau.
+ */
 @Serializable
-data class VersionInfo(val version: String, val uptime: Long, val deployVersion: String)
+data class VersionInfo(
+    val version: String,
+    val uptime: Long,
+    val deployVersion: String,
+    val model: String = "",
+)
 
 @Serializable
 data class HealthInfo(val status: String, val db: String, val version: String, val deployVersion: String, val msg: String? = null)
@@ -35,12 +47,15 @@ val appVersion = System.getenv("APP_VERSION")?.takeIf { it.isNotBlank() }
     ?: runCatching { File("VERSION").readText().trim() }.getOrNull()?.takeIf { it.isNotBlank() }
     ?: "1.2.0"
 val deployVersion = System.getenv("DEPLOY_VERSION") ?: "dev"
+
+/** Mã model thiết bị, dùng cho OTA. Rỗng = chưa đặt DEVICE_MODEL trong .env. */
+val deviceModel = System.getenv("DEVICE_MODEL")?.takeIf { it.isNotBlank() } ?: ""
 val startTime = System.currentTimeMillis()
 
 fun Route.systemRouting() {
     get("/api/version") {
         val uptimeSec = (System.currentTimeMillis() - startTime) / 1000
-        call.respond(VersionInfo(appVersion, uptimeSec, deployVersion))
+        call.respond(VersionInfo(appVersion, uptimeSec, deployVersion, deviceModel))
     }
 
     get("/api/health") {

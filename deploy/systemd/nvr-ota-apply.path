@@ -1,0 +1,13 @@
+[Unit]
+Description=Theo dõi yêu cầu áp bản cập nhật NVR (do nvr-watchdog ghi)
+Documentation=file:///opt/nvr/docs/ota/runbook-su-co.md
+
+[Path]
+# nvr-watchdog chạy trong container nên KHÔNG gọi được systemctl trên host. Nó chỉ ghi được
+# file — nên cách bàn giao là: nó chạm data/ota/trigger, systemd thấy và chạy service.
+# Không cần dbus, không docker-in-docker, không nới thêm quyền nào cho container.
+PathExists=__PROJECT_DIR__/data/ota/trigger
+Unit=nvr-ota-apply.service
+
+[Install]
+WantedBy=multi-user.target

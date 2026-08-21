@@ -1,0 +1,24 @@
+[Unit]
+Description=Áp bản cập nhật NVR (đổi container, kiểm khoẻ, rollback nếu lỗi)
+Documentation=file:///opt/nvr/docs/ota/runbook-su-co.md
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=__PROJECT_DIR__
+Environment=PROJECT_DIR=__PROJECT_DIR__
+ExecStart=__PROJECT_DIR__/scripts/ota-apply.sh
+
+# Bước này recreate cả nvr-wrapper LẪN nvr-watchdog, và có thể phải rollback + health-check
+# tới 2 lần. 30 phút là trần rộng nhưng cần: gói có Frigate thì riêng frigate lên khoẻ đã
+# mất tới 5 phút.
+TimeoutStartSec=1800
+
+# KHÔNG đặt Restart=: đây là oneshot phẫu thuật. Nếu nó chết giữa đường, tự chạy lại là chạy
+# lại một quy trình đã ở trạng thái nửa vời — tệ hơn nhiều so với dừng lại và báo Telegram.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

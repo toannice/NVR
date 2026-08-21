@@ -17,8 +17,18 @@ services:
     networks:
       - nvr-backend
     ports:
-      - "1883:1883" # MQTT (local LAN access for IoT sensors)
-      - "9001:9001" # MQTT over WebSocket
+      # Cổng HOST đổi 1883→9001 (2026-07-29). Cổng TRONG container giữ nguyên 1883/9001 nên
+      # frigate (bridge net, nối tới mosquitto:1883) không bị ảnh hưởng; chỉ client đi qua host
+      # (nvr-wrapper chạy network_mode: host → MQTT_URL=tcp://localhost:9001) và IoT sensor ngoài LAN đổi cổng.
+      - "9001:1883" # MQTT (local LAN access for IoT sensors) — trước là 1883:1883
+      # WebSocket KHÔNG publish nữa (2026-07-29): mosquitto.conf chỉ khai `listener 1883`, chưa từng
+      # có listener websockets — cổng 9001 cũ (và 9002 sau khi dời) chỉ là docker-proxy rỗng, kết nối
+      # vào là refuse. Không code nào trong repo dùng MQTT-over-WS. Bỏ đi = bớt 1 cổng mở vô ích.
+      # Cần WS thật thì thêm vào mosquitto/config/mosquitto.conf:
+      #     listener 9001
+      #     protocol websockets
+      # rồi mở lại dòng dưới (auth/ACL toàn cục áp dụng chung cho mọi listener):
+      # - "9002:9001"
     volumes:
       - ./mosquitto/config:/mosquitto/config
       - ./mosquitto/data:/mosquitto/data
@@ -84,8 +94,12 @@ services:
   # ─── NVR Wrapper (Our App) ─────────────────────────────────
   nvr-wrapper:
     container_name: nvr-wrapper
-    image: ghcr.io/toannice/nvr:${WRAPPER_TAG:-latest} # GHCR image để OTA. latest=stable(main), staging=beta. Prod để mặc định latest.
-    # build: .
+    # Image build tại chỗ từ source tree này — KHÔNG kéo từ registry nào.
+    # (Trước đây: ghcr.io/toannice/nvr:${WRAPPER_TAG} + OTA pull. Bỏ hẳn vì token GHCR phải
+    #  nằm plaintext trên máy khách mới pull được. Bản deploy offline override WRAPPER_IMAGE
+    #  sang image đã load từ images.tar — xem docker-compose.offline.yml.)
+    image: ${WRAPPER_IMAGE:-nvr-wrapper:latest}
+    build: .
     restart: unless-stopped
     logging: *default-logging
     network_mode: "host" # Required for ONVIF multicast (WS-Discovery) to work
@@ -108,34 +122,42 @@ services:
       mosquitto:
         condition: service_healthy
     secrets:
-      - gmail_app_password
       - edge_agent_token                       # Shared fleet token for edge gateways (4-6 Plan A)
       - zt_controller_token                    # ZeroTier controller authtoken — NVR authorizes members itself
       - nebula_sign_token                      # Nebula HQ signing-service admin token (ZeroTier→Nebula migration)
     environment:
       - FRIGATE_URL=http://localhost:5000
-      - MQTT_URL=tcp://localhost:1883
+      - MQTT_URL=tcp://localhost:9001    # cổng host của mosquitto (map 9001→1883 trong container)
       - MQTT_USER=nvr-backend                 # Broker auth (mosquitto allow_anonymous=false); rỗng = kết nối anonymous như cũ
       - MQTT_PASSWORD=${MQTT_BACKEND_PASSWORD:-}
       - PORT=3000
+      # Cổng HTTP của nginx (đổi 80→9000). Backend nhúng cổng này vào XAddr ONVIF quảng bá
+      # cho AiView Box (WS-Discovery + GetCapabilities/GetServices) — sai cổng = Box không gọi được.
+      - ONVIF_HTTP_PORT=${ONVIF_HTTP_PORT:-9000}
+      # Loopback-only: container chạy network_mode host nên bind 0.0.0.0 sẽ mở toàn bộ API
+      # ra LAN, bỏ qua nginx + TLS. nginx/dc-bridge/watchdog đều gọi qua 127.0.0.1.
+      - BIND_HOST=${BIND_HOST:-127.0.0.1}
       - CONFIG_PATH=config/config.yml
       # APP_VERSION / DEPLOY_VERSION intentionally NOT set here — they're baked into the image at
       # build time (Dockerfile ARG→ENV, from the root VERSION file + git SHA). Setting them here
       # would override the baked value with this default on every container start, which is the
       # bug that made the Web UI badge always show "dev" regardless of what was actually deployed.
       - TZ=${TZ:-Asia/Ho_Chi_Minh}
-      - GMAIL_USER=${GMAIL_USER}               # Username is not sensitive, stays as env var
       - DC_BRIDGE_PATH=${DC_BRIDGE_PATH:-}    # Optional: path to dc-bridge binary (default: ~/.aiview/dc-bridge)
       - E2E_TEST_MODE=${E2E_TEST_MODE:-false} # Set true in .env to enable /api/dev/* endpoints for E2E tests
+      # Model hiển thị trong UI tab Cập nhật. Backend KHÔNG dùng nó để gate gì — verify và
+      # gate đều nằm ở watchdog (xem chú thích đầu OtaRouting.kt về phân vai).
+      - DEVICE_MODEL=${DEVICE_MODEL:-}
+      - OTA_MAX_UPLOAD_BYTES=${OTA_MAX_UPLOAD_BYTES:-4294967296}  # trần upload gói, 4GB
       # ─── Edge gateway auto-provisioning (4-6 Plan A) ───
       - ZT_SCAN_SUBNET=${ZT_SCAN_SUBNET:-}    # ZeroTier subnet to auto-scan for gateways, e.g. 10.34.24.0/24 (empty = disabled)
       - EDGE_AGENT_PORT=${EDGE_AGENT_PORT:-9797}
       - GATEWAY_SCAN_INTERVAL_SEC=${GATEWAY_SCAN_INTERVAL_SEC:-30}
-      - ZT_CONTROLLER_URL=${ZT_CONTROLLER_URL:-} # Self-hosted ZT controller API, e.g. http://192.168.2.106:9993 (empty = NVR authorize disabled)
+      - ZT_CONTROLLER_URL=${ZT_CONTROLLER_URL:-} # Self-hosted ZT controller API, e.g. http://<hq-ip>:9993 (empty = NVR authorize disabled)
       - ZT_NETWORK_ID=${ZT_NETWORK_ID:-}        # Fleet network id the gateways join (for controller member API)
       # ─── Nebula overlay (ZeroTier→Nebula migration; empty = ZeroTier stays active) ───
-      - NEBULA_CA_URL=${NEBULA_CA_URL:-}         # HQ signing-service base URL, e.g. http://192.168.2.106:9443
-      - NEBULA_OVERLAY_SUBNET=${NEBULA_OVERLAY_SUBNET:-}  # Nebula subnet to auto-scan, e.g. 10.10.20.0/24
+      - NEBULA_CA_URL=${NEBULA_CA_URL:-}         # HQ signing-service base URL, e.g. http://<hq-ip>:9443
+      - NEBULA_OVERLAY_SUBNET=${NEBULA_OVERLAY_SUBNET:-}  # Nebula subnet to auto-scan, e.g. 10.x.y.0/24
     healthcheck:
       test: [ "CMD-SHELL", "curl -f http://127.0.0.1:3000/api/health || exit 1" ]
       interval: 20s
@@ -172,25 +194,38 @@ services:
     network_mode: "host"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock  # Read container states & Execute Compose
-      - ${PWD:-/home/toan/my-nvr}:${PWD:-/home/toan/my-nvr} # Allow Watchdog to run docker-compose
+      - ${PWD:-/home/toan/toanDoc/Documents/my-nvr}:${PWD:-/home/toan/toanDoc/Documents/my-nvr} # Allow Watchdog to run docker-compose
       - ./config/watchdog.yml:/config/watchdog.yml:ro  # Config (read-only)
       - ./media/recordings:/recordings                # Measure disk & cleanup via path
-      - /root/.docker/config.json:/root/.docker/config.json:ro  # Pull private GHCR images
+      # /root/.docker/config.json KHÔNG mount nữa (2026-08-03): watchdog không pull registry, và
+      # nếu file đó không tồn tại thì docker tự tạo một THƯ MỤC rỗng ở /root/.docker/config.json
+      # trên host — sau này `docker login` sẽ lỗi vì đường dẫn đã là thư mục.
       - watchdog-data:/data    # events.db, reports/, version_state.json
+      # Khoá công khai tin cậy để verify chữ ký gói OTA. read-only: watchdog chỉ đọc, và
+      # ghi được vào đây nghĩa là một gói độc hại có thể tự thêm khoá của nó vào keyring.
+      - ${OTA_KEYRING_DIR:-/opt/nvr/keys/ota-trust.d}:/opt/nvr/keys/ota-trust.d:ro
     environment:
-      - PROJECT_DIR=${PWD:-/home/toan/my-nvr}
+      - PROJECT_DIR=${PWD:-/home/toan/toanDoc/Documents/my-nvr}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - HOSTNAME=${HOSTNAME:-nvr-edge-node}
       - TZ=${TZ:-Asia/Ho_Chi_Minh}
-      - WRAPPER_TAG=${WRAPPER_TAG:-latest}  # OTA target tag — watchdog.yml ${WRAPPER_TAG} resolves to this (update + rollback dùng chung)
+      # OTA đã có đường thật (gói .nvrup ký Ed25519, xem config/watchdog.yml khối `ota:`).
+      # DISABLE_OTA cũ dùng để park UpdateManager (registry pull) — không còn tác dụng vì
+      # UpdateManager đã được thay bằng OtaOrchestrator. Giữ biến để .env cũ không gây lỗi.
+      - DISABLE_OTA=${DISABLE_OTA:-true}
+      - WRAPPER_IMAGE=${WRAPPER_IMAGE:-nvr-wrapper:latest}  # watchdog.yml ${WRAPPER_IMAGE} resolve từ đây
+      # Mã model: gate MODEL_MISMATCH từ chối mọi gói khai model khác. Thiếu = từ chối hết.
+      - DEVICE_MODEL=${DEVICE_MODEL:-}
+      # Version của chính watchdog — đối chiếu với manifest.minApplier (gate 4).
+      - WATCHDOG_VERSION=${WATCHDOG_VERSION:-1.0.0}
+      - OTA_KEYRING_DIR=${OTA_KEYRING_DIR:-/opt/nvr/keys/ota-trust.d}
+      - OTA_MANIFEST_URL=${OTA_MANIFEST_URL:-}   # rỗng = tự dựng từ base_url + DEVICE_MODEL
     depends_on:
       - nvr-wrapper
 
   # ─── Secrets ───────────────────────────────────────────────
 secrets:
-  gmail_app_password:
-    file: ./secrets/gmail_app_password
   edge_agent_token:
     file: ./secrets/edge_agent_token
   zt_controller_token:
