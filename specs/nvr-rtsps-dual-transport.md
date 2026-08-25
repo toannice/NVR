@@ -1,6 +1,6 @@
 # Yêu cầu cập nhật: NVR kéo camera được bằng **cả RTSP (554) và RTSPS (322)**
 
-**Ngày:** 2026-08-25 · **Trạng thái:** ĐÃ THI HÀNH (nhánh `feat/rtsp-rtsps-dual-transport`)
+**Ngày:** 2026-08-25 · **Trạng thái:** ĐÃ THI HÀNH VÀ KIỂM CHỨNG TRÊN MÁY THẬT (nhánh `feat/rtsp-rtsps-dual-transport`)
 **Liên quan:** [camera-ai-event-push.md](./camera-ai-event-push.md)
 
 ---
@@ -115,3 +115,28 @@ Không log mật khẩu: URL luôn đi qua `redact()` trước khi vào log.
   nhận ra ở lần sửa camera kế tiếp hoặc khi NVR khởi động lại. Nếu cần bám sát hơn thì móc thêm vào
   `HealthService` — chưa làm vì chưa có nhu cầu thật.
 - Chi phí dò: 2 lần TCP connect × 700 ms tối đa cho mỗi camera, chỉ khi ghi `config.yml`.
+
+## 7. Kết quả kiểm chứng trên máy thật (2026-08-25)
+
+| Nhánh | Camera | Bằng chứng |
+|---|---|---|
+| `SWITCHED` | `.209` sau khi nạp firmware rtsps (554 đóng, 322 mở) | `RTSP_TRANSPORT SWITCHED from=554 to=322` → `YAML_UPDATED` → `STARTUP_HEALED frigate_restarted=true` → `camera_fps=5.1`, recording chạy lại |
+| `KEEP` | `.41` khi 554 còn sống | không đụng vào, `config.yml` không đổi một byte |
+| `BOTH_DOWN` | `.8` (offline thật) | giữ nguyên URL gốc, không ghi `config.yml`, không restart Frigate |
+| `FORCED` | `.41` sau khi 554 hỏng xác thực | `FORCED mode=rtsps` → `camera_fps=5.0`, kéo camera từ chết về sống |
+
+Chuỗi đầy đủ camera→NVR cũng đã chạy thật: camera POST sự kiện → `202` → `EVENT_CLIP READY` →
+clip **10,56 giây** (3.890.412 byte) + ảnh trích từ đúng thời điểm sự kiện.
+
+### Giới hạn đã lộ ra khi kiểm chứng — quan trọng
+
+`probe()` chỉ **TCP connect**, nên nó KHÔNG phát hiện được "cổng mở nhưng dịch vụ hỏng". Ca thật gặp
+ngay hôm nay: camera `.41` mở 554, trả lời `RTSP/1.0 401 Unauthorized` (`Server: aiview rtsp server
+V5.1`) — tầng RTSP sống nhưng **từ chối xác thực** của go2rtc, trong khi **cùng credential đó lại
+chạy qua 322**. Lý do: `rtsps_proxy` chuyển tiếp từ `127.0.0.1`, và RTSP server bỏ qua `need_auth`
+cho loopback. `auto` không thể tự chữa ca này vì lỗi nằm ở xác thực, không phải vận chuyển — đường ép
+tay `mode=rtsps` mới là lời giải, và đã dùng đúng như vậy để cứu `.41`.
+
+Nâng `probe()` lên tầng RTSP (gửi `OPTIONS`) **cũng không giải quyết được** ca này, vì `.41` trả lời
+`401` chứ không im lặng — tức là "RTSP sống". Muốn tự chữa cả lỗi xác thực thì phải thử `DESCRIBE`
+kèm credential thật rồi so kết quả hai cổng, đắt hơn nhiều và chưa làm.
