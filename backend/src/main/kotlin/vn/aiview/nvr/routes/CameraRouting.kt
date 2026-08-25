@@ -25,6 +25,9 @@ import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import vn.aiview.nvr.utils.HwaccelDetector
 import vn.aiview.nvr.utils.CryptoUtils
 import vn.aiview.nvr.services.CameraConfigMutex
+import vn.aiview.nvr.utils.AppLogger
+import vn.aiview.nvr.services.RtspTransport
+import vn.aiview.nvr.services.CameraService
 
 private val configMutex = CameraConfigMutex.mutex
 
@@ -775,6 +778,43 @@ fun Route.cameraRouting() {
             call.application.environment.log.error("Error updating PTZ flag for $id", e)
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Unknown error")))
         }
+    }
+
+    // Đường kéo luồng của camera: "auto" (mặc định, tự chuyển 554 ↔ 322 khi cổng đang dùng chết),
+    // "rtsp" (ép 554 thô), "rtsps" (ép 322 TLS). Xem specs/nvr-rtsps-dual-transport.md.
+    patch("/api/cameras/{id}/transport") {
+        val id = call.parameters["id"] ?: return@patch call.respond(
+            HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
+        val mode = try {
+            Json.parseToJsonElement(call.receiveText()).jsonObject["mode"]?.jsonPrimitive?.content?.trim()?.lowercase()
+        } catch (_: Exception) { null }
+        if (mode.isNullOrBlank()) {
+            return@patch call.respond(HttpStatusCode.BadRequest,
+                mapOf("error" to "Thiếu trường mode (auto | rtsp | rtsps)"))
+        }
+        if (mode !in RtspTransport.VALID_MODES) {
+            AppLogger.warn(AppLogger.Module.CAMERA, "RTSP_TRANSPORT", "MODE_REJECTED",
+                "slug=$id mode='$mode' — không hợp lệ")
+            return@patch call.respond(HttpStatusCode.BadRequest,
+                mapOf("error" to "mode phải là auto, rtsp hoặc rtsps"))
+        }
+        CameraService.setStreamTransport(id, mode).fold(
+            onSuccess = { applied ->
+                call.respondText(
+                    """{"success":true,"mode":"$mode","frigateRestarted":${applied.frigateRestarted}}""",
+                    io.ktor.http.ContentType.Application.Json
+                )
+            },
+            onFailure = { e ->
+                AppLogger.error(AppLogger.Module.CAMERA, "RTSP_TRANSPORT", "MODE_APPLY_FAIL",
+                    "slug=$id mode=$mode err=${e.message}", e)
+                if (e is IllegalArgumentException) {
+                    call.respond(HttpStatusCode.NotFound, mapOf("error" to (e.message ?: "Camera not found")))
+                } else {
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Unknown error")))
+                }
+            }
+        )
     }
 
     // Debug / convenience endpoint: proxy Frigate recordings for a camera

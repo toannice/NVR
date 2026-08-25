@@ -11,6 +11,7 @@ import java.util.Base64
 import java.util.Date
 import java.util.TimeZone
 import java.util.concurrent.ConcurrentHashMap
+import vn.aiview.nvr.services.RtspTransport
 
 data class OnvifDeviceInfo(
     val manufacturer: String,
@@ -146,8 +147,10 @@ $authHeader
         val streamUriRes = sendSoapPost(mediaUrl, getStreamUriReq)
         var streamUri = extractValue(streamUriRes, "Uri") ?: throw Exception("Could not retrieve Stream URI")
 
-        if (password != null && !streamUri.contains("@")) {
-            streamUri = streamUri.replace("rtsp://", "rtsp://$username:$password@")
+        // Không dùng replace("rtsp://", …): chuỗi đó không có trong "rtsps://" nên camera TLS sẽ mất
+        // sạch user/pass mà không báo lỗi gì. Xem services/RtspTransport.kt.
+        if (password != null) {
+            streamUri = RtspTransport.injectCredentials(streamUri, username, password)
         }
 
         // 5. Get Sub Stream URI from 2nd profile (non-fatal if missing)
@@ -168,8 +171,8 @@ $authHeader
                 val subUriRes = sendSoapPost(mediaUrl, subUriReq)
                 var subUri = extractValue(subUriRes, "Uri")
                 if (subUri != null) {
-                    if (password != null && !subUri.contains("@")) {
-                        subUri = subUri.replace("rtsp://", "rtsp://$username:$password@")
+                    if (password != null) {
+                        subUri = RtspTransport.injectCredentials(subUri, username, password)
                     }
                     subRtspUrl = subUri
                 }

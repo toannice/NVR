@@ -23,6 +23,11 @@ object Cameras : Table("cameras") {
     val subToken = varchar("sub_token", 255).default("")
     val rtspUrl = text("rtsp_url").default("")
     val subRtspUrl = text("sub_rtsp_url").nullable()
+    // Đường kéo luồng: "auto" (mặc định) = dùng cổng ghi trong rtsp_url, chỉ chuyển sang cổng đối
+    // ứng (554 ↔ 322) khi cổng đang dùng chết mà cổng kia sống; "rtsp"/"rtsps" = ép tay.
+    // Camera Bkav 1.6.9.x giấu 554 sau rtsps_proxy ở 322; thiết bị hãng khác chỉ có 554 — nên không
+    // được cứng một phía. Xem specs/nvr-rtsps-dual-transport.md và services/RtspTransport.kt.
+    val streamTransport = varchar("stream_transport", 10).default("auto")
     val macAddress = varchar("mac_address", 50).nullable()
     val hasPtz = bool("has_ptz").default(false)
     // Manual PTZ capability override for cameras whose ONVIF GetNodes under-reports

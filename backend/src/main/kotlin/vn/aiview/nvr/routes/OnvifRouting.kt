@@ -27,6 +27,7 @@ import java.net.SocketTimeoutException
 import java.util.UUID
 import vn.aiview.nvr.services.CameraService
 import vn.aiview.nvr.services.OnvifCameraClient
+import vn.aiview.nvr.services.RtspTransport
 import vn.aiview.nvr.utils.AppLogger
 import vn.aiview.nvr.utils.CryptoUtils
 
@@ -372,15 +373,18 @@ private fun getCameraOnvifConfig(slug: String): CameraOnvifConfig? {
             val streamUrl = (streams?.get(slug) as? List<*>)?.firstOrNull()?.toString()
             if (streamUrl != null) {
                 val rtspUrl = streamUrl.substringBeforeLast("#") // strip #tcp/#udp (no-op if absent)
-                val afterScheme = rtspUrl.removePrefix("rtsp://")
-                // host parses correctly whether or not credentials are present
-                urlIp = afterScheme.substringAfterLast('@').substringBefore('/').substringBefore(':')
-                val atIdx = afterScheme.lastIndexOf('@')
-                if (atIdx >= 0) {
-                    val creds = afterScheme.substring(0, atIdx)
-                    val colon = creds.indexOf(':')
-                    urlUser = if (colon >= 0) creds.substring(0, colon) else creds
-                    urlPass = if (colon >= 0) creds.substring(colon + 1) else null
+                // Phải bóc scheme bằng parser hiểu cả rtsps://: removePrefix("rtsp://") không đụng
+                // được vào "rtsps://", và khi URL không có credential thì host bị đọc nhầm thành
+                // "rtsps" → tra ONVIF sai địa chỉ.
+                val parts = RtspTransport.parse(rtspUrl)
+                if (parts != null) {
+                    urlIp = parts.host
+                    val creds = parts.creds.removeSuffix("@")
+                    if (creds.isNotEmpty()) {
+                        val colon = creds.indexOf(':')
+                        urlUser = if (colon >= 0) creds.substring(0, colon) else creds
+                        urlPass = if (colon >= 0) creds.substring(colon + 1) else null
+                    }
                 }
             }
         }

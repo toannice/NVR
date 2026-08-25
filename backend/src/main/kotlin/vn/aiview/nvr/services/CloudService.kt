@@ -51,6 +51,9 @@ object CloudService {
             CameraService.backfillChannelIds()
             // Add persistent {channelId}_main alias entries to config.yml so live view survives Frigate restarts.
             CameraService.ensureChannelAliasesInYaml()
+            // Camera đã đổi cổng RTSP (554 ↔ 322, ví dụ sau khi nâng firmware bật rtsps) thì khởi
+            // động lại NVR là đủ để nó tự tìm lại đường — xem specs/nvr-rtsps-dual-transport.md.
+            CameraService.reresolveStreamTransports()
 
             val config = readCloudConfig() ?: run {
                 AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "NO_CONFIG", "No cloud config found, skipping connection")

@@ -182,6 +182,57 @@ object CameraService {
         )
     }
 
+    /**
+     * Đổi đường kéo luồng của một camera ("auto" | "rtsp" | "rtsps") rồi ghi lại config.yml và nạp
+     * lại Frigate — giống hệt đường đi của [setSubStream], vì thay đổi chỉ có tác dụng khi
+     * `go2rtc.streams` được viết lại.
+     */
+    suspend fun setStreamTransport(slugOrChannelId: String, mode: String): Result<AppliedCamera> = runCatching {
+        val normalized = mode.trim().lowercase()
+        require(normalized in RtspTransport.VALID_MODES) {
+            "stream_transport không hợp lệ: '$mode' (chỉ nhận ${RtspTransport.VALID_MODES.joinToString("/")})"
+        }
+        val row = transaction {
+            Cameras.selectAll().where {
+                (Cameras.slug eq slugOrChannelId) or (Cameras.channelId eq slugOrChannelId)
+            }.firstOrNull()
+        } ?: throw IllegalArgumentException("Camera not found: $slugOrChannelId")
+
+        val slug = row[Cameras.slug]
+        val channelId = row[Cameras.channelId]?.takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("Camera $slugOrChannelId has no channel_id")
+        val plainPass = row[Cameras.passwordEncrypted]?.takeIf { it.isNotBlank() }
+            ?.let { runCatching { CryptoUtils.decrypt(it) }.getOrNull() }
+
+        val previous = row[Cameras.streamTransport]
+        transaction {
+            Cameras.update({ Cameras.slug eq slug }) { it[Cameras.streamTransport] = normalized }
+        }
+        AppLogger.info(AppLogger.Module.CAMERA, "RTSP_TRANSPORT", "MODE_CHANGED",
+            "slug=$slug from=$previous to=$normalized")
+
+        configMutexApply(
+            slug = slug,
+            channelId = channelId,
+            displayName = row[Cameras.displayName],
+            ip = row[Cameras.ip] ?: "",
+            onvifPort = row[Cameras.onvifPort],
+            username = row[Cameras.username],
+            password = plainPass,
+            manufacturer = row[Cameras.manufacturer],
+            model = row[Cameras.model],
+            mainToken = row[Cameras.mainToken].ifBlank { "MediaProfile${channelId.padStart(3, '0')}01" },
+            subToken = row[Cameras.subToken].ifBlank { buildSubToken(channelId) },
+            rtspUrl = row[Cameras.rtspUrl],
+            subRtspUrl = row[Cameras.subRtspUrl],
+            record = true,
+            ptzEnabled = row[Cameras.ptzEnabled],
+            gatewayId = row[Cameras.gatewayId],
+            localIp = row[Cameras.localIp],
+            assignedRtspPort = row[Cameras.assignedRtspPort],
+        )
+    }
+
     suspend fun removeAndPersist(slugOrChannelId: String): Result<Unit> = runCatching {
         val target = transaction {
             Cameras.selectAll().where {
@@ -306,10 +357,19 @@ object CameraService {
                 }
                 targetSlug
             }
-            writeYaml(resolved, channelId, rtspUrl, subRtspUrl, record)
-            Go2RtcClient.registerStreamSync("${channelId}_main", "$rtspUrl#backchannel=0")
-            if (subRtspUrl != null) {
-                Go2RtcClient.registerStreamSync("${channelId}_sub", "$subRtspUrl#backchannel=0")
+            // DB giữ URL gốc do ONVIF khai; go2rtc mới là nơi nhận URL đã chọn đường (554 hay 322).
+            // Tách ra như vậy để còn dò lại được về sau khi camera đổi firmware — xem
+            // services/RtspTransport.kt và specs/nvr-rtsps-dual-transport.md.
+            val transportMode = transaction {
+                Cameras.selectAll().where { Cameras.slug eq resolved }
+                    .firstOrNull()?.get(Cameras.streamTransport)
+            } ?: RtspTransport.MODE_AUTO
+            val mainUrl = RtspTransport.resolve(rtspUrl, transportMode, resolved)
+            val subUrl = subRtspUrl?.let { RtspTransport.resolve(it, transportMode, "${resolved}_sub") }
+            writeYaml(resolved, channelId, mainUrl, subUrl, record)
+            Go2RtcClient.registerStreamSync("${channelId}_main", "$mainUrl#backchannel=0")
+            if (subUrl != null) {
+                Go2RtcClient.registerStreamSync("${channelId}_sub", "$subUrl#backchannel=0")
             }
             resolved
         }
@@ -468,7 +528,8 @@ object CameraService {
                 val streamList = go2rtcStreams?.get(slug) as? List<*>
                 val rawUrl = streamList?.firstOrNull()?.toString() ?: continue
                 val rtspUrl = if (rawUrl.contains("#")) rawUrl.substringBefore("#") else rawUrl
-                if (rtspUrl.isBlank() || rtspUrl.startsWith("rtsp://127.0.0.1")) continue
+                // Bỏ qua luồng restream nội bộ của go2rtc, kể cả khi nó là rtsps://.
+                if (rtspUrl.isBlank() || RtspTransport.isLoopback(rtspUrl)) continue
 
                 var nextId = 1
                 while (nextId in usedChannelIds) nextId++
@@ -535,6 +596,71 @@ object CameraService {
         }
     }
 
+    /**
+     * Dò lại đường kéo luồng của mọi camera khi NVR khởi động và sửa `go2rtc.streams` nếu cổng đã
+     * đổi.
+     *
+     * Không có bước này thì `stream_transport="auto"` chỉ có tác dụng lúc thêm/sửa camera: camera
+     * vừa nâng firmware (554 đóng lại, 322 mở ra) sẽ nằm im mất hình cho tới khi có người vào sửa
+     * tay — đúng thứ chúng ta đang muốn tránh. Khởi động lại NVR là đủ để nó tự chữa.
+     *
+     * Chỉ ghi khi có thay đổi thật, và chỉ nạp lại Frigate một lần cho cả lượt.
+     */
+    @Suppress("UNCHECKED_CAST")
+    suspend fun reresolveStreamTransports() {
+        val file = File(configPath())
+        if (!file.exists()) return
+
+        data class Cam(val slug: String, val chId: String?, val mode: String)
+        val cams = transaction {
+            Cameras.selectAll().map { row ->
+                Cam(row[Cameras.slug], row[Cameras.channelId], row[Cameras.streamTransport])
+            }
+        }
+        if (cams.isEmpty()) return
+
+        var restartNeeded = false
+        CameraConfigMutex.mutex.withLock {
+            val configData = Yaml().load<MutableMap<String, Any>>(file.readText()) ?: return@withLock
+            val go2rtc = configData["go2rtc"] as? MutableMap<String, Any> ?: return@withLock
+            val streams = go2rtc["streams"] as? MutableMap<String, Any> ?: return@withLock
+
+            for (cam in cams) {
+                for (key in listOf(cam.slug, "${cam.slug}_sub")) {
+                    val current = (streams[key] as? List<*>)?.firstOrNull()?.toString() ?: continue
+                    // Giữ nguyên hậu tố #tcp/#backchannel=0 — nó là tham số của go2rtc, không thuộc URL.
+                    val suffix = if (current.contains('#')) "#" + current.substringAfter('#') else ""
+                    val bare = current.substringBefore('#')
+                    if (RtspTransport.isLoopback(bare)) continue
+                    val resolved = RtspTransport.resolve(bare, cam.mode, key)
+                    if (resolved == bare) continue
+                    streams[key] = listOf(resolved + suffix)
+                    restartNeeded = true
+                    AppLogger.info(AppLogger.Module.CAMERA, "RTSP_TRANSPORT", "YAML_UPDATED",
+                        "stream=$key from=${RtspTransport.redact(bare)} to=${RtspTransport.redact(resolved)}")
+                    // Alias {chId}_main/_sub trỏ vào restream nội bộ nên không cần sửa; nhưng bản
+                    // đăng ký sống trong go2rtc thì phải cập nhật, nếu không live view cloud vẫn
+                    // dùng URL cũ cho tới lần khởi động lại Frigate kế tiếp.
+                    if (cam.chId != null) {
+                        val alias = if (key == cam.slug) "${cam.chId}_main" else "${cam.chId}_sub"
+                        Go2RtcClient.registerStreamSync(alias, "$resolved#backchannel=0")
+                    }
+                }
+            }
+
+            if (restartNeeded) {
+                val options = DumperOptions().apply { defaultFlowStyle = DumperOptions.FlowStyle.BLOCK }
+                FileWriter(file).use { Yaml(options).dump(configData, it) }
+            }
+        }
+
+        if (restartNeeded) {
+            val restarted = triggerFrigateRestart()
+            AppLogger.info(AppLogger.Module.CAMERA, "RTSP_TRANSPORT", "STARTUP_HEALED",
+                "da doi cong cho it nhat mot camera, frigate_restarted=$restarted")
+        }
+    }
+
     private fun detectLanIp(): String = vn.aiview.nvr.utils.NetUtils.detectLanIp()
 
     private fun parseIpFromRtsp(rtsp: String): String? {
@@ -551,14 +677,19 @@ object CameraService {
      * Used for gateway cameras: rtsp://user:pass@192.168.2.64:554/path → rtsp://user:pass@10.34.24.12:8081/path
      */
     fun rewriteRtspHost(url: String, hostPort: String): String {
-        val scheme = "rtsp://"
-        if (url.isBlank() || !url.startsWith(scheme)) return url
-        val rest = url.removePrefix(scheme)
-        val atIdx = rest.lastIndexOf('@')
-        val creds = if (atIdx >= 0) rest.substring(0, atIdx + 1) else "" // keeps trailing '@'
-        val afterCreds = if (atIdx >= 0) rest.substring(atIdx + 1) else rest
-        val slashIdx = afterCreds.indexOf('/')
-        val path = if (slashIdx >= 0) afterCreds.substring(slashIdx) else ""
+        if (url.isBlank()) return url
+        // Giữ nguyên scheme của URL vào: camera qua gateway cũng có thể đang chạy rtsps://.
+        // Cách cũ hardcode "rtsp://" nên URL rtsps bị trả về nguyên xi, không đổi host → camera
+        // gateway TLS trỏ thẳng vào IP LAN hiện trường và không bao giờ kết nối được.
+        val scheme = if (url.startsWith("rtsps://", ignoreCase = true)) "rtsps://"
+                     else if (url.startsWith("rtsp://", ignoreCase = true)) "rtsp://"
+                     else return url
+        val rest = url.substring(scheme.length)
+        val slashIdx = rest.indexOf('/')
+        val authority = if (slashIdx >= 0) rest.substring(0, slashIdx) else rest
+        val path = if (slashIdx >= 0) rest.substring(slashIdx) else ""
+        val atIdx = authority.lastIndexOf('@')
+        val creds = if (atIdx >= 0) authority.substring(0, atIdx + 1) else "" // keeps trailing '@'
         return "$scheme$creds$hostPort$path"
     }
 
