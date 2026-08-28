@@ -79,6 +79,9 @@ private data class BkavEventRequest(
 private data class BkavEventResponse(val event_id: String, val status: String)
 
 @Serializable
+private data class BkavPingResponse(val recognized: Boolean, val camera: String?)
+
+@Serializable
 private data class BkavErrorResponse(val error: String, val message: String)
 
 private fun ApplicationCall.bkavClientIp(): String =
@@ -87,6 +90,28 @@ private fun ApplicationCall.bkavClientIp(): String =
         ?: request.origin.remoteAddress
 
 fun Route.bkavEventRouting() {
+    /**
+     * Bắt tay cho BkavEventBridge chạy trên thân camera.
+     *
+     * Trước khi có đường này, camera muốn biết "NVR nào đang quản lý tôi" thì phải GỬI THẬT một
+     * sự kiện rồi nhìn mã trả về — nghĩa là cứ khởi động lại là sinh một gói thừa (NVR chống
+     * trùng nên vô hại, nhưng bẩn). Đường này trả lời đúng câu hỏi đó mà không có tác dụng phụ.
+     *
+     * LUÔN trả 200 khi tuyến tồn tại; kết quả nhận diện nằm trong trường `recognized`. Cố ý
+     * KHÔNG dùng 404 cho "không nhận ra camera": camera cần phân biệt được "NVR đời cũ chưa có
+     * tuyến này" (404 thật) với "NVR có tuyến, nhưng chưa add camera" (200 + recognized=false).
+     * Lẫn hai ca đó thì camera sẽ loại nhầm một NVR hoàn toàn tốt.
+     */
+    get("/api/bkav/ping") {
+        val ip = call.bkavClientIp()
+        val slug = resolveCameraSlug(ip, null)
+        AppLogger.info(
+            AppLogger.Module.EVENT, "BKAV_EVENT", "PING",
+            "ip=$ip → ${slug ?: "không khớp camera nào"}"
+        )
+        call.respond(HttpStatusCode.OK, BkavPingResponse(recognized = slug != null, camera = slug))
+    }
+
     post("/api/bkav/event") {
         val ip = call.bkavClientIp()
 
