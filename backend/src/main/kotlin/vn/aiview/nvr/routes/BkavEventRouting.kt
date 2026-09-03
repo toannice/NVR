@@ -115,14 +115,6 @@ fun Route.bkavEventRouting() {
     post("/api/bkav/event") {
         val ip = call.bkavClientIp()
 
-        IntegrationService.RateLimiter.check(ip)?.let { retryAfter ->
-            call.response.headers.append(HttpHeaders.RetryAfter, retryAfter.toString())
-            return@post call.respond(
-                HttpStatusCode.TooManyRequests,
-                BkavErrorResponse("TOO_MANY_REQUESTS", "Quá nhiều yêu cầu, thử lại sau.")
-            )
-        }
-
         val raw = call.receiveText()
         val req = try {
             Json { ignoreUnknownKeys = true }.decodeFromString<BkavEventRequest>(raw)
@@ -140,6 +132,15 @@ fun Route.bkavEventRouting() {
         val camId = req.extras.cam_id ?: req.tags.cam_id
         val slug = resolveCameraSlug(ip, camId)
         if (slug == null) {
+            // Nguồn lạ — chốt chống lạm dụng nằm ở ĐÂY. Camera đã biết mặt thì đi tiếp mà không
+            // tốn suất, vì một sự kiện bị loại (410 bên dưới) gần như không tốn gì.
+            IntegrationService.RateLimiter.check(ip)?.let { retryAfter ->
+                call.response.headers.append(HttpHeaders.RetryAfter, retryAfter.toString())
+                return@post call.respond(
+                    HttpStatusCode.TooManyRequests,
+                    BkavErrorResponse("TOO_MANY_REQUESTS", "Quá nhiều yêu cầu, thử lại sau.")
+                )
+            }
             AppLogger.warn(
                 AppLogger.Module.EVENT, "BKAV_EVENT", "CAMERA_NOT_FOUND",
                 "ip=$ip cam_id=$camId type=${req.type} — không khớp camera nào trong NVR, bỏ qua"
@@ -162,6 +163,48 @@ fun Route.bkavEventRouting() {
             )
         }
         val tsSec = tsMs / 1000
+
+        // ── Chốt chặn: KHÔNG nhận sự kiện mà ta chắc chắn không có hình để cắt ───────────
+        //
+        // Clip được cắt ra từ bản ghi của CHÍNH NVR. NVR tắt (mất điện, bảo trì) thì quãng đó
+        // không có một giây hình nào, nên mọi sự kiện rơi vào quãng đó là không thể cắt clip —
+        // nhận vào chỉ đẻ ra thẻ "Không có clip" và đẩy sự kiện đang tới ra sau hàng đợi.
+        //
+        // ⚠️ Chỉ kiểm với sự kiện ĐỦ CŨ. Sự kiện tươi thì bản ghi còn đang được ghi (xem
+        // FLUSH_BUFFER_SEC) — hỏi lúc đó sẽ loại oan mọi sự kiện tốt.
+        //
+        // Hai ca, hai phép kiểm khác nhau — đây là chỗ dễ làm sai nhất:
+        //   sự kiện CÒN TƯƠI → bản ghi của nó chưa nằm trên đĩa (đoạn video còn đang viết), nên
+        //                      không thể hỏi đúng cửa sổ đó. Hỏi: việc ghi hình có đang chạy không.
+        //   sự kiện ĐÃ CŨ   → bản ghi lẽ ra phải có rồi. Hỏi thẳng đúng cửa sổ đó.
+        val ageSec = (System.currentTimeMillis() / 1000) - tsSec
+        val coverable = if (ageSec <= EventClipService.COVERAGE_GRACE_SEC) {
+            EventClipService.isRecordingLive(slug)
+        } else {
+            EventClipService.hasRecording(slug, tsSec - EventClipService.PRE_SEC, tsSec + EventClipService.POST_SEC)
+        }
+        if (!coverable) {
+            AppLogger.warn(
+                AppLogger.Module.SYSTEM, "EVENT_CLIP", "NO_COVERAGE",
+                "ip=$ip slug=$slug ts=$tsSec tuổi=${ageSec}s — không có bản ghi ở mốc này, loại bỏ"
+            )
+            // 410 chứ KHÔNG phải 404: firmware camera hiểu 404 là "NVR không quản lý tôi" và sẽ
+            // ngừng gửi hẳn. 410 rơi vào nhánh "4xx khác" nên camera bỏ qua đúng sự kiện này rồi
+            // TIẾN con trỏ — không thử lại, không dồn đống.
+            return@post call.respond(
+                HttpStatusCode.Gone,
+                BkavErrorResponse("NO_RECORDING", "Không có bản ghi ở mốc thời gian này.")
+            )
+        }
+
+        // Chỉ sự kiện thật sự được nhận mới tính vào hạn mức.
+        IntegrationService.RateLimiter.check(ip)?.let { retryAfter ->
+            call.response.headers.append(HttpHeaders.RetryAfter, retryAfter.toString())
+            return@post call.respond(
+                HttpStatusCode.TooManyRequests,
+                BkavErrorResponse("TOO_MANY_REQUESTS", "Quá nhiều yêu cầu, thử lại sau.")
+            )
+        }
 
         val label = buildBkavLabel(req.type, req.extras.objects)
         val firstObject = req.extras.objects.firstOrNull()

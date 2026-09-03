@@ -1,5 +1,9 @@
 package vn.aiview.nvr.services
 
+import io.ktor.client.*
+import io.ktor.client.engine.cio.*
+import io.ktor.client.request.*
+import io.ktor.client.statement.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -37,6 +41,66 @@ object EventClipService {
     private const val FLUSH_BUFFER_SEC = 20L   // extra wait after ts+POST so the last segment is on disk
     private const val MAX_WAIT_MS = 120_000L   // cap the flush wait — guards against a future-skewed timestamp hanging the job
     private const val EVENTS_ROOT = "/app/media/events"
+
+    /**
+     * Tuổi (giây) mà một sự kiện được coi là "còn tươi" — bản ghi của nó có thể CHƯA nằm trên đĩa.
+     *
+     * Phải lớn hơn FLUSH_BUFFER_SEC cộng biên: Frigate ghi thành từng đoạn, nên ngay sau khi sự kiện
+     * xảy ra thì đoạn chứa nó vẫn đang được viết. Hỏi "có bản ghi chưa?" trong cửa sổ này sẽ nhận
+     * câu trả lời "chưa" cho MỌI sự kiện tốt — nên trong cửa sổ này ta không hỏi, cứ nhận.
+     */
+    const val COVERAGE_GRACE_SEC = 30L
+
+    private val coverageClient = HttpClient(CIO) { engine { requestTimeout = 4_000 } }
+
+    /** Một lần hỏi, không thử lại. true = có bản ghi; false = 404 hoặc không nối được. */
+    private suspend fun probeOnce(slug: String, startSec: Long, endSec: Long): Boolean = try {
+        coverageClient.get(PlaybackService.vodUrl(slug, startSec, endSec)).status.value != 404
+    } catch (e: Exception) {
+        false
+    }
+
+    /** Frigate còn sống không (dù có ghi hình camera này hay không). */
+    private suspend fun isFrigateAlive(): Boolean = try {
+        coverageClient.get("http://127.0.0.1:5000/api/version").status.value < 500
+    } catch (e: Exception) {
+        false
+    }
+
+    /**
+     * Dùng cho sự kiện ĐÃ CŨ: có bản ghi phủ đúng khoảng [startSec, endSec] không?
+     *
+     * Hỏi đúng cái URL mà lệnh cắt clip sẽ dùng — cùng một nguồn sự thật, nên không bao giờ lệch
+     * giữa "ta tưởng có bản ghi" và "ffmpeg đọc được thật".
+     *
+     * Không nối được cũng tính là KHÔNG có: Frigate với không tới nghĩa là Frigate cũng đang không
+     * ghi hình. Thử lại một lần để một cú nấc ngắn không làm mất sự kiện thật.
+     */
+    suspend fun hasRecording(slug: String, startSec: Long, endSec: Long): Boolean {
+        if (probeOnce(slug, startSec, endSec)) return true
+        delay(1_000)
+        if (probeOnce(slug, startSec, endSec)) return true
+        AppLogger.warn(AppLogger.Module.SYSTEM, "EVENT_CLIP", "NO_COVERAGE_PROBE",
+            "slug=$slug window=$startSec..$endSec — hỏi 2 lần đều không thấy bản ghi")
+        return false
+    }
+
+    /**
+     * Dùng cho sự kiện CÒN TƯƠI: việc ghi hình camera này có đang chạy không?
+     *
+     * Không thể hỏi đúng cửa sổ của sự kiện — nó vừa xảy ra, đoạn video còn đang được viết. Nên hỏi
+     * một cửa sổ lùi lại 60 giây: nếu việc ghi đang chạy bình thường thì chỗ đó chắc chắn đã có.
+     *
+     * Nếu chỗ đó trống, còn hai khả năng, và chúng cần cách xử lý ngược nhau:
+     *   - NVR vừa khởi động, chưa kịp có 60 giây bản ghi → phải NHẬN, không thì mất sự kiện thật.
+     *   - Frigate chết / không ghi → phải LOẠI, không thì lại đẻ ra thẻ "Không có clip".
+     * Phân biệt bằng một câu hỏi rẻ: Frigate còn trả lời không.
+     */
+    suspend fun isRecordingLive(slug: String): Boolean {
+        val now = System.currentTimeMillis() / 1000
+        if (probeOnce(slug, now - 60, now - 50)) return true
+        return isFrigateAlive()
+    }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
