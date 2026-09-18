@@ -86,6 +86,27 @@ data class OtaManifest(
 ) {
     val versionParsed: OtaVersion? get() = OtaVersion.parseOrNull(version)
 
+    /**
+     * Cảnh báo nếu `package.url` không trỏ vào `.../OTA/artifacts/`.
+     *
+     * Hợp đồng đóng băng §A.1 quy định artifact nằm trong `artifacts/`, và máy
+     * chủ OTA dùng chung (hồ sơ `nvrup`) TỪ CHỐI publish nếu không. Manifest
+     * NVR trước đây trỏ thẳng vào gốc thư mục OTA, nên bản phát hành sẽ lên
+     * server ở một chỗ mà thiết bị hỏi ở chỗ khác — 404 cả đợt, trong khi nhật
+     * ký publish báo thành công.
+     *
+     * CẢNH BÁO chứ không CHẶN: một máy field đang chờ bản vá không nên bị khoá
+     * vì một đường dẫn sai quy ước mà nó VẪN TẢI ĐƯỢC. Phần chặn đã nằm ở
+     * `otasrv` lúc publish — nơi sửa được rẻ, trước khi bản phát hành đi ra.
+     */
+    fun canhBaoDuongGoi(): String? {
+        val u = pkg?.url?.trim().orEmpty()
+        if (u.isEmpty() || u.contains("/OTA/artifacts/")) return null
+        return "PACKAGE_URL_KHONG_QUA_ARTIFACTS package.url=\"$u\" — hợp đồng §A.1 đòi " +
+            ".../OTA/artifacts/<file>.nvrup; sửa ota/build-package.sh. Bản này VẪN tải được, " +
+            "nhưng otasrv sẽ từ chối publish nó."
+    }
+
     companion object {
         /** Schema duy nhất bản watchdog này đọc được. Tăng khi đổi cấu trúc không tương thích. */
         const val SUPPORTED_SCHEMA = 1

@@ -20,6 +20,8 @@
 #   ./ota/build-package.sh 1.1.0.0 --min-from 1.0.0.0 --expires-days 120
 #   ./ota/build-package.sh 1.1.0.0 --with-watchdog
 #   ./ota/build-package.sh 2.0.0.0 --frigate 0.17.0 --risk high --auto-apply
+#   ./ota/build-package.sh 1.1.0.0 --url-model VMS      # thư mục server khác mã model
+#   ./ota/build-package.sh 1.1.0.0 --sequence 14 --release-id 2026-09-18-a
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -43,6 +45,7 @@ WITH_WATCHDOG=0
 FRIGATE_VER=""
 NOTES=""
 DESCRIPTION=""
+URL_MODEL=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -55,6 +58,9 @@ while [[ $# -gt 0 ]]; do
         --frigate)      FRIGATE_VER="$2"; shift 2 ;;
         --notes)        NOTES="$2"; shift 2 ;;
         --description)  DESCRIPTION="$2"; shift 2 ;;
+        --url-model)    URL_MODEL="$2"; shift 2 ;;
+        --sequence)     SEQUENCE="$2"; shift 2 ;;
+        --release-id)   RELEASE_ID="$2"; shift 2 ;;
         -h|--help)      sed -n '2,24p' "$0"; exit 0 ;;
         -*)             die "tham số lạ: $1" ;;
         *)              VERSION="$1"; shift ;;
@@ -79,6 +85,22 @@ DEVICE_MODEL="$(grep -E '^DEVICE_MODEL=' .env 2>/dev/null | cut -d= -f2- | tr -d
 OTA_BASE_URL="$(grep -E '^OTA_BASE_URL=' .env 2>/dev/null | cut -d= -f2- | tr -d '"'"'"'[:space:]' || true)"
 OTA_BASE_URL="${OTA_BASE_URL:-https://aiview.bkav.com/download}"
 
+# sequence: số bản phát hành, đếm RIÊNG theo dòng máy, tăng đơn điệu. Máy chủ
+# OTA từ chối publish nếu nó không LỚN HƠN bản đang phát (phép kiểm #5 của
+# otasrv), nên tra số hiện hành trên /noi-bo/ota trước khi dựng gói thay vì
+# nhớ trong đầu. 0 = chưa khai, và otasrv sẽ từ chối — cố ý, để không ai phát
+# hành một bản không đếm được.
+SEQUENCE="${SEQUENCE:-0}"
+RELEASE_ID="${RELEASE_ID:-$(date -u +%Y-%m-%d)-a}"
+
+# Thư mục trên server phát hành. Mặc định trùng DEVICE_MODEL, nhưng tách rời được: có domain
+# đã lỡ đặt tên thư mục theo dòng sản phẩm (vd .../download/VMS/OTA/) trong khi mã model của
+# máy vẫn là AIVIEW-NVR-X1. Chỉ ảnh hưởng package.url — gate MODEL_MISMATCH vẫn so
+# manifest.model với DEVICE_MODEL, không dính tới URL. Máy field phải đặt kèm
+# OTA_MANIFEST_URL=<base>/<url-model>/OTA/manifest.json, vì watchdog tự dựng URL theo
+# DEVICE_MODEL chứ không đoán được tên thư mục này.
+URL_MODEL="${URL_MODEL:-$DEVICE_MODEL}"
+
 OUT="releaseVersion/ota/$VERSION"
 PKG_NAME="nvr-${DEVICE_MODEL}-${VERSION}.nvrup"
 
@@ -87,6 +109,8 @@ c " Dựng gói OTA  $DEVICE_MODEL  $VERSION"
 c "════════════════════════════════════════════════════════════"
 echo "  minFrom      : ${MIN_FROM:-(không giới hạn)}"
 echo "  minApplier   : $MIN_APPLIER"
+echo "  sequence     : $SEQUENCE   (PHẢI lớn hơn bản đang phát — tra /noi-bo/ota)"
+echo "  releaseId    : $RELEASE_ID"
 echo "  hạn manifest : $EXPIRES_DAYS ngày"
 echo "  risk         : $RISK   autoApply: $AUTO_APPLY"
 echo "  ra           : $OUT/"
@@ -187,6 +211,10 @@ add_file() { # add_file <đường-dẫn-trong-repo> [mode]
 add_file "docker-compose.yml"
 add_file "nginx/nginx.conf"
 add_file "config/watchdog.yml"
+# ACL của mosquitto: quyết định scheduler có bật/tắt được ghi hình hay không. Thiếu quyền
+# write frigate/+/recordings/set là camera ghi 24/24 trong im lặng — phải đi cùng gói OTA,
+# không thể để máy field giữ bản ACL cũ. ota-apply.sh SIGHUP mosquitto khi thấy file này đổi.
+add_file "mosquitto/config/acl"
 add_file "VERSION"
 add_file "scripts/ota-apply.sh" 755
 add_file "scripts/nvr-ip-guard.sh" 755
@@ -197,7 +225,12 @@ step "5/5" "Sinh manifest.json (CHƯA ký)"
 
 EXPIRES_AT="$(date -u -d "+${EXPIRES_DAYS} days" +%Y-%m-%dT%H:%M:%SZ)"
 RELEASE_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-PACKAGE_URL="${OTA_BASE_URL}/${DEVICE_MODEL}/OTA/${PKG_NAME}"
+# artifacts/ là BẮT BUỘC, không phải thẩm mỹ: hợp đồng đóng băng §A.1 quy định
+# artifact nằm trong artifacts/, và máy chủ OTA dùng chung (hồ sơ nvrup của
+# otasrv) TỪ CHỐI publish nếu package.url không trỏ vào đó. Trước đây dòng này
+# trỏ thẳng vào gốc thư mục OTA — gói lên server ở một chỗ, thiết bị hỏi ở chỗ
+# khác, 404 cả đợt trong khi nhật ký publish báo thành công.
+PACKAGE_URL="${OTA_BASE_URL}/${URL_MODEL}/OTA/artifacts/${PKG_NAME}"
 
 # requiresFreeBytes = 3x tổng payload: cần chỗ cho gói + image đã giải nén + bản cũ giữ lại
 # để rollback. Thiếu chỗ giữa lúc docker load là kịch bản tệ nhất — chết đúng khoảnh khắc
@@ -227,6 +260,8 @@ jq -n \
   --arg model "$DEVICE_MODEL" \
   --arg version "$VERSION" \
   --arg releaseDate "$RELEASE_DATE" \
+  --arg sequence "$SEQUENCE" \
+  --arg releaseId "$RELEASE_ID" \
   --arg expiresAt "$EXPIRES_AT" \
   --arg description "${DESCRIPTION:-Ban cap nhat NVR $VERSION}" \
   --arg notes "$NOTES" \
@@ -245,6 +280,8 @@ jq -n \
     description:$description, notes:$notes,
     minFrom:$minFrom, minApplier:$minApplier,
     requiresFreeBytes:$requiresFreeBytes, risk:$risk, autoApply:$autoApply,
+    sequence:   ($sequence|tonumber),
+    releaseId:  $releaseId,
     package:{url:$packageUrl},
     images:$images, files:$files, hooks:$hooks, healthChecks:$healthChecks}' \
   > "$OUT/manifest.json"

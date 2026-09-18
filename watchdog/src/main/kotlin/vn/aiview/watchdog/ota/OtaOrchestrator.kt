@@ -4,6 +4,7 @@ import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
+import vn.aiview.watchdog.model.OtaConfig
 import vn.aiview.watchdog.model.WatchdogConfig
 import vn.aiview.watchdog.modules.AlertEvent
 import vn.aiview.watchdog.modules.AlertManager
@@ -33,6 +34,34 @@ import java.time.ZonedDateTime
  * Container không gọi được `systemctl`, và cách này không cần dbus, không cần docker-in-docker,
  * không nới thêm quyền nào — nó chỉ cần ghi một file, việc nó vốn đã làm được.
  */
+/**
+ * Cảnh báo khi `base_url` ghép với `DEVICE_MODEL` ra một URL KHÁC `manifest_url`.
+ *
+ * Lệch này là chuyện THẬT trong kho: [OtaConfig.DEFAULT_MANIFEST_URL] trỏ
+ * `.../download/VMS/OTA/manifest.json`, còn `.env.template` khai
+ * `OTA_BASE_URL=https://aiview.bkav.com/download` cộng
+ * `DEVICE_MODEL=AIVIEW-NVR-X1`. Ghép hai thứ sau ra
+ * `.../download/AIVIEW-NVR-X1/OTA/manifest.json` — một URL khác, và chỉ MỘT
+ * trong hai là đúng (kênh phát hành của dòng này là `VMS`; xem README của
+ * ota-server).
+ *
+ * KHÔNG sửa giá trị nào — cả hai đang chạy thật. Chỉ NÓI RA, vì im lặng ở đây
+ * nghĩa là một máy cấu hình sai sẽ **không bao giờ thấy bản cập nhật**, mà
+ * "không có bản mới" trông y hệt lúc chạy đúng: hỏng kiểu không ai phát hiện.
+ *
+ * Để ngoài class để test gọi được trực tiếp.
+ */
+internal fun canhBaoLechUrl(ota: OtaConfig, model: String): String? {
+    if (model.isBlank()) return null
+    val suyRa = ota.base_url.trimEnd('/') + "/" + model + "/OTA/manifest.json"
+    val dangDung = ota.manifest_url.trim()
+    if (dangDung.isEmpty() || suyRa == dangDung) return null
+    return "OTA_URL_LECH đang dùng manifest_url=\"$dangDung\" nhưng ghép " +
+        "base_url + DEVICE_MODEL ra \"$suyRa\" — hai URL khác nhau, chỉ một cái đúng. " +
+        "Kênh phát hành của dòng này KHÔNG bằng mã model; kiểm lại .env và " +
+        "OtaConfig.DEFAULT_MANIFEST_URL trước khi tin rằng \"không có bản mới\"."
+}
+
 class OtaOrchestrator(
     private val config: WatchdogConfig,
     private val alerts: AlertManager,
@@ -116,6 +145,8 @@ class OtaOrchestrator(
             // thay vì để người ta phát hiện lúc 2h sáng qua một tin Telegram từ chối.
             log.error("OTA_NO_MODEL thiếu DEVICE_MODEL — MỌI gói OTA sẽ bị từ chối. Đặt DEVICE_MODEL trong .env")
         }
+        canhBaoLechUrl(config.ota, deviceModel)?.let { log.warn(it) }
+
         val keyring = OtaVerifier.loadKeyring(keyringDir)
         if (keyring.isEmpty()) {
             log.error("OTA_NO_KEYS không có khoá tin cậy nào ở ${keyringDir.absolutePath} — " +
@@ -261,6 +292,11 @@ class OtaOrchestrator(
         }
 
         val m = head.verified.manifest
+
+        // Cảnh báo quy ước đường dẫn gói. CẢNH BÁO, KHÔNG CHẶN: máy này vẫn tải
+        // được, và một máy field đang chờ bản vá không nên bị khoá vì một đường
+        // dẫn sai quy ước. Phần chặn nằm ở otasrv lúc publish, nơi sửa rẻ.
+        m.canhBaoDuongGoi()?.let { log.warn(it) }
         stateStore.save(state.copy(lastCheck = Instant.now().toString(), lastEtag = head.etag))
         baoQuanSat(stateStore.load())
 
