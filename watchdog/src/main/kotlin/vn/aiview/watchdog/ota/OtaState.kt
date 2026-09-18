@@ -32,6 +32,19 @@ data class OtaState(
     /** Sàn: từ chối mọi gói có version < giá trị này. Chỉ hạ được bằng tay tại máy. */
     val floorVersion: String = "",
 
+    /**
+     * Sequence lớn nhất đã THẤY — ghi ngay khi chữ ký + model đạt, luật `>=`.
+     *
+     * Tách khỏi [appliedSequence] là có chủ ý: "đã thấy" và "đã cài" là hai
+     * chuyện, và chênh lệch giữa hai số CHÍNH LÀ thứ trang /noi-bo/ota lọc để
+     * ra danh sách "đã thấy bản mới nhưng chưa cài". Gộp một số là mất bộ lọc
+     * đó.
+     */
+    val lastSeenSequence: Long = 0,
+
+    /** Sequence đã CÀI XONG. Chỉ ghi ở đường COMMITTED, không ghi khi quay lui. */
+    val appliedSequence: Long = 0,
+
     /** ISO-8601 lần hỏi manifest gần nhất (kể cả khi không có bản mới). */
     val lastCheck: String = "",
 

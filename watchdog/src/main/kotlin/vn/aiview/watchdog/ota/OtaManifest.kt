@@ -32,6 +32,22 @@ data class OtaManifest(
     val releaseDate: String = "",
 
     /**
+     * Số bản phát hành, đếm riêng theo từng dòng máy, tăng đơn điệu.
+     *
+     * KHÔNG thay thế [OtaState.floorVersion] — hai thứ đo hai chuyện khác nhau
+     * và cả hai đều cần. Sàn chặn một gói CŨ do chính ta ký (rollback attack);
+     * sequence cho máy chủ biết máy đang ở bản thứ mấy, để trang /noi-bo/ota
+     * đếm được "bao nhiêu máy đã lên bản hiện hành".
+     *
+     * Mặc định 0 để manifest CŨ (chưa có trường này) vẫn giải mã được — một
+     * trường mới không được phép làm cả đội mất đường cập nhật.
+     */
+    val sequence: Long = 0,
+
+    /** Định danh bản phát hành. Dùng nguyên văn, không phân tích. */
+    val releaseId: String = "",
+
+    /**
      * Hạn dùng của manifest (ISO-8601 UTC). Chống freeze attack: kẻ chặn mạng không cần sửa
      * gì, chỉ cần GIỮ NGUYÊN manifest cũ mãi mãi thì máy tưởng "không có bản mới" và không
      * bao giờ nhận bản vá — im lặng hoàn toàn. Quá hạn ⇒ cảnh báo Telegram.
