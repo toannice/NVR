@@ -56,6 +56,52 @@ class OtaOrchestrator(
 
     private var fetcher: OtaFetcher? = null
 
+    /**
+     * Định danh máy cho check-in. KHÔNG dùng `hostname` trần: .env.template ghi
+     * thẳng "blank = nvr-edge-node for every machine", nên cả đội sẽ gộp thành
+     * một dòng trên trang theo dõi. Xem OtaDeviceId.
+     */
+    private val deviceId: String by lazy {
+        OtaDeviceId.resolve(File(layout.root, "device-id"), hostname, File("/etc/machine-id"))
+    }
+
+    /**
+     * Kênh báo cáo lên máy chủ OTA, BÊN CẠNH Telegram — hai kênh phục vụ hai
+     * người khác nhau (xem chú thích OtaCheckin).
+     *
+     * Dựng lười: không đụng mạng lúc khởi tạo orchestrator.
+     */
+    private val checkin: OtaCheckin by lazy {
+        OtaCheckin(
+            baseUrl = config.ota.base_url.trimEnd('/').removeSuffix("/download"),
+            model = deviceModel,
+            enrollKey = System.getenv("OTA_ENROLL_KEY")?.trim() ?: "",
+            tokenFile = File(layout.root, "checkin-token"),
+            deviceId = deviceId,
+        )
+    }
+
+    /**
+     * Gửi một báo cáo quan sát. BỌC KÍN mọi lỗi.
+     *
+     * Bất biến: check-in hỏng KHÔNG được cản cập nhật. OtaCheckin.bao() đã tự
+     * bọc, nhưng bọc thêm một lớp ở đây để một lỗi lúc DỰNG lazy (đọc
+     * /etc/machine-id, tạo thư mục) cũng không lọt vào vòng OTA.
+     */
+    private fun baoQuanSat(state: OtaState) {
+        runCatching {
+            val duoi = File(layout.root.absolutePath)
+            checkin.bao(
+                state = state,
+                fw = state.installedVersion,
+                freeMB = duoi.usableSpace / (1024 * 1024),
+                uptimeSec = runCatching {
+                    File("/proc/uptime").readText().trim().split(" ")[0].toDouble().toLong()
+                }.getOrElse { 0L },
+            )
+        }.onFailure { log.warn("CHECKIN_BO_QUA ${it.javaClass.simpleName}: ${it.message}") }
+    }
+
     // ── Vòng lặp chính ───────────────────────────────────────────────────────────────────
 
     suspend fun run() {
@@ -80,6 +126,10 @@ class OtaOrchestrator(
         // Đồng bộ version đang cài với thực tế: máy vừa cài từ bundle thì state.json còn trắng,
         // và gate minFrom cần biết máy đang ở version nào.
         syncInstalledVersion()
+
+        // Một báo cáo lúc khởi động: máy vừa reboot (kể cả reboot do OTA) phải
+        // hiện ngay trên trang, không đợi tới chu kỳ 2 giờ sáng kế tiếp.
+        baoQuanSat(stateStore.load())
 
         status.idle("Sẵn sàng")
 
@@ -186,11 +236,13 @@ class OtaOrchestrator(
             is OtaFetcher.ManifestResult.NotModified -> {
                 status.phase(OtaPhase.IDLE, "Không có bản mới (manifest không đổi)")
                 stateStore.save(state.copy(lastCheck = Instant.now().toString()))
+                baoQuanSat(stateStore.load())
                 return
             }
             is OtaFetcher.ManifestResult.Unavailable -> {
                 status.phase(OtaPhase.REJECTED, "Không lấy được manifest: ${r.reason}", "MANIFEST_UNAVAILABLE")
                 stateStore.save(state.copy(lastCheck = Instant.now().toString()))
+                baoQuanSat(stateStore.load())
                 return
             }
             is OtaFetcher.ManifestResult.Rejected -> {
@@ -202,6 +254,7 @@ class OtaOrchestrator(
                     "🖥️ <b>[$hostname]</b>\n⚠️ Manifest OTA <b>không hợp lệ</b>\n🔍 <code>${r.code}</code>",
                     r.reason))
                 stateStore.save(state.copy(lastCheck = Instant.now().toString()))
+                baoQuanSat(stateStore.load())
                 return
             }
             is OtaFetcher.ManifestResult.Ok -> r
@@ -209,6 +262,7 @@ class OtaOrchestrator(
 
         val m = head.verified.manifest
         stateStore.save(state.copy(lastCheck = Instant.now().toString(), lastEtag = head.etag))
+        baoQuanSat(stateStore.load())
 
         // Gate TRƯỚC khi tải
         status.phase(OtaPhase.GATING, "Có bản ${m.version} — đang kiểm điều kiện áp dụng")
