@@ -1,0 +1,26 @@
+# Mẫu cấu hình kết nối Cloud. Chép thành secrets/cloud.conf rồi điền:
+#
+#   cp scripts/cloud.conf.template secrets/cloud.conf
+#   chmod 600 secrets/cloud.conf
+#   $EDITOR secrets/cloud.conf
+#
+# scripts/provision-headless.sh tự nạp secrets/cloud.conf nếu có. Bản thật phải nằm trong
+# secrets/ (đã gitignore) vì CLOUD_PASSWORD là secret — để trong file theo git là đẩy nó
+# lên GitHub, và verify-bundle.sh sẽ chặn bundle khi phát hiện.
+#
+# Định dạng KEY=VALUE, script đọc bằng tay chứ không `source`, nên không cần quote
+# và cũng không viết được lệnh shell ở đây.
+
+# Kèm http:// nếu cloud chạy HTTP thuần. Không có scheme thì backend tự thêm https://
+# (SignalingHttpClient.kt kiểm startsWith("http")) — ghi thiếu là gọi sai giao thức.
+# Để trống trong file MẪU này: file mẫu theo git, điền sẵn địa chỉ hạ tầng vào đây là đẩy
+# nó lên GitHub. Địa chỉ thật chỉ điền ở bản copy trong secrets/ (đã gitignore).
+CLOUD_DOMAIN=
+CLOUD_PORT=30009
+
+CLOUD_USER=
+CLOUD_PASSWORD=
+
+# Định danh RIÊNG của từng máy, dạng VMSAV + 6 chữ số. Hai máy cùng serial thì cloud
+# không phân biệt được máy nào — mỗi máy một serial, đừng chép nguyên sang máy khác.
+CLOUD_SERIAL=

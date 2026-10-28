@@ -2,13 +2,15 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # package.sh — đóng gói toàn bộ stack NVR thành 1 file bundle để triển khai offline.
 #
-# Chạy trên máy DEV (nơi đã build xong image). Output: nvr-bundle-YYYYMMDD.tar.gz
+# Chạy trên máy DEV (nơi đã build xong image).
+# Output: releaseVersion/nvr-bundle-YYYYMMDD.tar.gz + .sha256
 #
 # Bao gồm:
 #   - Docker static binary (dockerd + docker CLI + compose plugin) — cài Docker không cần internet
 #   - Tất cả Docker images (frigate, nvr-wrapper, mosquitto, nginx, nvr-watchdog)
 #   - Config files (docker-compose.yml, nginx, mosquitto, frigate config, watchdog.yml)
-#   - Script triển khai (deploy-offline.sh)
+#   - Script triển khai (deploy-offline.sh) + kiểm tra trước/sau khi cài (scripts/nvr-check.sh)
+#   - HUONG-DAN-CAI.md (từ docs/cai-may-moi.md)
 #
 # Usage:
 #   ./package.sh              # bundle ngày hôm nay
@@ -24,8 +26,12 @@ INCLUDE_FRIGATE=1
 
 DATE="$(date +%Y%m%d)"
 BUNDLE_NAME="nvr-bundle-${DATE}"
-BUNDLE_DIR="/tmp/${BUNDLE_NAME}"
-OUTPUT="${HERE}/${BUNDLE_NAME}.tar.gz"
+# Thư mục dựng tạm. Cần ~5GB (bundle + images.tar) nên trên máy mà `/` gần đầy thì trỏ sang ổ
+# khác: BUNDLE_TMP=/mnt/<o-con-cho> ./package.sh
+BUNDLE_DIR="${BUNDLE_TMP:-/tmp}/${BUNDLE_NAME}"
+# Bundle giao khách để trong releaseVersion/ (git-ignored), không để ở project root.
+mkdir -p "${HERE}/releaseVersion"
+OUTPUT="${HERE}/releaseVersion/${BUNDLE_NAME}.tar.gz"
 
 # Phiên bản Docker static binary để bundle (linux/amd64)
 # Xem: https://download.docker.com/linux/static/stable/x86_64/
@@ -129,6 +135,27 @@ cp .env.template                    "$BUNDLE_DIR/"
 cp deploy-offline.sh                "$BUNDLE_DIR/" 2>/dev/null || true  # sẽ tạo bên dưới
 # IP guard: giữ FRIGATE_HOST_IP khớp IP thật, nếu không live view đen khi máy đổi IP
 cp scripts/nvr-ip-guard.sh          "$BUNDLE_DIR/scripts/" 2>/dev/null || warn "nvr-ip-guard.sh không tìm thấy"
+# Kiểm tra trước/sau khi cài — deploy-offline.sh gọi; thiếu thì máy mới cài mà không ai chặn
+# được ổ ghi hình chưa gắn (sự cố 01-10-2026).
+cp scripts/nvr-check.sh             "$BUNDLE_DIR/scripts/" || die "scripts/nvr-check.sh không tìm thấy"
+cp docs/cai-may-moi.md              "$BUNDLE_DIR/HUONG-DAN-CAI.md" || die "docs/cai-may-moi.md không tìm thấy"
+
+# ── Bộ cài/vận hành cho máy KHÔNG có Web UI (Ubuntu headless) ────────────────
+# cai-headless.sh gộp deploy-offline.sh + provision-headless.sh thành một lệnh.
+cp scripts/cai-headless.sh          "$BUNDLE_DIR/" || die "scripts/cai-headless.sh không tìm thấy"
+chmod +x "$BUNDLE_DIR/cai-headless.sh"
+cp scripts/provision-headless.sh    "$BUNDLE_DIR/scripts/" || die "scripts/provision-headless.sh không tìm thấy"
+chmod +x "$BUNDLE_DIR/scripts/provision-headless.sh"
+cp scripts/cloud.conf.template      "$BUNDLE_DIR/scripts/" 2>/dev/null || warn "cloud.conf.template không tìm thấy"
+cp scripts/cameras.example.txt      "$BUNDLE_DIR/scripts/" 2>/dev/null || true
+cp docs/van-hanh-headless.md        "$BUNDLE_DIR/VAN-HANH-HEADLESS.md" \
+    || warn "docs/van-hanh-headless.md không tìm thấy"
+
+# Cấu hình Cloud: file mẫu ĐÃ nằm ở scripts/cloud.conf.template phía trên — KHÔNG copy thêm
+# bản nào vào secrets/. verify-bundle.sh chặn thẳng "secrets/* không rỗng" (kể cả file mẫu toàn
+# placeholder), vì cái giá của một ngoại lệ ở đó là có ngày lọt thật mật khẩu cloud ra bundle gửi
+# khách. cai-headless.sh hỏi username/password/serial lúc cài rồi tự ghi secrets/cloud.conf
+# chmod 600 trên máy đích.
 cp nginx/nginx.conf                 "$BUNDLE_DIR/nginx/" 2>/dev/null || warn "nginx/nginx.conf không tìm thấy"
 # Frigate config: LUÔN dùng template sạch, KHÔNG bao giờ config.yml của máy dev — file đó
 # chứa IP + mật khẩu camera văn phòng, TURN credential và IP overlay Nebula.
@@ -141,6 +168,32 @@ cp mosquitto/config/mosquitto.conf  "$BUNDLE_DIR/mosquitto/config/" 2>/dev/null 
 # PHẢI có trong bundle. File passwd thì KHÔNG copy (chứa hash mật khẩu máy dev) — deploy-offline.sh
 # tự sinh trên máy đích.
 cp mosquitto/config/acl             "$BUNDLE_DIR/mosquitto/config/" 2>/dev/null || warn "mosquitto acl không tìm thấy (MQTT auth sẽ fail trên máy đích)"
+
+# ── Bộ cập nhật OTA ──────────────────────────────────────────────────────────
+# Máy cài từ bundle mà thiếu bộ này thì KHÔNG BAO GIỜ tự nhận được bản cập nhật, và triệu
+# chứng là "chạy bình thường, chỉ không có bản mới" — không ai phát hiện ra. Cần đủ ba phần:
+# khoá công khai để đối chiếu chữ ký, script apply chạy trên host (container không tự thay
+# được chính nó), và systemd unit theo dõi file trigger.
+mkdir -p "$BUNDLE_DIR"/{ota/keys,deploy/systemd}
+OTA_PUBS=0
+for pub in ota/keys/*.pub; do
+    [[ -e "$pub" ]] || continue
+    # Khoá DEV tuyệt đối không đi ra máy khách: máy tin khoá đó nghĩa là ai chạm được máy dev
+    # cũng đẩy được bản cập nhật vào máy khách.
+    [[ "$(basename "$pub")" == ota-dev* ]] && continue
+    cp "$pub" "$BUNDLE_DIR/ota/keys/"; OTA_PUBS=$((OTA_PUBS+1))
+done
+if [[ $OTA_PUBS -eq 0 ]]; then
+    warn "KHÔNG có khoá công khai phát hành nào (ota/keys/ota-primary.pub) — máy cài từ bundle này sẽ KHÔNG tự cập nhật được"
+else
+    ok "$OTA_PUBS khoá công khai OTA"
+fi
+cp scripts/ota-apply.sh             "$BUNDLE_DIR/scripts/" 2>/dev/null || warn "ota-apply.sh không tìm thấy"
+cp scripts/install-ota.sh           "$BUNDLE_DIR/scripts/" 2>/dev/null || warn "install-ota.sh không tìm thấy"
+cp scripts/health-check-rollback.sh "$BUNDLE_DIR/scripts/" 2>/dev/null || true
+cp deploy/systemd/nvr-ota-apply.path    "$BUNDLE_DIR/deploy/systemd/" 2>/dev/null || warn "thiếu unit nvr-ota-apply.path"
+cp deploy/systemd/nvr-ota-apply.service "$BUNDLE_DIR/deploy/systemd/" 2>/dev/null || warn "thiếu unit nvr-ota-apply.service"
+chmod +x "$BUNDLE_DIR"/scripts/*.sh 2>/dev/null || true
 
 # Tạo placeholder secrets (rỗng — người dùng điền sau)
 for s in edge_agent_token zt_controller_token nebula_sign_token; do
@@ -187,16 +240,23 @@ EOF
 
 # ── 6. Nén thành tar.gz ───────────────────────────────────────────────────────
 step "6/6" "Nén bundle → ${OUTPUT}"
-tar -czf "$OUTPUT" -C "/tmp" "$BUNDLE_NAME"
+tar -czf "$OUTPUT" -C "$(dirname "$BUNDLE_DIR")" "$BUNDLE_NAME"
 rm -rf "$BUNDLE_DIR"
 
+# sha256 đi kèm: máy đích kiểm file không hỏng khi chép (USB, scp đứt giữa chừng) trước khi cài.
+(cd "$(dirname "$OUTPUT")" && sha256sum "${BUNDLE_NAME}.tar.gz" > "${BUNDLE_NAME}.tar.gz.sha256")
+
 SIZE="$(du -sh "$OUTPUT" | cut -f1)"
-ok "Bundle created: ${BUNDLE_NAME}.tar.gz (${SIZE})"
+ok "Bundle created: releaseVersion/${BUNDLE_NAME}.tar.gz (${SIZE}) + .sha256"
+echo ""
+echo "  Quét secret TRƯỚC khi gửi:"
+echo "    ./verify-bundle.sh releaseVersion/${BUNDLE_NAME}.tar.gz"
 echo ""
 echo "  Gửi sang máy đích:"
-echo "    scp ${BUNDLE_NAME}.tar.gz user@TARGET_IP:~/"
+echo "    scp releaseVersion/${BUNDLE_NAME}.tar.gz releaseVersion/${BUNDLE_NAME}.tar.gz.sha256 user@TARGET_IP:~/"
 echo ""
-echo "  Chạy trên máy đích:"
+echo "  Chạy trên máy đích (chi tiết: HUONG-DAN-CAI.md trong bundle):"
+echo "    sha256sum -c ${BUNDLE_NAME}.tar.gz.sha256"
 echo "    tar -xzf ${BUNDLE_NAME}.tar.gz"
 echo "    cd ${BUNDLE_NAME}"
 echo "    sudo ./deploy-offline.sh"

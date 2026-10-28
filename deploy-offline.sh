@@ -35,6 +35,25 @@ ask_yn()    { printf '\033[1;33m  → %s [y/N]: \033[0m' "$1"; read -r REPLY; [[
 WRAPPER_IMAGE="${WRAPPER_IMAGE:-nvr-wrapper:latest}"
 FRIGATE_VER="${FRIGATE_VER:-0.16.3}"
 DEPLOY_MODE="offline"   # chế độ duy nhất
+CHECK="$HERE/scripts/nvr-check.sh"
+
+# ── 0. Kiểm tra máy trước khi cài ────────────────────────────────────────────
+# Chặn sớm những thứ cài xong mới lộ ra thì đã muộn: sai kiến trúc CPU, thiếu chỗ cho image,
+# cổng bị chiếm, và nhất là ổ ghi hình chưa gắn — 01-10-2026 thư mục media rơi xuống ổ hệ điều
+# hành mà KHÔNG có lỗi nào, Frigate vẫn ghi bình thường, chỉ là ghi nhầm ổ.
+step "0/6" "Kiểm tra máy trước khi cài"
+if [[ "${NVR_SKIP_CHECK:-0}" == 1 ]]; then
+    warn "NVR_SKIP_CHECK=1 — bỏ qua kiểm tra"
+elif [[ -x "$CHECK" ]]; then
+    NVR_INSTALL_DIR="$INSTALL_DIR" "$CHECK" truoc \
+        || die "Máy chưa đạt (các dòng ✗ ở trên). Sửa rồi chạy lại. Bỏ qua (biết rõ mình đang làm gì): sudo NVR_SKIP_CHECK=1 ./deploy-offline.sh"
+    if ! NVR_INSTALL_DIR="$INSTALL_DIR" "$CHECK" o-ghi-hinh; then
+        ask_yn "Ghi hình sẽ nằm trên Ổ HỆ ĐIỀU HÀNH. Máy này chỉ có một ổ và chấp nhận như vậy?" \
+            || die "Dừng. Gắn ổ ghi hình vào $INSTALL_DIR/media (HUONG-DAN-CAI.md mục 2) rồi chạy lại"
+    fi
+else
+    warn "bundle không có scripts/nvr-check.sh — bỏ qua kiểm tra"
+fi
 
 # ── 1. Docker ────────────────────────────────────────────────────────────────
 step "1/6" "Docker engine"
@@ -123,6 +142,35 @@ if [[ -f "$HERE/data/dc-bridge" ]]; then
     chmod +x "$INSTALL_DIR/data/dc-bridge"
     ok "dc-bridge copied"
 fi
+# Bộ cập nhật OTA. install-ota.sh suy PROJECT_DIR từ vị trí của chính nó, nên ba thứ này
+# phải nằm cạnh nhau trong INSTALL_DIR: ota/keys (đối chiếu chữ ký), scripts/ota-apply.sh
+# (chạy trên HOST — container không docker compose up cho chính nó được), deploy/systemd
+# (path unit theo dõi file trigger).
+if [[ -d "$HERE/ota/keys" ]]; then
+    mkdir -p "$INSTALL_DIR"/{ota/keys,deploy/systemd,scripts}
+    cp "$HERE"/ota/keys/*.pub "$INSTALL_DIR/ota/keys/" 2>/dev/null || true
+    cp "$HERE"/deploy/systemd/nvr-ota-apply.* "$INSTALL_DIR/deploy/systemd/" 2>/dev/null || true
+    for f in ota-apply.sh install-ota.sh health-check-rollback.sh; do
+        [[ -f "$HERE/scripts/$f" ]] && cp "$HERE/scripts/$f" "$INSTALL_DIR/scripts/"
+    done
+    chmod +x "$INSTALL_DIR"/scripts/*.sh 2>/dev/null || true
+fi
+# Script cấu hình để lại trên máy. Máy không có Web UI thì đây là ĐƯỜNG DUY NHẤT để sửa lại
+# kết nối cloud, đặt mã vẽ hay thêm camera về sau — 28-10-2026 một máy đã cài xong mới phát hiện
+# nhập sai username cloud và trong /opt/nvr không có gì để chạy lại, phải đi tìm thư mục bundle
+# đã giải nén (mà thường đã bị xoá cho đỡ chật ổ).
+mkdir -p "$INSTALL_DIR/scripts"
+for f in provision-headless.sh cloud.conf.template cameras.example.txt; do
+    [[ -f "$HERE/scripts/$f" ]] && cp "$HERE/scripts/$f" "$INSTALL_DIR/scripts/"
+done
+chmod +x "$INSTALL_DIR/scripts/provision-headless.sh" 2>/dev/null || true
+
+# Script kiểm tra để lại trên máy: kỹ thuật viên chạy lại bất cứ lúc nào (sudo /opt/nvr/nvr-check.sh sau).
+if [[ -f "$CHECK" ]]; then
+    cp "$CHECK" "$INSTALL_DIR/nvr-check.sh"
+    chmod +x "$INSTALL_DIR/nvr-check.sh"
+fi
+
 ok "Project files copied to ${INSTALL_DIR}"
 
 # ── 4. .env ──────────────────────────────────────────────────────────────────
@@ -134,7 +182,9 @@ if [[ -f "$ENV_FILE" ]]; then
 else
     cp "$INSTALL_DIR/.env.template" "$ENV_FILE"
 
-    HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    # Dò IP theo đúng cách nvr-ip-guard.sh dò lúc boot. `hostname -I` lấy IP đầu tiên, có thể là
+    # docker0 hay overlay — sai IP là live view đen ngay từ lần chạy đầu.
+    HOST_IP="$("$CHECK" lan-ip 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')"
     [[ -n "$HOST_IP" ]] && sed -i "s|^FRIGATE_HOST_IP=.*|FRIGATE_HOST_IP=${HOST_IP}|" "$ENV_FILE"
     sed -i "s|^FRIGATE_VERSION=.*|FRIGATE_VERSION=${FRIGATE_VER}|" "$ENV_FILE"
     ok ".env created (FRIGATE_HOST_IP=${HOST_IP:-?})"
@@ -281,7 +331,7 @@ cd "$INSTALL_DIR"
 COMPOSE_CMD="docker compose -f docker-compose.yml -f docker-compose.offline.yml${GPU_OVERRIDE}"
 export WRAPPER_IMAGE="${WRAPPER_IMAGE}"
 echo "  nvr-wrapper image: ${WRAPPER_IMAGE} (từ bundle)"
-echo "  OTA qua registry: không có (cập nhật bằng bundle mới)"
+echo "  OTA: gói .nvrup ký Ed25519 (không có registry, không có PAT)"
 
 echo ""
 echo "  Khởi động services (mosquitto → frigate → nvr-wrapper → watchdog)..."
@@ -349,6 +399,30 @@ else
     warn "không tìm thấy scripts/nvr-ip-guard.sh trong bundle — bỏ qua IP guard"
 fi
 
+# ── Cập nhật tự động (OTA) ───────────────────────────────────────────────────
+# Không cài phần này thì máy vẫn chạy đủ chức năng — nên hỏng ở đây KHÔNG có triệu chứng
+# nào cả, chỉ là mãi mãi không có bản mới. Vì vậy cài luôn ở đây thay vì để thành một bước
+# thủ công người ta sẽ quên.
+if [[ -x "$INSTALL_DIR/scripts/install-ota.sh" ]]; then
+    if "$INSTALL_DIR/scripts/install-ota.sh" >/tmp/install-ota.log 2>&1; then
+        ok "OTA đã bật (máy tự hỏi bản mới lúc 2h sáng, có tự lùi bản khi lỗi)"
+    else
+        warn "cài OTA không xong — xem /tmp/install-ota.log. Máy vẫn chạy, chỉ không tự cập nhật."
+        warn "  chạy lại: sudo $INSTALL_DIR/scripts/install-ota.sh"
+    fi
+else
+    warn "bundle không có scripts/install-ota.sh — máy này sẽ KHÔNG tự cập nhật được"
+fi
+
+# ── Kiểm tra sau khi cài ─────────────────────────────────────────────────────
+# Chạy SAU ip-guard + OTA để kiểm cả hai unit systemd. Frigate cần ~1 phút mới healthy nên chờ.
+# Không die: stack đã lên, kỹ thuật viên cần thấy hết các dòng ✗ để sửa chứ không phải cài lại.
+if [[ -x "$INSTALL_DIR/nvr-check.sh" ]]; then
+    step "✓" "Kiểm tra sau khi cài (chờ tối đa 4 phút cho container healthy)"
+    NVR_INSTALL_DIR="$INSTALL_DIR" "$INSTALL_DIR/nvr-check.sh" sau --doi 240 \
+        || warn "Còn mục ✗ ở trên — sửa trước khi giao máy. Chạy lại: sudo $INSTALL_DIR/nvr-check.sh sau"
+fi
+
 echo ""
 ok "Stack đã khởi động!"
 echo ""
@@ -360,6 +434,7 @@ c "  Quản lý stack (shortcut):"
 echo "    $INSTALL_DIR/nvr.sh ps"
 echo "    $INSTALL_DIR/nvr.sh logs -f nvr-wrapper"
 echo "    $INSTALL_DIR/nvr.sh restart nvr-wrapper"
+echo "    sudo $INSTALL_DIR/nvr-check.sh sau      # kiểm tra lại toàn bộ"
 echo ""
 
 c "  Cập nhật:"

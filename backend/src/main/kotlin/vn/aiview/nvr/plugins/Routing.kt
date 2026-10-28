@@ -33,13 +33,18 @@ fun Application.configureRouting() {
             // Backend chỉ nhận file và đọc trạng thái — verify chữ ký và apply là việc của
             // watchdog (xem chú thích đầu OtaRouting.kt về phân vai).
             otaRouting()
+
+            // Cấu hình kết nối cloud (domain/port/username/serial). Đọc cũng phải đăng nhập:
+            // domain + username + serial là đủ để dựng một máy giả mạo cùng danh tính.
+            cloudRouting()
         }
 
         // Dev/test helpers (active only when E2E_TEST_MODE=true)
         devRouting()
 
-        // Cloud connection (public — internal dc-bridge callback + config endpoints)
-        cloudRouting()
+        // Chỉ hai endpoint /internal/* cho go2rtc + sidecar dc-bridge gọi qua loopback.
+        // nginx chặn /internal/ và backend bind 127.0.0.1 → không với tới từ LAN.
+        cloudInternalRouting()
 
         // AiView Box integration — public contract endpoints (self-authenticate, v1.1)
         integrationRouting()

@@ -9,7 +9,7 @@
 //                   rides ON this peer. go2rtc would swallow that channel, so the
 //                   device must own the playback peer itself.
 //
-// HTTP API (port 8766):
+// HTTP API (127.0.0.1:8766 — loopback only, see listenAddr):
 //   POST /dc/offer         {"sdp":..., "ice_servers":[...]}      → DATA peer answer
 //   POST /dc/ice           trickle ICE candidate for the DATA peer
 //   POST /playback/offer   {"sdp":..., "src_url":..., "ice_servers":[...]} → answer
@@ -44,7 +44,16 @@ import (
 )
 
 const (
-	listenAddr    = ":8766"
+	// Loopback only. These endpoints have no authentication of any kind, and
+	// /dc/offer hands whatever arrives on the DataChannel to the JVM's
+	// /internal/dc/command — i.e. full camera/device/schedule CRUD without a
+	// pattern lock. Bound to ":8766" (every interface) until 28-10-2026, with no
+	// firewall configured by install.sh or deploy-offline.sh, so any host on the
+	// customer LAN could drive it; a bare /dc/offer also closes the current peer,
+	// which cuts the cloud's control channel. Every caller is on this machine
+	// (PlaybackPeerManager, DataChannelManagerDesktop — both already 127.0.0.1),
+	// and WebRTC media/ICE uses its own UDP ports, not this one.
+	listenAddr    = "127.0.0.1:8766"
 	jvmCommandURL = "http://127.0.0.1:3000/internal/dc/command"
 )
 

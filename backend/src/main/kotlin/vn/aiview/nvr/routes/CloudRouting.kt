@@ -13,7 +13,6 @@ import org.jetbrains.exposed.sql.upsert
 import vn.aiview.nvr.cloud.CloudReconnectContext
 import vn.aiview.nvr.cloud.SignalingManager
 import vn.aiview.nvr.models.CloudConfig
-import vn.aiview.nvr.services.PlaybackStreamer
 import vn.aiview.nvr.utils.CryptoUtils
 
 @Serializable
@@ -31,6 +30,15 @@ data class SerialGenerateRequest(val prototype: String)
 
 private val SERIAL_REGEX = Regex("^VMSAV(\\d{6})$")
 
+/**
+ * Cấu hình kết nối cloud — ĐỌC VÀ GHI ĐỀU PHẢI ĐĂNG NHẬP. Đăng ký trong khối
+ * `authenticate("auth-session")` của [vn.aiview.nvr.plugins.configureRouting].
+ *
+ * Trước 28-10-2026 cả file này nằm NGOÀI khối authenticate (để public cho callback dc-bridge),
+ * nên `GET /api/cloud/config` trả domain/username/serial cho bất kỳ ai trong LAN, và
+ * `POST` cùng đường đó trỏ được máy sang cloud khác mà không cần mã vẽ. Phần không cần auth
+ * đã tách sang [cloudInternalRouting].
+ */
 fun Route.cloudRouting() {
     get("/api/cloud/config") {
         val row = transaction {
@@ -112,25 +120,18 @@ fun Route.cloudRouting() {
         call.respond(mapOf("serial" to "VMSAV$next"))
     }
 
-    // Real-time MPEG-TS stream served by PlaybackStreamer (ffmpeg -re subprocess).
-    // go2rtc (inside Frigate) fetches this from the bridge gateway IP.
-    // The -re flag in the subprocess paces delivery, giving go2rtc correct RTP timestamps.
-    get("/internal/playback-ts/{name}") {
-        val name = call.parameters["name"] ?: run {
-            call.respond(HttpStatusCode.BadRequest)
-            return@get
-        }
-        if (!PlaybackStreamer.isRunning(name)) {
-            call.respond(HttpStatusCode.NotFound)
-            return@get
-        }
-        call.response.header(HttpHeaders.ContentType, "video/mp2t")
-        call.response.header(HttpHeaders.CacheControl, "no-cache")
-        call.respondOutputStream(contentType = ContentType("video", "mp2t")) {
-            PlaybackStreamer.pipeTo(name, this)
-        }
-    }
+}
 
+/**
+ * Endpoint dưới `/internal/` KHÔNG qua session auth, vì người gọi là máy chứ không phải người:
+ * sidecar `dc-bridge` đẩy lệnh DataChannel vào `127.0.0.1:3000`, đi thẳng cổng 3000 chứ KHÔNG
+ * qua nginx — nên nginx chặn hẳn `location /internal/`, và backend chỉ bind `127.0.0.1`
+ * (`Application.kt`), tức là ngoài LAN không có đường nào tới đây.
+ *
+ * ⚠️ Thêm endpoint mới vào đây là thêm một đường KHÔNG cần đăng nhập. Chỉ đặt vào đây thứ do
+ * tiến trình trên cùng máy gọi; bất cứ thứ gì người dùng/UI gọi đều thuộc [cloudRouting].
+ */
+fun Route.cloudInternalRouting() {
     post("/internal/dc/command") {
         val rawJson = call.receiveText()
         var reply: String? = null

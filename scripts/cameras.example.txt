@@ -1,0 +1,20 @@
+# Danh sách camera cho scripts/provision-headless.sh
+#
+#   ./scripts/provision-headless.sh --cameras scripts/cameras.example.txt --dry-run
+#
+# Mỗi dòng một camera, các cột ngăn bằng dấu |  (dùng | chứ không phải dấu phẩy
+# vì mật khẩu và query string trong URL RTSP hay có dấu phẩy):
+#
+#   tên | rtsp chính | rtsp phụ | cổng onvif | ghi hình | ptz
+#
+# Bốn cột cuối bỏ trống được — mặc định: rtsp phụ rỗng, onvif 80, ghi hình true, ptz false.
+# Dòng bắt đầu bằng # và dòng trống bị bỏ qua.
+#
+# Tên là thứ hiện trên UI và là thứ script dùng để biết camera đã có hay chưa,
+# nên đổi tên trong file rồi chạy lại sẽ THÊM MỚI chứ không sửa camera cũ.
+# Sửa camera đã có thì dùng /api/edit-camera, không phải script này.
+
+Cong chinh   | rtsp://admin:MatKhau@192.168.1.xx0:554/Streaming/Channels/101 | rtsp://admin:MatKhau@192.168.1.xx0:554/Streaming/Channels/102 | 80 | true | true
+Kho hang     | rtsp://admin:MatKhau@192.168.1.xx1:554/Streaming/Channels/101 |                                                                 | 80 | true | false
+Hanh lang 2  | rtsp://admin:MatKhau@192.168.1.xx2:554/cam/realmonitor?channel=1&subtype=0
+Bai xe       | rtsp://admin:MatKhau@192.168.1.xx3:554/Streaming/Channels/101 |                                                                 |    | false
