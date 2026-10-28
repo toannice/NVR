@@ -16,6 +16,7 @@ import vn.aiview.nvr.models.Cameras
 import vn.aiview.nvr.services.PlaybackService
 import vn.aiview.nvr.services.StreamOnlineTracker
 import vn.aiview.nvr.utils.AppLogger
+import vn.aiview.nvr.utils.LogRedact
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 
@@ -189,8 +190,15 @@ object SignalingManager {
     private suspend fun handleMqttMessage(topic: String, payload: String) {
         try {
             val json = Json.parseToJsonElement(payload).jsonObject
-            val context = json["context"]?.jsonPrimitive?.content ?: return
-            val type = json["type"]?.jsonPrimitive?.content ?: return
+            // Message thiếu context/type từng bị bỏ qua không một dòng log — lệnh lạ từ cloud
+            // (vd yêu cầu tải video) biến mất mà không ai biết. Ghi lại payload để còn lần ra.
+            val context = json["context"]?.jsonPrimitive?.contentOrNull
+            val type = json["type"]?.jsonPrimitive?.contentOrNull
+            if (context == null || type == null) {
+                AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "MSG_NO_CONTEXT",
+                    "topic=${topic.takeLast(30)} keys=${json.keys} payload=${LogRedact.secrets(payload).take(1500)}")
+                return
+            }
             val encodeType = json["data_encode_type"]?.jsonPrimitive?.content ?: "none"
 
             AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "MSG_IN",
@@ -245,11 +253,13 @@ object SignalingManager {
                 }
 
                 else -> {
-                    AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "MSG_UNHANDLED", "context=$context type=$type")
+                    AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "MSG_UNHANDLED",
+                        "context=$context type=$type data=${(dataObj ?: dataRaw)?.toString()?.let { LogRedact.secrets(it) }?.take(1500)}")
                 }
             }
         } catch (e: Exception) {
-            AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "MSG_HANDLE_ERROR", "${e::class.simpleName}: ${e.message}")
+            AppLogger.warn(AppLogger.Module.SYSTEM, "CLOUD", "MSG_HANDLE_ERROR",
+                "${e::class.simpleName}: ${e.message} topic=${topic.takeLast(30)} payload=${LogRedact.secrets(payload).take(500)}")
         }
     }
 
@@ -577,12 +587,6 @@ object SignalingManager {
             val channelId = constructedMatch.groupValues[1].trimStart('0').ifEmpty { "0" }
             val streamType = if (constructedMatch.groupValues[2] == "01") "main" else "sub"
             return "${channelId}_${streamType}"
-        }
-        // Playback stream registered by post_select_record — use directly as go2rtc stream name
-        if (profileToken.startsWith("playback_")) {
-            AppLogger.info(AppLogger.Module.SYSTEM, "CLOUD", "RESOLVE_PLAYBACK_STREAM",
-                "token=$profileToken → using as go2rtc playback stream directly")
-            return profileToken
         }
         // Real ONVIF token stored in the unified Cameras table (003-cloud-data-sync)
         return try {
